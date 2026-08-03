@@ -20,7 +20,7 @@ if not exist "%FRONTEND_DIR%\package.json" (
 where node >nul 2>&1
 if %errorlevel% neq 0 (
     echo Error: Node.js is not installed or not in PATH.
-    echo Please install Node.js (>=22 recommended) to run Cardinal Skill.
+    echo Please install Node.js v22 or higher to run Cardinal Skill.
     pause
     exit /b 1
 )

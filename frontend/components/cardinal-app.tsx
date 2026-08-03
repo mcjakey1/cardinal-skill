@@ -3,9 +3,9 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   AlertTriangle, Award, Bell, BookOpen, Bot, Brain, Camera, Check, CheckCircle2, ChevronRight, CircleUserRound, Code2,
-  Database, FileUp, Flame, GraduationCap, LayoutDashboard, Lock, LogOut, Map, Menu,
+  Database, FileText, FileUp, Flame, GraduationCap, HelpCircle, LayoutDashboard, Lock, LogOut, Map, Menu,
   MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, RefreshCw, RotateCcw, Search, Settings,
-  ShieldCheck, Sparkles, Target, Terminal, Trophy, Users, X, Zap, ZoomIn, ZoomOut
+  ShieldCheck, Sparkles, Target, Terminal, Trophy, UploadCloud, Users, X, Zap, ZoomIn, ZoomOut
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { prototypeData, getSkillTree } from '@/lib/cardinal-repository'
@@ -928,44 +928,220 @@ function Achievements() {
 }
 
 function Syllabus({ onPublishSyllabus }: { onPublishSyllabus: () => void }) {
-  const [file, setFile] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<{ name: string; size: string } | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
   const [published, setPublished] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const f = e.target.files[0]
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(1)
+      setSelectedFile({ name: f.name, size: `${sizeMB} MB` })
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const f = e.dataTransfer.files[0]
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(1)
+      setSelectedFile({ name: f.name, size: `${sizeMB} MB` })
+    }
+  }
+
+  const handleAnalyze = () => {
+    setAnalyzing(true)
+    setTimeout(() => {
+      setAnalyzing(false)
+      setPublished(true)
+      onPublishSyllabus()
+    }, 1200)
+  }
+
+  const handleReset = () => {
+    setSelectedFile(null)
+    setPublished(false)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   return (
-    <>
-      <PageHead eyebrow="Course setup" title="Import your syllabus" copy="Transform a course outline into a navigable skill path. You stay in control before anything is published." />
-      <div className="upload-layout">
-        <label className="upload-zone">
-          <input type="file" accept=".pdf,.doc,.docx" onChange={() => setFile(true)} />
-          <FileUp />
-          <h2>{file ? 'CS210-syllabus.pdf ready' : 'Drop your syllabus here'}</h2>
-          <p>PDF or DOCX, up to 10 MB</p>
-          <span>{file ? 'Replace file' : 'Choose a file'}</span>
-        </label>
-        <aside className="how-card">
-          <Pill>How it works</Pill>
-          {['Upload your official course syllabus', 'Review detected outcomes and modules', 'Adjust the suggested skill tree', 'Publish when everything looks right'].map((x, i) => (
-            <div key={x}>
-              <b>0{i + 1}</b>
-              <p>{x}</p>
-            </div>
-          ))}
-          {file && (
-            <button
-              className="primary-action"
-              style={{ marginTop: '1rem' }}
-              onClick={() => {
-                setPublished(true)
-                onPublishSyllabus()
-              }}
+    <div className="import-page-container">
+      <PageHead
+        eyebrow="COURSE SETUP WORKFLOW"
+        title="Import your syllabus"
+        copy="Transform a course outline into a navigable skill path. You stay in control before anything is published."
+      />
+
+      <div className="import-stepper-bar" aria-label="Course setup progression">
+        <div className={`step-item ${!published ? 'active' : ''}`}>
+          <i className="step-num">1</i>
+          <span>Upload Syllabus</span>
+        </div>
+        <div className="step-divider" />
+        <div className={`step-item ${analyzing || published ? 'active' : ''}`}>
+          <i className="step-num">2</i>
+          <span>Extract Outcomes</span>
+        </div>
+        <div className="step-divider" />
+        <div className={`step-item ${published ? 'active' : ''}`}>
+          <i className="step-num">3</i>
+          <span>Review Skill Tree</span>
+        </div>
+        <div className="step-divider" />
+        <div className={`step-item ${published ? 'active' : ''}`}>
+          <i className="step-num">4</i>
+          <span>Publish Pathway</span>
+        </div>
+      </div>
+
+      <div className="import-grid">
+        <section className="import-card">
+          {!selectedFile ? (
+            <div
+              className={`upload-dropzone ${isDragging ? 'dragging' : ''}`}
+              onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
             >
-              {published ? 'Syllabus Published!' : 'Publish Skill Tree'}
-              <ChevronRight />
-            </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.doc,.docx"
+                onChange={handleFileChange}
+                aria-label="Upload syllabus file"
+              />
+              <div className="dropzone-icon-box">
+                <UploadCloud />
+              </div>
+              <h2 className="dropzone-title">Drop your syllabus here</h2>
+              <p className="dropzone-sub">
+                Upload your official course syllabus to automatically extract learning outcomes, modules, and prerequisites.
+              </p>
+              <div className="format-pills">
+                <Pill tone="muted">PDF</Pill>
+                <Pill tone="muted">DOCX</Pill>
+                <Pill tone="muted">Max 10 MB</Pill>
+              </div>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <FileUp style={{ width: '16px', height: '16px' }} />
+                Choose a file
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div className="file-selected-box">
+                <div className="file-icon-badge">
+                  <FileText style={{ width: '24px', height: '24px' }} />
+                </div>
+                <div className="file-details">
+                  <b>{selectedFile.name}</b>
+                  <span>{selectedFile.size} • Ready for AI extraction</span>
+                </div>
+                <Pill tone={published ? 'gold' : 'default'}>
+                  {published ? 'Published' : 'Ready'}
+                </Pill>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="primary-action"
+                  disabled={analyzing}
+                  onClick={handleAnalyze}
+                  style={{ flex: 1 }}
+                >
+                  {analyzing ? (
+                    <>
+                      <RefreshCw className="animate-spin" style={{ width: '16px', height: '16px' }} />
+                      Extracting outcomes…
+                    </>
+                  ) : published ? (
+                    <>
+                      <CheckCircle2 style={{ width: '16px', height: '16px' }} />
+                      Skill Tree Published!
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles style={{ width: '16px', height: '16px' }} />
+                      Analyze & generate skill tree
+                      <ChevronRight style={{ width: '16px', height: '16px' }} />
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  className="outline-action"
+                  onClick={handleReset}
+                >
+                  Choose different file
+                </button>
+              </div>
+            </div>
           )}
+
+          <div style={{ fontSize: '12px', color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <HelpCircle style={{ width: '15px', height: '15px', color: 'var(--primary)' }} />
+            <span>Need sample data? You can switch mock syllabus tracks anytime in the Skill Tree dashboard toolbar.</span>
+          </div>
+        </section>
+
+        <aside className="info-cards-stack">
+          <div className="import-card">
+            <Pill tone="gold">AI PARSER PIPELINE</Pill>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, margin: '4px 0 12px' }}>How it works</h3>
+            <div className="how-steps-list">
+              <div className="how-step-row">
+                <span className="how-step-num">01</span>
+                <div className="how-step-content">
+                  <b>Upload syllabus</b>
+                  <p>Drop your official PDF or DOCX course outline.</p>
+                </div>
+              </div>
+
+              <div className="how-step-row">
+                <span className="how-step-num">02</span>
+                <div className="how-step-content">
+                  <b>AI outcome extraction</b>
+                  <p>Claude AI identifies topics, modules, and prerequisites.</p>
+                </div>
+              </div>
+
+              <div className="how-step-row">
+                <span className="how-step-num">03</span>
+                <div className="how-step-content">
+                  <b>Review skill tree</b>
+                  <p>Inspect the auto-layout graph and adjust node positions.</p>
+                </div>
+              </div>
+
+              <div className="how-step-row">
+                <span className="how-step-num">04</span>
+                <div className="how-step-content">
+                  <b>Publish pathway</b>
+                  <p>Unlock student missions, earn XP, and track mastery.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="privacy-banner">
+            <ShieldCheck />
+            <div>
+              <b style={{ display: 'block', marginBottom: '2px' }}>Student Privacy & FERPA Bound</b>
+              <span style={{ color: 'var(--muted-foreground)' }}>Your syllabus is processed securely to generate your personal learning pathway. Course records remain confidential.</span>
+            </div>
+          </div>
         </aside>
       </div>
-    </>
+    </div>
   )
 }
 

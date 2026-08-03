@@ -2,9 +2,9 @@
 
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
-  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, CheckCircle2, ChevronRight, CircleUserRound, Code2,
+  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, Check, CheckCircle2, ChevronRight, CircleUserRound, Code2,
   Database, FileUp, Flame, GraduationCap, LayoutDashboard, Lock, LogOut, Map, Menu,
-  MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, RefreshCw, Search, Settings,
+  MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, RefreshCw, RotateCcw, Search, Settings,
   ShieldCheck, Sparkles, Target, Terminal, Trophy, Users, X, Zap, ZoomIn, ZoomOut
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -12,8 +12,9 @@ import { prototypeData, getSkillTree } from '@/lib/cardinal-repository'
 import type { SkillNode as DomainSkillNode, SkillTreePayload, Mission as DomainMission, SkillStatus } from '@/lib/cardinal-domain'
 import { APP_ROUTES, type AppRoute } from '@/lib/cardinal-routes'
 import { deriveStatuses, levelForXp, levelProgress, xpForLevel } from '@/lib/progression'
-import { validateSkillGraph, type GraphValidationError } from '@/lib/graph-validation'
+import { validateSkillGraph } from '@/lib/graph-validation'
 import { computeAutoLayout } from '@/lib/auto-layout'
+import { localStorageTreeLayoutAdapter, type UserTreeLayout } from '@/lib/tree-layout-persistence'
 
 const nav: { route: AppRoute; label: string; icon: LucideIcon }[] = [
   { route: 'dashboard', label: 'Skill tree', icon: Map },
@@ -139,28 +140,67 @@ function SkillTree({
   selectedDataset: string
   onSelectDataset: (key: string) => void
 }) {
+  const userId = 'usr_alex'
   const { course, nodes: rawNodes } = payload
 
   // 1. Graph Validation
   const validation = useMemo(() => validateSkillGraph(rawNodes), [rawNodes])
 
-  // 2. Automatic Layout Calculation via Dagre engine
-  const layoutResult = useMemo(() => {
+  // 2. Automatic Layout Calculation via Dagre engine (Compact Spacing)
+  const autoLayoutResult = useMemo(() => {
     if (!validation.isValid) return { nodes: [], width: 960, height: 860 }
-    return computeAutoLayout(rawNodes)
+    return computeAutoLayout(rawNodes, { rankSep: 95, nodeSep: 75 })
   }, [rawNodes, validation.isValid])
 
-  const skills = layoutResult.nodes
-  const canvasWidth = layoutResult.width
-  const canvasHeight = layoutResult.height
+  // 3. User Layout Persistence State
+  const [customPositions, setCustomPositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [savedNotice, setSavedNotice] = useState(false)
+  const [resetModalOpen, setResetModalOpen] = useState(false)
+
+  // Load saved positions when course/dataset changes
+  useEffect(() => {
+    const saved = localStorageTreeLayoutAdapter.loadLayout(userId, course.id)
+    if (saved && saved.positions) {
+      setCustomPositions(saved.positions)
+      setSavedNotice(true)
+    } else {
+      setCustomPositions({})
+      setSavedNotice(false)
+    }
+  }, [userId, course.id])
+
+  // Combine automatic layout positions with user custom position overrides
+  const skills = useMemo(() => {
+    return autoLayoutResult.nodes.map(node => {
+      const customPos = customPositions[node.id]
+      return {
+        ...node,
+        position: customPos ? customPos : node.position
+      }
+    })
+  }, [autoLayoutResult.nodes, customPositions])
+
+  const canvasWidth = autoLayoutResult.width
+  const canvasHeight = autoLayoutResult.height
 
   const [selectedId, setSelectedId] = useState<string>('')
   const [hoveredId, setHoveredId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(.88)
+  const [zoom, setZoom] = useState(.65) // Compact default zoom 65%
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [panelOpen, setPanelOpen] = useState(true)
-  const [drag, setDrag] = useState<{ x: number; y: number; px: number; py: number } | null>(null)
+
+  // Canvas Panning vs Node Dragging
+  const [canvasDrag, setCanvasDrag] = useState<{ x: number; y: number; px: number; py: number } | null>(null)
+  const [nodeDrag, setNodeDrag] = useState<{
+    skillId: string
+    startX: number
+    startY: number
+    initialX: number
+    initialY: number
+  } | null>(null)
+
   const viewportRef = useRef<HTMLDivElement>(null)
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Ensure default selected skill exists in dataset
   useEffect(() => {
@@ -219,6 +259,22 @@ function SkillTree({
     return set
   }, [skills, hoveredId])
 
+  // Debounced persistence helper
+  const persistPositions = (newPositions: Record<string, { x: number; y: number }>) => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+    saveTimeoutRef.current = setTimeout(() => {
+      const payload: UserTreeLayout = {
+        userId,
+        courseId: course.id,
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        positions: newPositions
+      }
+      localStorageTreeLayoutAdapter.saveLayout(payload)
+      setSavedNotice(true)
+    }, 400)
+  }
+
   // Non-passive wheel handler to isolate canvas zoom from main browser page scrolling
   useEffect(() => {
     const el = viewportRef.current
@@ -226,22 +282,36 @@ function SkillTree({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
       const zoomDelta = -e.deltaY * 0.0012
-      setZoom(z => Math.min(1.6, Math.max(0.4, z + zoomDelta)))
+      setZoom(z => Math.min(1.5, Math.max(0.35, z + zoomDelta)))
     }
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
   }, [])
 
-  const fit = () => { setZoom(.85); setPan({ x: 0, y: 0 }) }
+  const fit = () => { setZoom(.62); setPan({ x: 0, y: 0 }) }
   const reset = () => { setZoom(1.0); setPan({ x: 0, y: 0 }) }
   const focusSelected = () => {
     if (!selected) return
-    setZoom(1.05)
+    setZoom(1.0)
     setPan({ x: Math.round((canvasWidth / 2) - selected.position.x), y: Math.round((canvasHeight / 2) - selected.position.y) })
     setPanelOpen(true)
   }
 
+  const handleAutoArrange = () => {
+    setCustomPositions({})
+    localStorageTreeLayoutAdapter.clearLayout(userId, course.id)
+    setSavedNotice(false)
+    setZoom(.62)
+    setPan({ x: 0, y: 0 })
+  }
+
+  const handleConfirmReset = () => {
+    handleAutoArrange()
+    setResetModalOpen(false)
+  }
+
   const masteredCount = skills.filter(s => masteredIds.has(s.id)).length
+  const hasCustomLayout = Object.keys(customPositions).length > 0
 
   return (
     <div className={`tree-explorer ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
@@ -269,29 +339,79 @@ function SkillTree({
               </select>
             </label>
             <span className="toolbar-separator" />
+
+            <button
+              onClick={handleAutoArrange}
+              title="Auto-arrange nodes to default layout"
+              aria-label="Auto arrange layout"
+              style={{ display: 'flex', alignItems: 'center', gap: '4px', width: 'auto', padding: '0 10px', fontSize: '11px', fontWeight: 700 }}
+            >
+              <RotateCcw style={{ width: '14px', height: '14px' }} />
+              Auto-arrange
+            </button>
+
+            {hasCustomLayout && (
+              <button
+                onClick={() => setResetModalOpen(true)}
+                title="Reset layout to AI default"
+                aria-label="Reset layout"
+                style={{ display: 'flex', alignItems: 'center', gap: '4px', width: 'auto', padding: '0 10px', fontSize: '11px', fontWeight: 700, color: '#981e2f' }}
+              >
+                Reset layout
+              </button>
+            )}
+
+            {savedNotice && hasCustomLayout && (
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#16a34a', display: 'flex', alignItems: 'center', gap: '3px', padding: '0 4px' }}>
+                <Check style={{ width: '13px', height: '13px' }} /> Layout saved
+              </span>
+            )}
+
+            <span className="toolbar-separator" />
             <button onClick={fit} title="Fit skill tree" aria-label="Fit skill tree"><Maximize2 /></button>
             <button onClick={reset} title="Reset view" aria-label="Reset view"><RefreshCw /></button>
             <button onClick={focusSelected} title="Focus selected skill" aria-label="Focus selected skill"><Search /></button>
             <span className="toolbar-separator" />
-            <button onClick={() => setZoom(z => Math.max(.4, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
+            <button onClick={() => setZoom(z => Math.max(.35, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
             <b>{Math.round(zoom * 100)}%</b>
-            <button onClick={() => setZoom(z => Math.min(1.6, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
+            <button onClick={() => setZoom(z => Math.min(1.5, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
           </div>
         </div>
 
         <div
           ref={viewportRef}
-          className={`tree-viewport ${drag ? 'dragging' : ''}`}
+          className={`tree-viewport ${canvasDrag || nodeDrag ? 'dragging' : ''}`}
           onPointerDown={e => {
             if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('select')) return
-            setDrag({ x: e.clientX, y: e.clientY, px: pan.x, py: pan.y })
+            setCanvasDrag({ x: e.clientX, y: e.clientY, px: pan.x, py: pan.y })
             e.currentTarget.setPointerCapture(e.pointerId)
           }}
-          onPointerMove={e => { if (drag) setPan({ x: drag.px + e.clientX - drag.x, y: drag.py + e.clientY - drag.y }) }}
-          onPointerUp={() => setDrag(null)}
-          onPointerCancel={() => setDrag(null)}
+          onPointerMove={e => {
+            if (canvasDrag) {
+              setPan({ x: canvasDrag.px + e.clientX - canvasDrag.x, y: canvasDrag.py + e.clientY - canvasDrag.y })
+            } else if (nodeDrag) {
+              const dx = (e.clientX - nodeDrag.startX) / zoom
+              const dy = (e.clientY - nodeDrag.startY) / zoom
+              const nextX = Math.round(nodeDrag.initialX + dx)
+              const nextY = Math.round(nodeDrag.initialY + dy)
+
+              const updated = {
+                ...customPositions,
+                [nodeDrag.skillId]: { x: nextX, y: nextY }
+              }
+              setCustomPositions(updated)
+              persistPositions(updated)
+            }
+          }}
+          onPointerUp={e => {
+            setCanvasDrag(null)
+            if (nodeDrag) {
+              setNodeDrag(null)
+            }
+          }}
+          onPointerCancel={() => { setCanvasDrag(null); setNodeDrag(null) }}
         >
-          <div className="canvas-hint">Drag to explore • Scroll canvas to zoom • Auto-layout engine active</div>
+          <div className="canvas-hint">Drag canvas to pan • Drag nodes to customize arrangement • Scroll to zoom</div>
 
           {!validation.isValid ? (
             <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', gap: '12px' }}>
@@ -327,13 +447,27 @@ function SkillTree({
                   : (calculatedStatusMap.get(skill.id) as SkillStatus) || 'locked'
 
                 const Icon = iconMap[skill.icon || 'code'] || Code2
+                const isBeingDragged = nodeDrag?.skillId === skill.id
+
                 return (
                   <div
                     key={skill.id}
-                    className="skill-wrap"
+                    className={`skill-wrap ${isBeingDragged ? 'dragging' : ''}`}
                     style={{
                       left: `${skill.position.x}px`,
                       top: `${skill.position.y}px`
+                    }}
+                    onPointerDown={e => {
+                      if ((e.target as HTMLElement).tagName === 'BUTTON') return
+                      e.stopPropagation()
+                      setNodeDrag({
+                        skillId: skill.id,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialX: skill.position.x,
+                        initialY: skill.position.y
+                      })
+                      e.currentTarget.setPointerCapture(e.pointerId)
                     }}
                   >
                     <button
@@ -480,6 +614,32 @@ function SkillTree({
           <div style={{ color: 'var(--muted-foreground)' }}>Select a node to inspect details</div>
         )}
       </aside>
+
+      {/* Reset Layout Confirmation Modal */}
+      {resetModalOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'grid', placeItems: 'center', padding: '20px' }}>
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: '28px', maxWidth: '440px', width: '100%', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+            <h2 style={{ fontSize: '20px', fontWeight: 800, margin: '0 0 10px' }}>Reset your skill-tree arrangement?</h2>
+            <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: '0 0 24px', lineHeight: 1.5 }}>
+              This returns nodes to the recommended AI-generated layout. Your learning progress will not be affected.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                onClick={() => setResetModalOpen(false)}
+                style={{ padding: '9px 16px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', fontWeight: 700 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReset}
+                style={{ padding: '9px 16px', borderRadius: '10px', border: 0, background: '#981e2f', color: '#fff', fontWeight: 800 }}
+              >
+                Reset layout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -551,7 +711,7 @@ function Dashboard({
       <PageHead
         eyebrow="Your learning realm"
         title="Forge your path, Alex"
-        copy="Every skill is a step forward. Explore your syllabus skill path or test alternate dataset layouts."
+        copy="Every skill is a step forward. Drag nodes to customize your personal layout or reset to AI default anytime."
       />
       <div className="stats">
         <Stat icon={Flame} value={`${streakDays} days`} label="Current streak" />

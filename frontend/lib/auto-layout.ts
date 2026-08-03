@@ -20,18 +20,18 @@ export function computeAutoLayout(
     return { nodes: [], width: 960, height: 860 }
   }
 
-  const nodeWidth = config.nodeWidth || 150
-  const nodeHeight = config.nodeHeight || 120
-  const rankSep = config.rankSep || 135 // vertical layer spacing
-  const nodeSep = config.nodeSep || 110 // horizontal sibling spacing
+  const nodeWidth = config.nodeWidth || 140
+  const nodeHeight = config.nodeHeight || 110
+  const rankSep = config.rankSep || 95  // Compact vertical layer spacing (80-110px range)
+  const nodeSep = config.nodeSep || 75  // Compact horizontal sibling spacing (65-90px range)
 
   const g = new dagre.graphlib.Graph()
   g.setGraph({
     rankdir: 'TB', // Top-to-Bottom
     ranksep: rankSep,
     nodesep: nodeSep,
-    marginx: 100,
-    marginy: 100
+    marginx: 80,
+    marginy: 80
   })
   g.setDefaultEdgeLabel(() => ({}))
 
@@ -42,8 +42,7 @@ export function computeAutoLayout(
 
   // Add edges: prerequisite -> node
   nodes.forEach(node => {
-    node.prerequisiteIds.forEach(prereqId => {
-      // Ensure prereq exists in node list before adding edge to avoid dagre crash
+    (node.prerequisiteIds || []).forEach(prereqId => {
       if (nodes.some(n => n.id === prereqId)) {
         g.setEdge(prereqId, node.id)
       }
@@ -54,10 +53,10 @@ export function computeAutoLayout(
   dagre.layout(g)
 
   const graphInfo = g.graph()
-  const graphWidth = Math.max(960, Math.round((graphInfo.width || 960) + 200))
-  const graphHeight = Math.max(860, Math.round((graphInfo.height || 860) + 200))
+  const graphWidth = Math.max(960, Math.round((graphInfo.width || 960) + 160))
+  const graphHeight = Math.max(860, Math.round((graphInfo.height || 860) + 160))
 
-  // Center calculated node positions inside graph dimensions
+  // Map computed positions back to nodes
   const layoutNodes = nodes.map(node => {
     const dagreNode = g.node(node.id)
     const x = dagreNode ? Math.round(dagreNode.x) : 480

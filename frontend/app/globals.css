@@ -561,9 +561,9 @@ h1, h2, h3, .brand {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 900px;
-  height: 800px;
-  margin: -400px 0 0 -450px;
+  width: 960px;
+  height: 860px;
+  margin: -430px 0 0 -480px;
   transform-origin: center;
   transition: transform 0.18s ease-out;
   will-change: transform;
@@ -575,8 +575,6 @@ h1, h2, h3, .brand {
 
 .skill-wrap {
   position: absolute;
-  left: calc(var(--x) * 1%);
-  top: var(--y);
   transform: translate(-50%, -50%);
   width: 128px;
   display: flex;
@@ -669,6 +667,7 @@ h1, h2, h3, .brand {
   white-space: nowrap;
   box-shadow: 0 2px 6px #32181c0f;
   border: 1px solid var(--border);
+  pointer-events: none;
 }
 
 .skill-wrap > small {
@@ -677,25 +676,8 @@ h1, h2, h3, .brand {
   color: var(--muted-foreground);
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  pointer-events: none;
 }
-
-/* Original s1..s16 node positions */
-.s1 { --x: 50; --y: 90px; }
-.s2 { --x: 25; --y: 195px; }
-.s3 { --x: 75; --y: 195px; }
-.s4 { --x: 15; --y: 315px; }
-.s5 { --x: 40; --y: 315px; }
-.s6 { --x: 65; --y: 315px; }
-.s7 { --x: 88; --y: 315px; }
-.s8 { --x: 22; --y: 440px; }
-.s9 { --x: 48; --y: 440px; }
-.s10 { --x: 76; --y: 440px; }
-.s11 { --x: 12; --y: 565px; }
-.s12 { --x: 36; --y: 565px; }
-.s13 { --x: 62; --y: 565px; }
-.s14 { --x: 87; --y: 565px; }
-.s15 { --x: 35; --y: 690px; }
-.s16 { --x: 68; --y: 690px; }
 
 /* SVG links & smooth Bezier curves */
 .links {
@@ -709,24 +691,30 @@ h1, h2, h3, .brand {
 
 .links path {
   fill: none;
-  stroke: #c8bca9;
-  stroke-width: 2.2;
-  stroke-dasharray: 4 4;
-  transition: stroke 0.3s ease, stroke-width 0.3s ease;
+  transition: opacity 0.3s ease, stroke-width 0.3s ease, stroke 0.3s ease;
 }
 
 .links path.link-mastered {
   stroke: #981e2f;
-  stroke-width: 3.2;
+  stroke-width: 2.5px;
   stroke-dasharray: none;
-  filter: drop-shadow(0 0 3px rgba(152, 30, 47, 0.35));
 }
 
 .links path.link-available {
   stroke: #d2a33a;
-  stroke-width: 2.6;
-  stroke-dasharray: 5 4;
-  animation: path-flow 4s linear infinite;
+  stroke-width: 2.0px;
+  stroke-dasharray: none;
+}
+
+.links path.link-locked {
+  stroke: #c8bca9;
+  stroke-width: 1.2px;
+  stroke-dasharray: 4 4;
+}
+
+.links path.highlighted {
+  stroke-width: 3.2px !important;
+  filter: drop-shadow(0 0 5px rgba(152, 30, 47, 0.45));
 }
 
 .legend {
@@ -1233,7 +1221,7 @@ h1, h2, h3, .brand {
   border: 1px solid var(--border);
   background: transparent;
   padding: 9px 14px;
-  border-radius: 9px;
+  border-radius: 99px;
 }
 
 .form-card {

@@ -32,24 +32,34 @@ const iconMap: Record<string, LucideIcon> = {
   terminal: Terminal
 }
 
-// 900x800 canvas pixel node positions matching .s1 ... .s16 CSS classes
-const nodePixelPositions: Record<string, { x: number; y: number }> = {
-  skill_1: { x: 450, y: 90 },
-  skill_2: { x: 225, y: 195 },
-  skill_3: { x: 675, y: 195 },
-  skill_4: { x: 135, y: 315 },
-  skill_5: { x: 360, y: 315 },
-  skill_6: { x: 585, y: 315 },
-  skill_7: { x: 792, y: 315 },
-  skill_8: { x: 198, y: 440 },
-  skill_9: { x: 432, y: 440 },
-  skill_10: { x: 684, y: 440 },
-  skill_11: { x: 108, y: 565 },
-  skill_12: { x: 324, y: 565 },
-  skill_13: { x: 558, y: 565 },
-  skill_14: { x: 783, y: 565 },
-  skill_15: { x: 315, y: 690 },
-  skill_16: { x: 612, y: 690 }
+function getEdgePath(
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  multiOffset: number = 0
+) {
+  const x1 = source.x
+  const y1 = source.y + 38 // parent bottom diamond handle
+  const x2 = target.x
+  const y2 = target.y - 38 // child top diamond handle
+
+  const dx = x2 - x1
+  const dy = y2 - y1
+
+  if (dy > 30) {
+    const verticalGap = dy * 0.5
+    const cp1X = x1 + multiOffset
+    const cp1Y = y1 + verticalGap
+    const cp2X = x2 - multiOffset
+    const cp2Y = y2 - verticalGap
+    return `M ${x1} ${y1} C ${cp1X} ${cp1Y}, ${cp2X} ${cp2Y}, ${x2} ${y2}`
+  } else {
+    const curveDip = Math.max(55, Math.abs(dx) * 0.22)
+    const cp1X = x1 + dx * 0.35 + multiOffset
+    const cp1Y = y1 + curveDip
+    const cp2X = x2 - dx * 0.35 - multiOffset
+    const cp2Y = y2 - curveDip
+    return `M ${x1} ${y1} C ${cp1X} ${cp1Y}, ${cp2X} ${cp2Y}, ${x2} ${y2}`
+  }
 }
 
 function Progress({ value }: { value: number }) {
@@ -124,6 +134,7 @@ function SkillTree({
   onToggleMastery: (skillId: string) => void
 }) {
   const [selectedId, setSelectedId] = useState<string>(skills[6]?.id || skills[0]?.id)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [zoom, setZoom] = useState(.9)
   const [pan, setPan] = useState({ x: 0, y: -45 })
   const [panelOpen, setPanelOpen] = useState(true)
@@ -149,6 +160,36 @@ function SkillTree({
     available: 'Available',
     locked: 'Locked'
   }
+
+  // Selected prerequisite chain highlighting
+  const selectedPathEdges = useMemo(() => {
+    if (!selectedId) return new Set<string>()
+    const set = new Set<string>()
+    const visit = (id: string) => {
+      const node = skills.find(s => s.id === id)
+      if (!node) return
+      node.prerequisites.forEach(p => {
+        set.add(`${p}->${id}`)
+        visit(p)
+      })
+    }
+    visit(selectedId)
+    return set
+  }, [skills, selectedId])
+
+  // Hovered parent/child edges highlighting
+  const hoveredPathEdges = useMemo(() => {
+    if (!hoveredId) return new Set<string>()
+    const set = new Set<string>()
+    skills.forEach(s => {
+      s.prerequisites.forEach(p => {
+        if (p === hoveredId || s.id === hoveredId) {
+          set.add(`${p}->${s.id}`)
+        }
+      })
+    })
+    return set
+  }, [skills, hoveredId])
 
   // Non-passive wheel handler to isolate canvas zoom from main browser page scrolling
   useEffect(() => {
@@ -210,10 +251,19 @@ function SkillTree({
 
               const Icon = iconMap[skill.icon] || Code2
               return (
-                <div key={skill.id} className={`skill-wrap s${index + 1}`}>
+                <div
+                  key={skill.id}
+                  className={`skill-wrap s${index + 1}`}
+                  style={{
+                    left: `${skill.position.x}px`,
+                    top: `${skill.position.y}px`
+                  }}
+                >
                   <button
                     className={`skill-node ${nodeStatus} ${selected.id === skill.id ? 'selected' : ''}`}
                     onClick={() => { setSelectedId(skill.id); setPanelOpen(true) }}
+                    onMouseEnter={() => setHoveredId(skill.id)}
+                    onMouseLeave={() => setHoveredId(null)}
                     aria-label={`${skill.title}, ${statusCopy[nodeStatus]}`}
                     aria-pressed={selected.id === skill.id}
                   >
@@ -227,27 +277,35 @@ function SkillTree({
               )
             })}
 
-            <svg className="links" aria-hidden="true" viewBox="0 0 900 800">
+            <svg className="links" aria-hidden="true" viewBox="0 0 960 860">
               {skills.flatMap(targetNode => {
-                const targetPos = nodePixelPositions[targetNode.id] || { x: 450, y: 400 }
-                return targetNode.prerequisites.map(prereqId => {
+                const targetPos = targetNode.position
+                const prereqCount = targetNode.prerequisites.length
+
+                return targetNode.prerequisites.map((prereqId, pIdx) => {
                   const sourceNode = skills.find(s => s.id === prereqId)
                   if (!sourceNode) return null
-                  const sourcePos = nodePixelPositions[sourceNode.id] || { x: 450, y: 100 }
+                  const sourcePos = sourceNode.position
 
-                  // Parent bottom tip -> Child top tip
-                  const x1 = sourcePos.x
-                  const y1 = sourcePos.y + 38
-                  const x2 = targetPos.x
-                  const y2 = targetPos.y - 38
+                  const multiOffset = prereqCount > 1
+                    ? (pIdx === 0 ? -16 : pIdx === 1 ? 16 : 0)
+                    : 0
 
-                  const midY = (y1 + y2) / 2
-                  const pathData = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`
+                  const pathData = getEdgePath(sourcePos, targetPos, multiOffset)
 
                   const sourceMastered = masteredIds.has(sourceNode.id)
                   const targetMastered = masteredIds.has(targetNode.id)
                   const isMasteredLink = sourceMastered && targetMastered
                   const isAvailableLink = sourceMastered && !targetMastered
+
+                  const edgeKey = `${sourceNode.id}->${targetNode.id}`
+                  const isSelectedEdge = selectedPathEdges.has(edgeKey)
+                  const isHoveredEdge = hoveredPathEdges.has(edgeKey)
+                  const isHighlighted = isSelectedEdge || isHoveredEdge
+
+                  const strokeOpacity = (selectedId || hoveredId)
+                    ? (isHighlighted ? 1.0 : 0.22)
+                    : 0.9
 
                   const linkClass = isMasteredLink
                     ? 'link-mastered'
@@ -257,9 +315,10 @@ function SkillTree({
 
                   return (
                     <path
-                      key={`${sourceNode.id}-${targetNode.id}`}
+                      key={edgeKey}
                       d={pathData}
-                      className={linkClass}
+                      className={`${linkClass} ${isHighlighted ? 'highlighted' : ''}`}
+                      style={{ opacity: strokeOpacity }}
                     />
                   )
                 })
@@ -268,11 +327,21 @@ function SkillTree({
           </div>
 
           <div className="tree-minimap" aria-hidden="true">
-            <div className="mini-path" />
-            {skills.slice(0, 8).map((_, i) => (
-              <i key={i} style={{ left: `${18 + (i % 4) * 21}%`, top: `${16 + Math.floor(i / 4) * 45}%` }} />
-            ))}
-            <span />
+            {skills.map(s => {
+              const mx = (s.position.x / 960) * 100
+              const my = (s.position.y / 860) * 100
+              const isMastered = masteredIds.has(s.id)
+              return (
+                <i
+                  key={s.id}
+                  style={{
+                    left: `${mx}%`,
+                    top: `${my}%`,
+                    backgroundColor: isMastered ? '#981e2f' : '#ded4c4'
+                  }}
+                />
+              )
+            })}
           </div>
         </div>
         <div className="legend">

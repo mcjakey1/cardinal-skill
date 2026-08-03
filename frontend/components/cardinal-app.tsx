@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
-  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, Check, CheckCircle2, ChevronRight, CircleUserRound, Code2,
+  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, Camera, Check, CheckCircle2, ChevronRight, CircleUserRound, Code2,
   Database, FileUp, Flame, GraduationCap, LayoutDashboard, Lock, LogOut, Map, Menu,
   MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, RefreshCw, RotateCcw, Search, Settings,
   ShieldCheck, Sparkles, Target, Terminal, Trophy, Users, X, Zap, ZoomIn, ZoomOut
@@ -15,6 +15,7 @@ import { deriveStatuses, levelForXp, levelProgress, xpForLevel } from '@/lib/pro
 import { validateSkillGraph } from '@/lib/graph-validation'
 import { computeAutoLayout } from '@/lib/auto-layout'
 import { localStorageTreeLayoutAdapter, type UserTreeLayout } from '@/lib/tree-layout-persistence'
+import { profileStorageAdapter, type StudentProfile, defaultProfile } from '@/lib/profile-persistence'
 
 const nav: { route: AppRoute; label: string; icon: LucideIcon }[] = [
   { route: 'dashboard', label: 'Skill tree', icon: Map },
@@ -41,9 +42,9 @@ function getEdgePath(
   multiOffset: number = 0
 ) {
   const x1 = source.x
-  const y1 = source.y + 38 // parent bottom diamond handle
+  const y1 = source.y + 38
   const x2 = target.x
-  const y2 = target.y - 38 // child top diamond handle
+  const y2 = target.y - 38
 
   const dx = x2 - x1
   const dy = y2 - y1
@@ -77,8 +78,29 @@ function Pill({ children, tone = 'default' }: { children: React.ReactNode; tone?
   return <span className={`pill ${tone}`}>{children}</span>
 }
 
-function Sidebar({ route, setRoute, open, setOpen, userXp }: { route: AppRoute; setRoute: (r: AppRoute) => void; open: boolean; setOpen: (v: boolean) => void; userXp: number }) {
+function Sidebar({
+  route,
+  setRoute,
+  open,
+  setOpen,
+  userXp,
+  profile
+}: {
+  route: AppRoute
+  setRoute: (r: AppRoute) => void
+  open: boolean
+  setOpen: (v: boolean) => void
+  userXp: number
+  profile: StudentProfile
+}) {
   const level = levelForXp(userXp)
+  const initials = profile.fullName
+    .split(' ')
+    .map(n => n[0])
+    .join('')
+    .substring(0, 2)
+    .toUpperCase() || 'AR'
+
   return (
     <>
       <button className="mobile-menu" onClick={() => setOpen(true)} aria-label="Open navigation">
@@ -114,9 +136,9 @@ function Sidebar({ route, setRoute, open, setOpen, userXp }: { route: AppRoute; 
             <span>Settings</span>
           </button>
           <div className="student-chip">
-            <div>AR</div>
+            <div>{initials}</div>
             <p>
-              <b>Alex Rivera</b>
+              <b>{profile.fullName}</b>
               <span>Level {level} • {userXp.toLocaleString()} XP</span>
             </p>
           </div>
@@ -185,7 +207,7 @@ function SkillTree({
 
   const [selectedId, setSelectedId] = useState<string>('')
   const [hoveredId, setHoveredId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(.65) // Compact default zoom 65%
+  const [zoom, setZoom] = useState(.65)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [panelOpen, setPanelOpen] = useState(true)
 
@@ -202,14 +224,12 @@ function SkillTree({
   const viewportRef = useRef<HTMLDivElement>(null)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Ensure default selected skill exists in dataset
   useEffect(() => {
     if (skills.length > 0 && (!selectedId || !skills.some(s => s.id === selectedId))) {
       setSelectedId(skills[0].id)
     }
   }, [skills, selectedId])
 
-  // Pure graph status derivation
   const treeInput = useMemo(() => ({
     nodes: skills.map(s => ({ id: s.id, title: s.title, xpReward: s.xpReward || 100 })),
     prereqs: skills.flatMap(s => (s.prerequisiteIds || []).map(p => ({ nodeId: s.id, prereqId: p })))
@@ -229,7 +249,6 @@ function SkillTree({
     locked: 'Locked'
   }
 
-  // Selected prerequisite chain highlighting
   const selectedPathEdges = useMemo(() => {
     if (!selectedId) return new Set<string>()
     const set = new Set<string>()
@@ -245,7 +264,6 @@ function SkillTree({
     return set
   }, [skills, selectedId])
 
-  // Hovered parent/child edges highlighting
   const hoveredPathEdges = useMemo(() => {
     if (!hoveredId) return new Set<string>()
     const set = new Set<string>()
@@ -259,7 +277,6 @@ function SkillTree({
     return set
   }, [skills, hoveredId])
 
-  // Debounced persistence helper
   const persistPositions = (newPositions: Record<string, { x: number; y: number }>) => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(() => {
@@ -275,7 +292,6 @@ function SkillTree({
     }, 400)
   }
 
-  // Non-passive wheel handler to isolate canvas zoom from main browser page scrolling
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
@@ -615,7 +631,6 @@ function SkillTree({
         )}
       </aside>
 
-      {/* Reset Layout Confirmation Modal */}
       {resetModalOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'grid', placeItems: 'center', padding: '20px' }}>
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: '28px', maxWidth: '440px', width: '100%', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
@@ -953,41 +968,261 @@ function Syllabus({ onPublishSyllabus }: { onPublishSyllabus: () => void }) {
   )
 }
 
-function Profile({ userXp, streakDays }: { userXp: number; streakDays: number }) {
+function Profile({
+  profile,
+  onSaveProfile,
+  userXp,
+  streakDays
+}: {
+  profile: StudentProfile
+  onSaveProfile: (p: StudentProfile) => void
+  userXp: number
+  streakDays: number
+}) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [formData, setFormData] = useState<StudentProfile>(profile)
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState(false)
+
+  useEffect(() => {
+    setFormData(profile)
+  }, [profile])
+
   const level = levelForXp(userXp)
+  const initials = formData.fullName
+    .split(' ')
+    .map(n => n[0])
+    .join('')
+    .substring(0, 2)
+    .toUpperCase() || 'AR'
+
+  const validate = () => {
+    const errs: Record<string, string> = {}
+    if (!formData.fullName.trim()) errs.fullName = 'Full name is required.'
+    if (!formData.universityEmail.trim()) {
+      errs.universityEmail = 'University email is required.'
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.universityEmail)) {
+      errs.universityEmail = 'Invalid email format.'
+    }
+    if (!formData.studentNumber.trim()) errs.studentNumber = 'Student number is required.'
+    if (!formData.program.trim()) errs.program = 'Program is required.'
+    setErrors(errs)
+    return Object.keys(errs).length === 0
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!validate()) return
+
+    setSaving(true)
+    setTimeout(() => {
+      onSaveProfile(formData)
+      setSaving(false)
+      setIsEditing(false)
+      setToast(true)
+      setTimeout(() => setToast(false), 3500)
+    }, 300)
+  }
+
+  const handleCancel = () => {
+    setFormData(profile)
+    setErrors({})
+    setIsEditing(false)
+  }
+
   return (
-    <>
-      <PageHead eyebrow="Your identity" title="Student profile" copy="Control how your learning story appears across Cardinal Skill." />
+    <div className="profile-page-container">
+      <PageHead
+        eyebrow="YOUR IDENTITY"
+        title="Student profile"
+        copy="Manage your learning profile and academic information."
+      />
+
       <div className="profile-grid">
-        <article className="profile-card">
-          <div className="big-avatar">AR</div>
-          <h2>{prototypeData.user.name}</h2>
-          <p>{prototypeData.user.program}</p>
-          <Pill>{prototypeData.user.studentNumber}</Pill>
-          <dl>
-            <div><dt>Level</dt><dd>{level}</dd></div>
-            <div><dt>Mastered</dt><dd>13</dd></div>
-            <div><dt>Streak</dt><dd>{streakDays} days</dd></div>
-          </dl>
-          <button>Edit profile</button>
+        <article className="profile-summary-card">
+          <div className="profile-avatar-row">
+            <div className="profile-avatar-large">
+              {initials}
+              <button className="profile-avatar-edit" title="Change avatar" aria-label="Change avatar">
+                <Camera style={{ width: '14px', height: '14px' }} />
+              </button>
+            </div>
+            <div className="profile-user-info">
+              <h2>{profile.fullName}</h2>
+              <p style={{ color: 'var(--muted-foreground)', fontSize: '13px', margin: 0 }}>{profile.program}</p>
+              <div style={{ marginTop: '6px' }}>
+                <Pill tone="gold">{profile.studentNumber}</Pill>
+              </div>
+            </div>
+          </div>
+
+          <div className="profile-stats-grid">
+            <div className="profile-stat-item">
+              <b>{level}</b>
+              <span>Level</span>
+            </div>
+            <div className="profile-stat-item">
+              <b>{userXp.toLocaleString()}</b>
+              <span>Total XP</span>
+            </div>
+            <div className="profile-stat-item">
+              <b>13</b>
+              <span>Mastered</span>
+            </div>
+            <div className="profile-stat-item">
+              <b>{streakDays}d</b>
+              <span>Streak</span>
+            </div>
+          </div>
+
+          <button
+            className="outline-action"
+            onClick={() => setIsEditing(!isEditing)}
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            {isEditing ? 'Cancel editing' : 'Edit profile'}
+          </button>
         </article>
-        <article className="form-card">
+
+        <article className="academic-info-card">
           <h2>Academic information</h2>
-          <label>Full name<input defaultValue="Alex Rivera" /></label>
-          <label>Mapúa email<input defaultValue={prototypeData.user.email} /></label>
-          <label>Program<input defaultValue="BS Computer Science" /></label>
-          <label>Year level
-            <select defaultValue="2">
-              <option>1</option>
-              <option>2</option>
-              <option>3</option>
-              <option>4</option>
-            </select>
-          </label>
-          <button className="primary-action">Save changes</button>
+          <form className="academic-form" onSubmit={handleSubmit}>
+            <div className="form-group">
+              <label htmlFor="fullName">
+                Full name {errors.fullName && <span className="error-text">{errors.fullName}</span>}
+              </label>
+              <input
+                id="fullName"
+                type="text"
+                disabled={!isEditing}
+                className={errors.fullName ? 'error' : ''}
+                value={formData.fullName}
+                onChange={e => setFormData({ ...formData, fullName: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="universityEmail">
+                Mapúa email {errors.universityEmail && <span className="error-text">{errors.universityEmail}</span>}
+              </label>
+              <input
+                id="universityEmail"
+                type="email"
+                disabled={!isEditing}
+                className={errors.universityEmail ? 'error' : ''}
+                value={formData.universityEmail}
+                onChange={e => setFormData({ ...formData, universityEmail: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="studentNumber">
+                Student number {errors.studentNumber && <span className="error-text">{errors.studentNumber}</span>}
+              </label>
+              <input
+                id="studentNumber"
+                type="text"
+                disabled={!isEditing}
+                className={errors.studentNumber ? 'error' : ''}
+                value={formData.studentNumber}
+                onChange={e => setFormData({ ...formData, studentNumber: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="program">Program</label>
+              <select
+                id="program"
+                disabled={!isEditing}
+                value={formData.program}
+                onChange={e => setFormData({ ...formData, program: e.target.value })}
+              >
+                <option value="BS Computer Science">BS Computer Science</option>
+                <option value="BS Information Technology">BS Information Technology</option>
+                <option value="BS Computer Engineering">BS Computer Engineering</option>
+                <option value="BS Data Science">BS Data Science</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="yearLevel">Year level</label>
+              <select
+                id="yearLevel"
+                disabled={!isEditing}
+                value={formData.yearLevel}
+                onChange={e => setFormData({ ...formData, yearLevel: e.target.value })}
+              >
+                <option value="1">1st Year</option>
+                <option value="2">2nd Year</option>
+                <option value="3">3rd Year</option>
+                <option value="4">4th Year</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="campus">Campus</label>
+              <select
+                id="campus"
+                disabled={!isEditing}
+                value={formData.campus || 'Mapúa Intramuros'}
+                onChange={e => setFormData({ ...formData, campus: e.target.value })}
+              >
+                <option value="Mapúa Intramuros">Mapúa Intramuros</option>
+                <option value="Mapúa Makati">Mapúa Makati</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="studyPace">Preferred study pace</label>
+              <select
+                id="studyPace"
+                disabled={!isEditing}
+                value={formData.studyPace || 'Balanced (5 days/wk)'}
+                onChange={e => setFormData({ ...formData, studyPace: e.target.value })}
+              >
+                <option value="Balanced (5 days/wk)">Balanced (5 days/wk)</option>
+                <option value="Intense (Daily)">Intense (Daily)</option>
+                <option value="Light (3 days/wk)">Light (3 days/wk)</option>
+              </select>
+            </div>
+
+            {isEditing && (
+              <div className="form-actions-row">
+                <button type="button" className="outline-action" onClick={handleCancel}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary-action" disabled={saving}>
+                  {saving ? 'Saving changes…' : 'Save changes'}
+                </button>
+              </div>
+            )}
+          </form>
         </article>
       </div>
-    </>
+
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          background: '#16a34a',
+          color: '#fff',
+          padding: '12px 20px',
+          borderRadius: '12px',
+          fontWeight: 700,
+          fontSize: '13px',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          zIndex: 200
+        }}>
+          <CheckCircle2 style={{ width: '18px', height: '18px' }} />
+          Profile updated successfully.
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1177,6 +1412,11 @@ export function CardinalApp() {
   const [route, setRoute] = useState<AppRoute>(APP_ROUTES.welcome)
   const [menu, setMenu] = useState(false)
 
+  // Profile State Single Source of Truth
+  const [profile, setProfile] = useState<StudentProfile>(() => {
+    return profileStorageAdapter.loadProfile('usr_alex')
+  })
+
   // Interactive local MVP state
   const [masteredIds, setMasteredIds] = useState<Set<string>>(
     new Set(['skill_1', 'skill_2', 'skill_3', 'skill_4', 'skill_5', 'skill_6', 'l1', 'l2', 'l3', 'r1', 'r2', 'w_1', 'w_2', 'w_3', 'w_4', 'w_5'])
@@ -1184,6 +1424,11 @@ export function CardinalApp() {
   const [userXp, setUserXp] = useState<number>(prototypeData.user.xp)
   const [streakDays, setStreakDays] = useState<number>(prototypeData.user.streakDays)
   const [missions, setMissions] = useState<DomainMission[]>(prototypeData.missions)
+
+  const handleSaveProfile = (updatedProfile: StudentProfile) => {
+    setProfile(updatedProfile)
+    profileStorageAdapter.saveProfile(updatedProfile.id, updatedProfile)
+  }
 
   const handleToggleMastery = (skillId: string) => {
     setMasteredIds(prev => {
@@ -1219,7 +1464,7 @@ export function CardinalApp() {
 
   return (
     <div className="app-shell">
-      <Sidebar route={route} setRoute={setRoute} open={menu} setOpen={setMenu} userXp={userXp} />
+      <Sidebar route={route} setRoute={setRoute} open={menu} setOpen={setMenu} userXp={userXp} profile={profile} />
       <main className="app-main">
         {route === 'dashboard' && (
           <Dashboard
@@ -1236,7 +1481,14 @@ export function CardinalApp() {
         {route === 'companion' && <Companion />}
         {route === 'achievements' && <Achievements />}
         {route === 'syllabus' && <Syllabus onPublishSyllabus={handlePublishSyllabus} />}
-        {route === 'profile' && <Profile userXp={userXp} streakDays={streakDays} />}
+        {route === 'profile' && (
+          <Profile
+            profile={profile}
+            onSaveProfile={handleSaveProfile}
+            userXp={userXp}
+            streakDays={streakDays}
+          />
+        )}
         {route === 'settings' && <SettingsPage />}
         {route === 'instructor' && <Instructor />}
       </main>

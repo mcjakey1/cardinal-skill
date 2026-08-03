@@ -1,0 +1,29 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+
+# Native build output (EAS builds these; don't commit)
+/ios
+/android
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Secrets — never commit. Only .env.example is tracked.
+.env
+.env.*
+!.env.example
+
+# Supabase local stack
+supabase/.branches/
+supabase/.temp/
+
+.DS_Store
+Thumbs.db
+
+# Source proposal — kept locally, not published.
+SkillQuest.pdf

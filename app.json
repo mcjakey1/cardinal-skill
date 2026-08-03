@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "SkillQuest",
+    "slug": "cardinal-skill",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "skillquest",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0B1622"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "edu.cintana.skillquest"
+    },
+    "android": {
+      "package": "edu.cintana.skillquest",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B1622"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-router", "expo-font", "expo-secure-store"],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "supabaseUrl": "$EXPO_PUBLIC_SUPABASE_URL",
+      "supabaseAnonKey": "$EXPO_PUBLIC_SUPABASE_ANON_KEY"
+    }
+  }
+}

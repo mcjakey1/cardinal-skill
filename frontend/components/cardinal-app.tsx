@@ -32,6 +32,26 @@ const iconMap: Record<string, LucideIcon> = {
   terminal: Terminal
 }
 
+// 900x800 canvas pixel node positions matching .s1 ... .s16 CSS classes
+const nodePixelPositions: Record<string, { x: number; y: number }> = {
+  skill_1: { x: 450, y: 90 },
+  skill_2: { x: 225, y: 195 },
+  skill_3: { x: 675, y: 195 },
+  skill_4: { x: 135, y: 315 },
+  skill_5: { x: 360, y: 315 },
+  skill_6: { x: 585, y: 315 },
+  skill_7: { x: 792, y: 315 },
+  skill_8: { x: 198, y: 440 },
+  skill_9: { x: 432, y: 440 },
+  skill_10: { x: 684, y: 440 },
+  skill_11: { x: 108, y: 565 },
+  skill_12: { x: 324, y: 565 },
+  skill_13: { x: 558, y: 565 },
+  skill_14: { x: 783, y: 565 },
+  skill_15: { x: 315, y: 690 },
+  skill_16: { x: 612, y: 690 }
+}
+
 function Progress({ value }: { value: number }) {
   return (
     <div className="h-2 overflow-hidden rounded-full bg-[#eee9df]">
@@ -103,14 +123,14 @@ function SkillTree({
   masteredIds: Set<string>
   onToggleMastery: (skillId: string) => void
 }) {
-  const [selectedId, setSelectedId] = useState<string>('skill_7') // Trees node default
-  const [zoom, setZoom] = useState(0.88)
-  const [pan, setPan] = useState({ x: 0, y: -10 })
+  const [selectedId, setSelectedId] = useState<string>(skills[6]?.id || skills[0]?.id)
+  const [zoom, setZoom] = useState(.9)
+  const [pan, setPan] = useState({ x: 0, y: -45 })
   const [panelOpen, setPanelOpen] = useState(true)
   const [drag, setDrag] = useState<{ x: number; y: number; px: number; py: number } | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
 
-  // Derive pure statuses from graph
+  // Pure graph status derivation
   const treeInput = useMemo(() => ({
     nodes: skills.map(s => ({ id: s.id, title: s.title, xpReward: s.xpReward })),
     prereqs: skills.flatMap(s => s.prerequisites.map(p => ({ nodeId: s.id, prereqId: p })))
@@ -130,27 +150,22 @@ function SkillTree({
     locked: 'Locked'
   }
 
-  // Non-passive wheel handler to zoom canvas without scrolling the parent web page
+  // Non-passive wheel handler to isolate canvas zoom from main browser page scrolling
   useEffect(() => {
     const el = viewportRef.current
     if (!el) return
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
       const zoomDelta = -e.deltaY * 0.0012
-      setZoom(z => Math.min(1.6, Math.max(0.55, z + zoomDelta)))
+      setZoom(z => Math.min(1.5, Math.max(0.6, z + zoomDelta)))
     }
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
   }, [])
 
-  const fit = () => { setZoom(0.85); setPan({ x: 0, y: -10 }) }
+  const fit = () => { setZoom(.9); setPan({ x: 0, y: -45 }) }
   const reset = () => { setZoom(1.0); setPan({ x: 0, y: 0 }) }
-  const focusSelected = () => {
-    if (!selected) return
-    setZoom(1.1)
-    setPan({ x: Math.round(480 - selected.position.x), y: Math.round(400 - selected.position.y) })
-    setPanelOpen(true)
-  }
+  const focusSelected = () => { setZoom(1.08); setPan({ x: 0, y: -80 }); setPanelOpen(true) }
 
   const masteredCount = masteredIds.size
 
@@ -164,13 +179,13 @@ function SkillTree({
             <b>Academic skill tree</b>
           </div>
           <div className="tree-actions">
-            <button onClick={fit} title="Fit tree to view" aria-label="Fit skill tree"><Maximize2 /></button>
-            <button onClick={reset} title="Reset zoom and pan" aria-label="Reset view"><RefreshCw /></button>
+            <button onClick={fit} title="Fit skill tree" aria-label="Fit skill tree"><Maximize2 /></button>
+            <button onClick={reset} title="Reset view" aria-label="Reset view"><RefreshCw /></button>
             <button onClick={focusSelected} title="Focus selected skill" aria-label="Focus selected skill"><Search /></button>
             <span className="toolbar-separator" />
-            <button onClick={() => setZoom(z => Math.max(0.55, z - 0.12))} aria-label="Zoom out"><ZoomOut /></button>
+            <button onClick={() => setZoom(z => Math.max(.6, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
             <b>{Math.round(zoom * 100)}%</b>
-            <button onClick={() => setZoom(z => Math.min(1.6, z + 0.12))} aria-label="Zoom in"><ZoomIn /></button>
+            <button onClick={() => setZoom(z => Math.min(1.5, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
           </div>
         </div>
 
@@ -186,23 +201,16 @@ function SkillTree({
           onPointerUp={() => setDrag(null)}
           onPointerCancel={() => setDrag(null)}
         >
-          <div className="canvas-hint">Drag to pan • Scroll canvas to zoom</div>
+          <div className="canvas-hint">Drag to explore • Scroll canvas to zoom</div>
           <div className="tree-canvas" style={{ transform: `translate3d(${pan.x}px,${pan.y}px,0) scale(${zoom})` }}>
-            {skills.map((skill) => {
+            {skills.map((skill, index) => {
               const nodeStatus: SkillStatus = masteredIds.has(skill.id)
                 ? 'mastered'
                 : (calculatedStatusMap.get(skill.id) as SkillStatus) || 'locked'
 
               const Icon = iconMap[skill.icon] || Code2
               return (
-                <div
-                  key={skill.id}
-                  className="skill-wrap"
-                  style={{
-                    '--x': `${skill.position.x}px`,
-                    '--y': `${skill.position.y}px`
-                  } as React.CSSProperties}
-                >
+                <div key={skill.id} className={`skill-wrap s${index + 1}`}>
                   <button
                     className={`skill-node ${nodeStatus} ${selected.id === skill.id ? 'selected' : ''}`}
                     onClick={() => { setSelectedId(skill.id); setPanelOpen(true) }}
@@ -219,15 +227,15 @@ function SkillTree({
               )
             })}
 
-            <svg className="links" aria-hidden="true" viewBox="0 0 960 860">
+            <svg className="links" aria-hidden="true" viewBox="0 0 900 800">
               {skills.flatMap(targetNode => {
-                const targetPos = targetNode.position
+                const targetPos = nodePixelPositions[targetNode.id] || { x: 450, y: 400 }
                 return targetNode.prerequisites.map(prereqId => {
                   const sourceNode = skills.find(s => s.id === prereqId)
                   if (!sourceNode) return null
-                  const sourcePos = sourceNode.position
+                  const sourcePos = nodePixelPositions[sourceNode.id] || { x: 450, y: 100 }
 
-                  // Bottom tip of parent diamond -> Top tip of child diamond
+                  // Parent bottom tip -> Child top tip
                   const x1 = sourcePos.x
                   const y1 = sourcePos.y + 38
                   const x2 = targetPos.x
@@ -260,21 +268,11 @@ function SkillTree({
           </div>
 
           <div className="tree-minimap" aria-hidden="true">
-            {skills.map(s => {
-              const mx = (s.position.x / 960) * 100
-              const my = (s.position.y / 860) * 100
-              const isMastered = masteredIds.has(s.id)
-              return (
-                <i
-                  key={s.id}
-                  style={{
-                    left: `${mx}%`,
-                    top: `${my}%`,
-                    backgroundColor: isMastered ? '#981e2f' : '#ded4c4'
-                  }}
-                />
-              )
-            })}
+            <div className="mini-path" />
+            {skills.slice(0, 8).map((_, i) => (
+              <i key={i} style={{ left: `${18 + (i % 4) * 21}%`, top: `${16 + Math.floor(i / 4) * 45}%` }} />
+            ))}
+            <span />
           </div>
         </div>
         <div className="legend">
@@ -347,37 +345,12 @@ function PageHead({ eyebrow, title, copy }: { eyebrow: string; title: string; co
   )
 }
 
-function Stat({
-  icon: Icon,
-  value,
-  label,
-  sublabel,
-  progress
-}: {
-  icon: LucideIcon
-  value: string
-  label: string
-  sublabel?: string
-  progress?: number
-}) {
+function Stat({ icon: Icon, value, label, progress }: { icon: LucideIcon; value: string; label: string; progress?: number }) {
   return (
     <article className="stat-card">
       <div><Icon /></div>
-      <p>
-        <b>{value}</b>
-        <span>{label}</span>
-      </p>
-      {progress !== undefined && (
-        <div className="xp-progress-wrap">
-          <div className="xp-meta">
-            <span>{sublabel || `${progress}%`}</span>
-            <span>{progress}%</span>
-          </div>
-          <div className="h-2">
-            <div style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} />
-          </div>
-        </div>
-      )}
+      <p><b>{value}</b><span>{label}</span></p>
+      {progress !== undefined && <Progress value={progress} />}
     </article>
   )
 }
@@ -395,10 +368,11 @@ function Dashboard({
   streakDays: number
   onToggleMastery: (skillId: string) => void
 }) {
-  const level = 6
-  const xpTargetForNextLevel = 4000
-  const xpRemaining = Math.max(0, xpTargetForNextLevel - userXp)
-  const xpProgressPct = Math.round((userXp / xpTargetForNextLevel) * 100)
+  const currentXp = 2840
+  const currentLevel = 6
+  const nextLevelXp = 4000
+  const remainingXp = nextLevelXp - currentXp // 1,160 XP
+  const progressPct = 71
   const courseMasteryPct = Math.round((masteredIds.size / skills.length) * 100)
 
   return (
@@ -410,13 +384,24 @@ function Dashboard({
       />
       <div className="stats">
         <Stat icon={Flame} value={`${streakDays} days`} label="Current streak" />
-        <Stat
-          icon={Zap}
-          value={`${userXp.toLocaleString()} XP`}
-          label={`Level ${level} progress`}
-          sublabel={`${xpRemaining.toLocaleString()} XP to Level 7`}
-          progress={xpProgressPct}
-        />
+        <article className="stat-card">
+          <div><Zap /></div>
+          <div className="xp-card-row">
+            <div className="xp-info">
+              <b>{currentXp.toLocaleString()} XP</b>
+              <span>Level {currentLevel} progress</span>
+            </div>
+            <div className="xp-bar-container">
+              <div className="xp-bar-labels">
+                <span>{remainingXp.toLocaleString()} XP to Level 7</span>
+                <span>{progressPct}%</span>
+              </div>
+              <div className="xp-bar-track">
+                <div className="xp-bar-fill" style={{ width: `${progressPct}%` }} />
+              </div>
+            </div>
+          </div>
+        </article>
         <Stat icon={Trophy} value={`${masteredIds.size} skills`} label="Mastered this term" />
       </div>
       <div className="section-title">

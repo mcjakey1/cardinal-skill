@@ -16,6 +16,7 @@ import { validateSkillGraph } from '@/lib/graph-validation'
 import { computeAutoLayout } from '@/lib/auto-layout'
 import { localStorageTreeLayoutAdapter, type UserTreeLayout } from '@/lib/tree-layout-persistence'
 import { profileStorageAdapter, type StudentProfile, defaultProfile } from '@/lib/profile-persistence'
+import { HeroSkillTree } from '@/components/hero-skill-tree'
 
 const nav: { route: AppRoute; label: string; icon: LucideIcon }[] = [
   { route: 'dashboard', label: 'Skill tree', icon: Map },
@@ -1312,7 +1313,7 @@ function Onboarding({ setRoute }: { setRoute: (r: AppRoute) => void }) {
     ['Your path is ready', 'We found three active courses and prepared your first missions.']
   ]
   return (
-    <main className="center-page">
+    <main className="center-page page-transition-enter">
       <div className="onboard-card">
         <div className="brand-mark">C</div>
         <span>Step {step + 1} of 3</span>
@@ -1337,7 +1338,7 @@ function Onboarding({ setRoute }: { setRoute: (r: AppRoute) => void }) {
 
 function Welcome({ setRoute }: { setRoute: (r: AppRoute) => void }) {
   return (
-    <main className="welcome">
+    <main className="welcome page-transition-enter">
       <header>
         <div className="brand">
           <div className="brand-mark">C</div>
@@ -1357,13 +1358,7 @@ function Welcome({ setRoute }: { setRoute: (r: AppRoute) => void }) {
           <small>Student-first • Instructor-aware • Progress without pressure</small>
         </div>
         <div className="hero-map">
-          <div className="crest"><GraduationCap /></div>
-          {['Foundations', 'Data structures', 'Algorithms', 'Mastery'].map((x, i) => (
-            <div className={`hero-node n${i}`} key={x}>
-              <i>{i + 1}</i>
-              <span>{x}</span>
-            </div>
-          ))}
+          <HeroSkillTree />
         </div>
       </section>
       <section className="promise">
@@ -1385,7 +1380,7 @@ function Welcome({ setRoute }: { setRoute: (r: AppRoute) => void }) {
 
 function Auth({ setRoute }: { setRoute: (r: AppRoute) => void }) {
   return (
-    <main className="auth-page">
+    <main className="auth-page page-transition-enter">
       <section>
         <div className="brand"><div className="brand-mark">C</div><b>Cardinal Skill</b></div>
         <Pill tone="gold">Your next quest awaits</Pill>

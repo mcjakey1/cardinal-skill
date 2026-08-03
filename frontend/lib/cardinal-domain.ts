@@ -1,5 +1,5 @@
 export type UserRole = 'student' | 'instructor'
-export type SkillStatus = 'mastered' | 'active' | 'available' | 'locked'
+export type SkillStatus = 'locked' | 'available' | 'in_progress' | 'mastered'
 export type MissionStatus = 'completed' | 'in-progress' | 'available' | 'locked'
 
 export interface UserProfile {
@@ -18,17 +18,27 @@ export interface UserProfile {
 
 export interface SkillNode {
   id: string
-  courseId: string
   title: string
-  shortTitle: string
-  description: string
+  shortTitle?: string
+  description?: string
   status: SkillStatus
-  progress: number
-  xpReward: number
-  position: { x: number; y: number }
-  prerequisites: string[]
-  missionIds: string[]
-  icon: 'code' | 'database' | 'network' | 'shield' | 'brain' | 'terminal'
+  difficulty?: number
+  xpReward?: number
+  progress?: number
+  prerequisiteIds: string[]
+  missionIds?: string[]
+  category?: string
+  icon?: 'code' | 'database' | 'network' | 'shield' | 'brain' | 'terminal'
+  position?: { x: number; y: number }
+}
+
+export interface SkillTreePayload {
+  course: {
+    id: string
+    code: string
+    title: string
+  }
+  nodes: SkillNode[]
 }
 
 export interface Mission {
@@ -66,18 +76,8 @@ export interface Achievement {
 export interface AnalyticsStudent {
   id: string
   name: string
-  progress: number
   mastered: number
+  progress: number
   streak: number
-  status: 'on-track' | 'needs-support' | 'excelling'
-}
-
-export interface CardinalRepository {
-  getCurrentUser(): Promise<UserProfile>
-  getCourses(): Promise<Course[]>
-  getSkills(courseId: string): Promise<SkillNode[]>
-  getMissions(): Promise<Mission[]>
-  getAchievements(): Promise<Achievement[]>
-  getInstructorAnalytics(): Promise<AnalyticsStudent[]>
-  updateMissionStatus(id: string, status: MissionStatus): Promise<{ ok: true }>
+  status: 'on-track' | 'needs-support'
 }

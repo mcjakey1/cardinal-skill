@@ -561,9 +561,6 @@ h1, h2, h3, .brand {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 960px;
-  height: 860px;
-  margin: -430px 0 0 -480px;
   transform-origin: center;
   transition: transform 0.18s ease-out;
   will-change: transform;
@@ -576,7 +573,7 @@ h1, h2, h3, .brand {
 .skill-wrap {
   position: absolute;
   transform: translate(-50%, -50%);
-  width: 128px;
+  width: 130px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -626,7 +623,7 @@ h1, h2, h3, .brand {
   border-color: #d2a33a;
 }
 
-.skill-node.active {
+.skill-node.active, .skill-node.in_progress {
   border-color: #981e2f;
   color: #981e2f;
   box-shadow: 0 0 0 5px #981e2f16;
@@ -663,7 +660,7 @@ h1, h2, h3, .brand {
   font-weight: 800;
   line-height: 1.2;
   text-align: center;
-  max-width: 126px;
+  max-width: 128px;
   white-space: nowrap;
   box-shadow: 0 2px 6px #32181c0f;
   border: 1px solid var(--border);

@@ -2,16 +2,18 @@
 
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
-  Award, Bell, BookOpen, Bot, Brain, CheckCircle2, ChevronRight, CircleUserRound, Code2,
+  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, CheckCircle2, ChevronRight, CircleUserRound, Code2,
   Database, FileUp, Flame, GraduationCap, LayoutDashboard, Lock, LogOut, Map, Menu,
   MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, RefreshCw, Search, Settings,
   ShieldCheck, Sparkles, Target, Terminal, Trophy, Users, X, Zap, ZoomIn, ZoomOut
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { prototypeData } from '@/lib/cardinal-repository'
-import type { SkillNode as DomainSkillNode, Mission as DomainMission, SkillStatus } from '@/lib/cardinal-domain'
+import { prototypeData, getSkillTree } from '@/lib/cardinal-repository'
+import type { SkillNode as DomainSkillNode, SkillTreePayload, Mission as DomainMission, SkillStatus } from '@/lib/cardinal-domain'
 import { APP_ROUTES, type AppRoute } from '@/lib/cardinal-routes'
 import { deriveStatuses, levelForXp, levelProgress, xpForLevel } from '@/lib/progression'
+import { validateSkillGraph, type GraphValidationError } from '@/lib/graph-validation'
+import { computeAutoLayout } from '@/lib/auto-layout'
 
 const nav: { route: AppRoute; label: string; icon: LucideIcon }[] = [
   { route: 'dashboard', label: 'Skill tree', icon: Map },
@@ -125,38 +127,64 @@ function Sidebar({ route, setRoute, open, setOpen, userXp }: { route: AppRoute; 
 }
 
 function SkillTree({
-  skills,
+  payload,
   masteredIds,
-  onToggleMastery
+  onToggleMastery,
+  selectedDataset,
+  onSelectDataset
 }: {
-  skills: DomainSkillNode[]
+  payload: SkillTreePayload
   masteredIds: Set<string>
   onToggleMastery: (skillId: string) => void
+  selectedDataset: string
+  onSelectDataset: (key: string) => void
 }) {
-  const [selectedId, setSelectedId] = useState<string>(skills[6]?.id || skills[0]?.id)
+  const { course, nodes: rawNodes } = payload
+
+  // 1. Graph Validation
+  const validation = useMemo(() => validateSkillGraph(rawNodes), [rawNodes])
+
+  // 2. Automatic Layout Calculation via Dagre engine
+  const layoutResult = useMemo(() => {
+    if (!validation.isValid) return { nodes: [], width: 960, height: 860 }
+    return computeAutoLayout(rawNodes)
+  }, [rawNodes, validation.isValid])
+
+  const skills = layoutResult.nodes
+  const canvasWidth = layoutResult.width
+  const canvasHeight = layoutResult.height
+
+  const [selectedId, setSelectedId] = useState<string>('')
   const [hoveredId, setHoveredId] = useState<string | null>(null)
-  const [zoom, setZoom] = useState(.9)
-  const [pan, setPan] = useState({ x: 0, y: -45 })
+  const [zoom, setZoom] = useState(.88)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
   const [panelOpen, setPanelOpen] = useState(true)
   const [drag, setDrag] = useState<{ x: number; y: number; px: number; py: number } | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
 
+  // Ensure default selected skill exists in dataset
+  useEffect(() => {
+    if (skills.length > 0 && (!selectedId || !skills.some(s => s.id === selectedId))) {
+      setSelectedId(skills[0].id)
+    }
+  }, [skills, selectedId])
+
   // Pure graph status derivation
   const treeInput = useMemo(() => ({
-    nodes: skills.map(s => ({ id: s.id, title: s.title, xpReward: s.xpReward })),
-    prereqs: skills.flatMap(s => s.prerequisites.map(p => ({ nodeId: s.id, prereqId: p })))
+    nodes: skills.map(s => ({ id: s.id, title: s.title, xpReward: s.xpReward || 100 })),
+    prereqs: skills.flatMap(s => (s.prerequisiteIds || []).map(p => ({ nodeId: s.id, prereqId: p })))
   }), [skills])
 
   const { status: calculatedStatusMap } = useMemo(() => deriveStatuses(treeInput, masteredIds), [treeInput, masteredIds])
 
   const selected = skills.find(s => s.id === selectedId) || skills[0]
-  const currentStatus: SkillStatus = masteredIds.has(selected.id)
+  const currentStatus: SkillStatus = selected && masteredIds.has(selected.id)
     ? 'mastered'
-    : (calculatedStatusMap.get(selected.id) as SkillStatus) || 'locked'
+    : (selected ? (calculatedStatusMap.get(selected.id) as SkillStatus) || 'locked' : 'locked')
 
   const statusCopy: Record<SkillStatus, string> = {
     mastered: 'Mastered',
-    active: 'In progress',
+    in_progress: 'In progress',
     available: 'Available',
     locked: 'Locked'
   }
@@ -168,7 +196,7 @@ function SkillTree({
     const visit = (id: string) => {
       const node = skills.find(s => s.id === id)
       if (!node) return
-      node.prerequisites.forEach(p => {
+      (node.prerequisiteIds || []).forEach(p => {
         set.add(`${p}->${id}`)
         visit(p)
       })
@@ -182,7 +210,7 @@ function SkillTree({
     if (!hoveredId) return new Set<string>()
     const set = new Set<string>()
     skills.forEach(s => {
-      s.prerequisites.forEach(p => {
+      (s.prerequisiteIds || []).forEach(p => {
         if (p === hoveredId || s.id === hoveredId) {
           set.add(`${p}->${s.id}`)
         }
@@ -198,35 +226,56 @@ function SkillTree({
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
       const zoomDelta = -e.deltaY * 0.0012
-      setZoom(z => Math.min(1.5, Math.max(0.6, z + zoomDelta)))
+      setZoom(z => Math.min(1.6, Math.max(0.4, z + zoomDelta)))
     }
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
   }, [])
 
-  const fit = () => { setZoom(.9); setPan({ x: 0, y: -45 }) }
+  const fit = () => { setZoom(.85); setPan({ x: 0, y: 0 }) }
   const reset = () => { setZoom(1.0); setPan({ x: 0, y: 0 }) }
-  const focusSelected = () => { setZoom(1.08); setPan({ x: 0, y: -80 }); setPanelOpen(true) }
+  const focusSelected = () => {
+    if (!selected) return
+    setZoom(1.05)
+    setPan({ x: Math.round((canvasWidth / 2) - selected.position.x), y: Math.round((canvasHeight / 2) - selected.position.y) })
+    setPanelOpen(true)
+  }
 
-  const masteredCount = masteredIds.size
+  const masteredCount = skills.filter(s => masteredIds.has(s.id)).length
 
   return (
     <div className={`tree-explorer ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
       <section className="tree-card">
         <div className="tree-toolbar">
           <div className="tree-title">
-            <Pill>CS210</Pill>
+            <Pill>{course.code}</Pill>
             <span>{skills.length} skills • {masteredCount} mastered</span>
-            <b>Academic skill tree</b>
+            <b>{course.title}</b>
           </div>
           <div className="tree-actions">
+            <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              Dataset:
+              <select
+                value={selectedDataset}
+                onChange={e => onSelectDataset(e.target.value)}
+                style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700 }}
+              >
+                <option value="cs210">1. CS210 Branching (16 skills)</option>
+                <option value="linear">2. CS101 Linear (6 skills)</option>
+                <option value="wide">3. CS300 Wide Realm (25 skills)</option>
+                <option value="dual-roots">4. MATH201 Dual Roots (4 skills)</option>
+                <option value="err-missing">5. Invalid: Missing Prereq</option>
+                <option value="err-cycle">6. Invalid: Cycle Loop</option>
+              </select>
+            </label>
+            <span className="toolbar-separator" />
             <button onClick={fit} title="Fit skill tree" aria-label="Fit skill tree"><Maximize2 /></button>
             <button onClick={reset} title="Reset view" aria-label="Reset view"><RefreshCw /></button>
             <button onClick={focusSelected} title="Focus selected skill" aria-label="Focus selected skill"><Search /></button>
             <span className="toolbar-separator" />
-            <button onClick={() => setZoom(z => Math.max(.6, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
+            <button onClick={() => setZoom(z => Math.max(.4, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
             <b>{Math.round(zoom * 100)}%</b>
-            <button onClick={() => setZoom(z => Math.min(1.5, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
+            <button onClick={() => setZoom(z => Math.min(1.6, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
           </div>
         </div>
 
@@ -234,7 +283,7 @@ function SkillTree({
           ref={viewportRef}
           className={`tree-viewport ${drag ? 'dragging' : ''}`}
           onPointerDown={e => {
-            if ((e.target as HTMLElement).closest('button')) return
+            if ((e.target as HTMLElement).closest('button') || (e.target as HTMLElement).closest('select')) return
             setDrag({ x: e.clientX, y: e.clientY, px: pan.x, py: pan.y })
             e.currentTarget.setPointerCapture(e.pointerId)
           }}
@@ -242,94 +291,124 @@ function SkillTree({
           onPointerUp={() => setDrag(null)}
           onPointerCancel={() => setDrag(null)}
         >
-          <div className="canvas-hint">Drag to explore • Scroll canvas to zoom</div>
-          <div className="tree-canvas" style={{ transform: `translate3d(${pan.x}px,${pan.y}px,0) scale(${zoom})` }}>
-            {skills.map((skill, index) => {
-              const nodeStatus: SkillStatus = masteredIds.has(skill.id)
-                ? 'mastered'
-                : (calculatedStatusMap.get(skill.id) as SkillStatus) || 'locked'
+          <div className="canvas-hint">Drag to explore • Scroll canvas to zoom • Auto-layout engine active</div>
 
-              const Icon = iconMap[skill.icon] || Code2
-              return (
-                <div
-                  key={skill.id}
-                  className={`skill-wrap s${index + 1}`}
-                  style={{
-                    left: `${skill.position.x}px`,
-                    top: `${skill.position.y}px`
-                  }}
-                >
-                  <button
-                    className={`skill-node ${nodeStatus} ${selected.id === skill.id ? 'selected' : ''}`}
-                    onClick={() => { setSelectedId(skill.id); setPanelOpen(true) }}
-                    onMouseEnter={() => setHoveredId(skill.id)}
-                    onMouseLeave={() => setHoveredId(null)}
-                    aria-label={`${skill.title}, ${statusCopy[nodeStatus]}`}
-                    aria-pressed={selected.id === skill.id}
-                  >
-                    <Icon />
-                    {nodeStatus === 'locked' && <Lock className="lock" />}
-                    {nodeStatus === 'mastered' && <CheckCircle2 className="lock" style={{ color: '#eab308' }} />}
-                  </button>
-                  <span>{skill.shortTitle}</span>
-                  <small>{statusCopy[nodeStatus]}</small>
+          {!validation.isValid ? (
+            <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', gap: '12px' }}>
+              <AlertTriangle style={{ width: '48px', height: '48px', color: '#981e2f' }} />
+              <h2 style={{ fontSize: '20px', fontWeight: 800 }}>Graph Validation Error</h2>
+              <p style={{ color: 'var(--muted-foreground)', maxWidth: '500px', textAlign: 'center' }}>
+                The uploaded syllabus or API response contains invalid graph data.
+              </p>
+              {validation.errors.map((err, i) => (
+                <div key={i} style={{ background: '#981e2f12', border: '1px solid #981e2f44', borderRadius: '10px', padding: '12px 16px', maxWidth: '500px', textAlign: 'left' }}>
+                  <b style={{ color: '#981e2f', display: 'block' }}>{err.message}</b>
+                  <span style={{ fontSize: '12px', color: 'var(--foreground)' }}>{err.details}</span>
                 </div>
-              )
-            })}
+              ))}
+            </div>
+          ) : skills.length === 0 ? (
+            <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: 'var(--muted-foreground)' }}>
+              Upload a syllabus to generate your learning pathway.
+            </div>
+          ) : (
+            <div
+              className="tree-canvas"
+              style={{
+                width: `${canvasWidth}px`,
+                height: `${canvasHeight}px`,
+                margin: `-${canvasHeight / 2}px 0 0 -${canvasWidth / 2}px`,
+                transform: `translate3d(${pan.x}px,${pan.y}px,0) scale(${zoom})`
+              }}
+            >
+              {skills.map((skill) => {
+                const nodeStatus: SkillStatus = masteredIds.has(skill.id)
+                  ? 'mastered'
+                  : (calculatedStatusMap.get(skill.id) as SkillStatus) || 'locked'
 
-            <svg className="links" aria-hidden="true" viewBox="0 0 960 860">
-              {skills.flatMap(targetNode => {
-                const targetPos = targetNode.position
-                const prereqCount = targetNode.prerequisites.length
-
-                return targetNode.prerequisites.map((prereqId, pIdx) => {
-                  const sourceNode = skills.find(s => s.id === prereqId)
-                  if (!sourceNode) return null
-                  const sourcePos = sourceNode.position
-
-                  const multiOffset = prereqCount > 1
-                    ? (pIdx === 0 ? -16 : pIdx === 1 ? 16 : 0)
-                    : 0
-
-                  const pathData = getEdgePath(sourcePos, targetPos, multiOffset)
-
-                  const sourceMastered = masteredIds.has(sourceNode.id)
-                  const targetMastered = masteredIds.has(targetNode.id)
-                  const isMasteredLink = sourceMastered && targetMastered
-                  const isAvailableLink = sourceMastered && !targetMastered
-
-                  const edgeKey = `${sourceNode.id}->${targetNode.id}`
-                  const isSelectedEdge = selectedPathEdges.has(edgeKey)
-                  const isHoveredEdge = hoveredPathEdges.has(edgeKey)
-                  const isHighlighted = isSelectedEdge || isHoveredEdge
-
-                  const strokeOpacity = (selectedId || hoveredId)
-                    ? (isHighlighted ? 1.0 : 0.22)
-                    : 0.9
-
-                  const linkClass = isMasteredLink
-                    ? 'link-mastered'
-                    : isAvailableLink
-                      ? 'link-available'
-                      : 'link-locked'
-
-                  return (
-                    <path
-                      key={edgeKey}
-                      d={pathData}
-                      className={`${linkClass} ${isHighlighted ? 'highlighted' : ''}`}
-                      style={{ opacity: strokeOpacity }}
-                    />
-                  )
-                })
+                const Icon = iconMap[skill.icon || 'code'] || Code2
+                return (
+                  <div
+                    key={skill.id}
+                    className="skill-wrap"
+                    style={{
+                      left: `${skill.position.x}px`,
+                      top: `${skill.position.y}px`
+                    }}
+                  >
+                    <button
+                      className={`skill-node ${nodeStatus} ${selected?.id === skill.id ? 'selected' : ''}`}
+                      onClick={() => { setSelectedId(skill.id); setPanelOpen(true) }}
+                      onMouseEnter={() => setHoveredId(skill.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      aria-label={`${skill.title}, ${statusCopy[nodeStatus]}`}
+                      aria-pressed={selected?.id === skill.id}
+                    >
+                      <Icon />
+                      {nodeStatus === 'locked' && <Lock className="lock" />}
+                      {nodeStatus === 'mastered' && <CheckCircle2 className="lock" style={{ color: '#eab308' }} />}
+                    </button>
+                    <span>{skill.shortTitle || skill.title}</span>
+                    <small>{statusCopy[nodeStatus]}</small>
+                  </div>
+                )
               })}
-            </svg>
-          </div>
+
+              <svg className="links" aria-hidden="true" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`}>
+                {skills.flatMap(targetNode => {
+                  const targetPos = targetNode.position
+                  const prereqs = targetNode.prerequisiteIds || []
+                  const prereqCount = prereqs.length
+
+                  return prereqs.map((prereqId, pIdx) => {
+                    const sourceNode = skills.find(s => s.id === prereqId)
+                    if (!sourceNode) return null
+                    const sourcePos = sourceNode.position
+
+                    const multiOffset = prereqCount > 1
+                      ? (pIdx === 0 ? -16 : pIdx === 1 ? 16 : 0)
+                      : 0
+
+                    const pathData = getEdgePath(sourcePos, targetPos, multiOffset)
+
+                    const sourceMastered = masteredIds.has(sourceNode.id)
+                    const targetMastered = masteredIds.has(targetNode.id)
+                    const isMasteredLink = sourceMastered && targetMastered
+                    const isAvailableLink = sourceMastered && !targetMastered
+
+                    const edgeKey = `${sourceNode.id}->${targetNode.id}`
+                    const isSelectedEdge = selectedPathEdges.has(edgeKey)
+                    const isHoveredEdge = hoveredPathEdges.has(edgeKey)
+                    const isHighlighted = isSelectedEdge || isHoveredEdge
+
+                    const strokeOpacity = (selectedId || hoveredId)
+                      ? (isHighlighted ? 1.0 : 0.22)
+                      : 0.9
+
+                    const linkClass = isMasteredLink
+                      ? 'link-mastered'
+                      : isAvailableLink
+                        ? 'link-available'
+                        : 'link-locked'
+
+                    return (
+                      <path
+                        key={edgeKey}
+                        d={pathData}
+                        className={`${linkClass} ${isHighlighted ? 'highlighted' : ''}`}
+                        style={{ opacity: strokeOpacity }}
+                      />
+                    )
+                  })
+                })}
+              </svg>
+            </div>
+          )}
 
           <div className="tree-minimap" aria-hidden="true">
             {skills.map(s => {
-              const mx = (s.position.x / 960) * 100
-              const my = (s.position.y / 860) * 100
+              const mx = (s.position.x / canvasWidth) * 100
+              const my = (s.position.y / canvasHeight) * 100
               const isMastered = masteredIds.has(s.id)
               return (
                 <i
@@ -357,43 +436,49 @@ function SkillTree({
       </section>
 
       <aside className="detail-card" aria-hidden={!panelOpen}>
-        <button className="panel-close" onClick={() => setPanelOpen(false)} aria-label="Collapse skill details">
-          <PanelLeftClose />
-        </button>
-        <div className={`detail-icon ${currentStatus}`}>
-          {(() => { const I = iconMap[selected.icon] || Code2; return <I /> })()}
-        </div>
-        <Pill tone={currentStatus === 'mastered' ? 'gold' : 'default'}>{statusCopy[currentStatus]}</Pill>
-        <h2>{selected.title}</h2>
-        <p>{selected.description}</p>
-        <div className="detail-progress">
-          <span><b>{currentStatus === 'mastered' ? 100 : currentStatus === 'available' ? 45 : 0}%</b> complete</span>
-          <Progress value={currentStatus === 'mastered' ? 100 : currentStatus === 'available' ? 45 : 0} />
-        </div>
-        <dl>
-          <div>
-            <dt>Reward</dt>
-            <dd><Zap /> {selected.xpReward} XP</dd>
-          </div>
-          <div>
-            <dt>Challenges</dt>
-            <dd>{selected.missionIds.length} mission</dd>
-          </div>
-        </dl>
-        <button
-          className="primary-action"
-          disabled={currentStatus === 'locked'}
-          onClick={() => onToggleMastery(selected.id)}
-        >
-          {currentStatus === 'mastered'
-            ? 'Review skill'
-            : currentStatus === 'active'
-              ? 'Complete skill mission'
-              : currentStatus === 'available'
-                ? 'Start quest & master'
-                : 'Complete prerequisites'}
-          <ChevronRight />
-        </button>
+        {selected ? (
+          <>
+            <button className="panel-close" onClick={() => setPanelOpen(false)} aria-label="Collapse skill details">
+              <PanelLeftClose />
+            </button>
+            <div className={`detail-icon ${currentStatus}`}>
+              {(() => { const I = iconMap[selected.icon || 'code'] || Code2; return <I /> })()}
+            </div>
+            <Pill tone={currentStatus === 'mastered' ? 'gold' : 'default'}>{statusCopy[currentStatus]}</Pill>
+            <h2>{selected.title}</h2>
+            <p>{selected.description || 'Master this outcome to unlock advanced challenges in your syllabus path.'}</p>
+            <div className="detail-progress">
+              <span><b>{currentStatus === 'mastered' ? 100 : currentStatus === 'available' ? 45 : 0}%</b> complete</span>
+              <Progress value={currentStatus === 'mastered' ? 100 : currentStatus === 'available' ? 45 : 0} />
+            </div>
+            <dl>
+              <div>
+                <dt>Reward</dt>
+                <dd><Zap /> {selected.xpReward || 150} XP</dd>
+              </div>
+              <div>
+                <dt>Challenges</dt>
+                <dd>{(selected.missionIds || []).length || 1} mission</dd>
+              </div>
+            </dl>
+            <button
+              className="primary-action"
+              disabled={currentStatus === 'locked'}
+              onClick={() => onToggleMastery(selected.id)}
+            >
+              {currentStatus === 'mastered'
+                ? 'Review skill'
+                : currentStatus === 'in_progress'
+                  ? 'Complete skill mission'
+                  : currentStatus === 'available'
+                    ? 'Start quest & master'
+                    : 'Complete prerequisites'}
+              <ChevronRight />
+            </button>
+          </>
+        ) : (
+          <div style={{ color: 'var(--muted-foreground)' }}>Select a node to inspect details</div>
+        )}
       </aside>
     </div>
   )
@@ -425,31 +510,48 @@ function Stat({ icon: Icon, value, label, progress }: { icon: LucideIcon; value:
 }
 
 function Dashboard({
-  skills,
   masteredIds,
   userXp,
   streakDays,
   onToggleMastery
 }: {
-  skills: DomainSkillNode[]
   masteredIds: Set<string>
   userXp: number
   streakDays: number
   onToggleMastery: (skillId: string) => void
 }) {
+  const [selectedDatasetKey, setSelectedDatasetKey] = useState<string>('cs210')
+  const [payload, setPayload] = useState<SkillTreePayload | null>(null)
+  const [loading, setLoading] = useState<boolean>(true)
+
+  useEffect(() => {
+    let isMounted = true
+    setLoading(true)
+    getSkillTree(selectedDatasetKey).then(data => {
+      if (isMounted) {
+        setPayload(data)
+        setLoading(false)
+      }
+    })
+    return () => { isMounted = false }
+  }, [selectedDatasetKey])
+
   const currentXp = 2840
   const currentLevel = 6
   const nextLevelXp = 4000
-  const remainingXp = nextLevelXp - currentXp // 1,160 XP
+  const remainingXp = nextLevelXp - currentXp
   const progressPct = 71
-  const courseMasteryPct = Math.round((masteredIds.size / skills.length) * 100)
+
+  const skillsCount = payload?.nodes.length || 0
+  const masteredCount = payload?.nodes.filter(s => masteredIds.has(s.id)).length || 0
+  const courseMasteryPct = skillsCount > 0 ? Math.round((masteredCount / skillsCount) * 100) : 0
 
   return (
     <div className="dashboard-page">
       <PageHead
         eyebrow="Your learning realm"
         title="Forge your path, Alex"
-        copy="Every skill is a step forward. Continue Data Structures & Algorithms or explore what unlocks next."
+        copy="Every skill is a step forward. Explore your syllabus skill path or test alternate dataset layouts."
       />
       <div className="stats">
         <Stat icon={Flame} value={`${streakDays} days`} label="Current streak" />
@@ -471,16 +573,32 @@ function Dashboard({
             </div>
           </div>
         </article>
-        <Stat icon={Trophy} value={`${masteredIds.size} skills`} label="Mastered this term" />
+        <Stat icon={Trophy} value={`${masteredCount} skills`} label="Mastered this term" />
       </div>
       <div className="section-title">
         <div>
-          <p>CS210 • Data Structures & Algorithms</p>
+          <p>{payload?.course.code || 'CS210'} • {payload?.course.title || 'Skill Map'}</p>
           <h2>Academic skill tree</h2>
         </div>
         <Pill tone="gold">{courseMasteryPct}% course mastery</Pill>
       </div>
-      <SkillTree skills={skills} masteredIds={masteredIds} onToggleMastery={onToggleMastery} />
+
+      {loading || !payload ? (
+        <div className="tree-card" style={{ height: '650px', display: 'grid', placeItems: 'center', color: 'var(--muted-foreground)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+            <RefreshCw className="animate-spin" style={{ width: '32px', height: '32px', color: 'var(--primary)' }} />
+            <b>Loading syllabus skill tree…</b>
+          </div>
+        </div>
+      ) : (
+        <SkillTree
+          payload={payload}
+          masteredIds={masteredIds}
+          onToggleMastery={onToggleMastery}
+          selectedDataset={selectedDatasetKey}
+          onSelectDataset={setSelectedDatasetKey}
+        />
+      )}
     </div>
   )
 }
@@ -900,9 +1018,8 @@ export function CardinalApp() {
   const [menu, setMenu] = useState(false)
 
   // Interactive local MVP state
-  const [skills, setSkills] = useState<DomainSkillNode[]>(prototypeData.skills)
   const [masteredIds, setMasteredIds] = useState<Set<string>>(
-    new Set(['skill_1', 'skill_2', 'skill_3', 'skill_4', 'skill_5', 'skill_6'])
+    new Set(['skill_1', 'skill_2', 'skill_3', 'skill_4', 'skill_5', 'skill_6', 'l1', 'l2', 'l3', 'r1', 'r2', 'w_1', 'w_2', 'w_3', 'w_4', 'w_5'])
   )
   const [userXp, setUserXp] = useState<number>(prototypeData.user.xp)
   const [streakDays, setStreakDays] = useState<number>(prototypeData.user.streakDays)
@@ -915,10 +1032,7 @@ export function CardinalApp() {
         next.delete(skillId)
       } else {
         next.add(skillId)
-        const skill = skills.find(s => s.id === skillId)
-        if (skill) {
-          setUserXp(curr => curr + skill.xpReward)
-        }
+        setUserXp(curr => curr + 150)
       }
       return next
     })
@@ -949,7 +1063,6 @@ export function CardinalApp() {
       <main className="app-main">
         {route === 'dashboard' && (
           <Dashboard
-            skills={skills}
             masteredIds={masteredIds}
             userXp={userXp}
             streakDays={streakDays}

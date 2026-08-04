@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
   lockBox: {
     marginTop: space.sm,
     padding: space.sm,
-    borderRadius: radius.card,
+    borderRadius: radius.md,
     backgroundColor: 'rgba(152, 30, 47, 0.15)',
     borderColor: palette.cardinal,
     borderWidth: 1,

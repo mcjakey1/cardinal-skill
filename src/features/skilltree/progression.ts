@@ -188,7 +188,7 @@ export function evaluateSkillUnlockState(
 
   const totalPrerequisites = prereqIds.length;
   const isUnlocked = incompletePrerequisites.length === 0;
-  const nextRecommendedPrerequisiteId = incompletePrerequisites.length > 0 ? incompletePrerequisites[0].id : null;
+  const nextRecommendedPrerequisiteId = incompletePrerequisites[0]?.id ?? null;
   const blockedReason = isUnlocked
     ? null
     : `This skill unlocks after you master ${incompletePrerequisites.length} remaining prerequisite${incompletePrerequisites.length > 1 ? 's' : ''}.`;

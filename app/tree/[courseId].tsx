@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SkillTree } from '@/features/skilltree/SkillTree';
-import { levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
+import { evaluateSkillUnlockState, levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
 import type { SkillNode, Tree } from '@/features/skilltree/types';
 import { fetchTree } from '@/features/skilltree/queries';
 import { palette, radius, space, type } from '@/theme/tokens';
@@ -18,6 +18,11 @@ export default function TreeScreen() {
     queryFn: () => fetchTree(courseId),
     enabled: Boolean(courseId),
   });
+
+  const eligibility = useMemo(() => {
+    if (!selected || !data?.tree) return null;
+    return evaluateSkillUnlockState(selected.id, data.tree, data.masteredIds);
+  }, [selected, data]);
 
   if (isPending) {
     return (
@@ -38,6 +43,9 @@ export default function TreeScreen() {
   const { tree, masteredIds, xp }: { tree: Tree; masteredIds: string[]; xp: number } = data;
   const level = levelForXp(xp);
 
+  const isMastered = selected ? masteredIds.includes(selected.id) : false;
+  const statusLabel = isMastered ? 'Mastered' : eligibility?.isUnlocked ? 'Available' : 'Locked';
+
   return (
     <>
       <Stack.Screen options={{ title: 'Chart' }} />
@@ -54,12 +62,40 @@ export default function TreeScreen() {
 
         <SkillTree tree={tree} masteredIds={masteredIds} onSelectNode={setSelected} />
 
-        {selected ? (
+        {selected && eligibility ? (
           <View style={styles.sheet} accessibilityLiveRegion="polite">
-            <Text style={styles.eyebrow}>{selected.kind.toUpperCase()}</Text>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.eyebrow}>{statusLabel.toUpperCase()}</Text>
+              <Text style={styles.meta}>{selected.xpReward} XP</Text>
+            </View>
             <Text style={styles.title}>{selected.title}</Text>
             <Text style={styles.body}>{selected.description}</Text>
-            <Text style={styles.meta}>{selected.xpReward} XP</Text>
+
+            {selected.learningObjective ? (
+              <Text style={styles.objective}>Objective: {selected.learningObjective}</Text>
+            ) : null}
+
+            {!eligibility.isUnlocked && !isMastered ? (
+              <View style={styles.lockBox}>
+                <Text style={styles.lockText}>
+                  {eligibility.blockedReason || 'Complete prerequisites to unlock.'}
+                </Text>
+                {eligibility.incompletePrerequisites.map((p) => (
+                  <Pressable
+                    key={p.id}
+                    style={styles.prereqItem}
+                    onPress={() => {
+                      const target = tree.nodes.find((n) => n.id === p.id);
+                      if (target) setSelected(target);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`View prerequisite ${p.title}`}
+                  >
+                    <Text style={styles.prereqText}>• Prerequisite: {p.title} (Incomplete)</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -80,9 +116,23 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: palette.slate,
   },
+  sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   eyebrow: { ...type.eyebrow, color: palette.cardinal },
   title: { ...type.title, color: palette.parchment },
   body: { ...type.body, color: palette.haze },
   meta: { ...type.eyebrow, color: palette.haze },
+  objective: { ...type.caption, color: palette.brass, marginTop: space.xs },
+  lockBox: {
+    marginTop: space.sm,
+    padding: space.sm,
+    borderRadius: radius.card,
+    backgroundColor: 'rgba(152, 30, 47, 0.15)',
+    borderColor: palette.cardinal,
+    borderWidth: 1,
+    gap: space.xs,
+  },
+  lockText: { ...type.body, color: palette.parchment, fontSize: 13, fontWeight: '700' },
+  prereqItem: { paddingVertical: space.xs },
+  prereqText: { ...type.caption, color: palette.brass, fontWeight: '600' },
   error: { ...type.body, color: palette.danger, textAlign: 'center', padding: space.lg },
 });

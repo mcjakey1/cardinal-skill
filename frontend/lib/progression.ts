@@ -77,6 +77,71 @@ export function deriveStatuses(tree: TreeInput, masteredIds: Iterable<string>): 
   return { status, cyclicNodeIds: [...cyclic] }
 }
 
+export interface SkillEligibilityPrereqInfo {
+  id: string
+  title: string
+  isMastered: boolean
+}
+
+export interface SkillEligibility {
+  isUnlocked: boolean
+  completedPrerequisites: SkillEligibilityPrereqInfo[]
+  incompletePrerequisites: SkillEligibilityPrereqInfo[]
+  totalPrerequisites: number
+  nextRecommendedPrerequisiteId: string | null
+  blockedReason: string | null
+}
+
+export function evaluateSkillUnlockState(
+  skillId: string,
+  allSkills: { id: string; title: string; prerequisiteIds?: string[] }[],
+  masteredIds: Iterable<string>
+): SkillEligibility {
+  const masteredSet = new Set(masteredIds)
+  const targetSkill = allSkills.find((s) => s.id === skillId)
+  const prereqIds = targetSkill?.prerequisiteIds || []
+
+  const completedPrerequisites: SkillEligibilityPrereqInfo[] = []
+  const incompletePrerequisites: SkillEligibilityPrereqInfo[] = []
+
+  for (const pid of prereqIds) {
+    const prereqSkill = allSkills.find((s) => s.id === pid)
+    const title = prereqSkill ? prereqSkill.title : pid
+    const isMastered = masteredSet.has(pid)
+    const info: SkillEligibilityPrereqInfo = { id: pid, title, isMastered }
+
+    if (isMastered) {
+      completedPrerequisites.push(info)
+    } else {
+      incompletePrerequisites.push(info)
+    }
+  }
+
+  const totalPrerequisites = prereqIds.length
+  const isUnlocked = incompletePrerequisites.length === 0
+  const nextRecommendedPrerequisiteId = incompletePrerequisites.length > 0 ? incompletePrerequisites[0].id : null
+  const blockedReason = isUnlocked
+    ? null
+    : `This skill unlocks after you master ${incompletePrerequisites.length} remaining prerequisite${incompletePrerequisites.length > 1 ? 's' : ''}.`
+
+  return {
+    isUnlocked,
+    completedPrerequisites,
+    incompletePrerequisites,
+    totalPrerequisites,
+    nextRecommendedPrerequisiteId,
+    blockedReason,
+  }
+}
+
+export function getSkillEligibility(
+  skillId: string,
+  allSkills: { id: string; title: string; prerequisiteIds?: string[] }[],
+  masteredIds: Iterable<string>
+): SkillEligibility {
+  return evaluateSkillUnlockState(skillId, allSkills, masteredIds)
+}
+
 function findCyclicNodes(known: Set<string>, prereqsOf: Map<string, string[]>): string[] {
   const WHITE = 0
   const GREY = 1
@@ -116,3 +181,4 @@ function findCyclicNodes(known: Set<string>, prereqsOf: Map<string, string[]>): 
 
   return [...bad]
 }
+

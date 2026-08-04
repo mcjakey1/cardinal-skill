@@ -8,15 +8,27 @@ import {
   ShieldCheck, Sparkles, Target, Terminal, Trophy, UploadCloud, Users, X, Zap, ZoomIn, ZoomOut
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { prototypeData, getSkillTree } from '@/lib/cardinal-repository'
+import { prototypeData, getSkillTree, mockCS210Payload } from '@/lib/cardinal-repository'
 import type { SkillNode as DomainSkillNode, SkillTreePayload, Mission as DomainMission, SkillStatus } from '@/lib/cardinal-domain'
 import { APP_ROUTES, type AppRoute } from '@/lib/cardinal-routes'
-import { deriveStatuses, levelForXp, levelProgress, xpForLevel } from '@/lib/progression'
+import { deriveStatuses, evaluateSkillUnlockState, levelForXp, levelProgress, xpForLevel } from '@/lib/progression'
 import { validateSkillGraph } from '@/lib/graph-validation'
 import { computeAutoLayout } from '@/lib/auto-layout'
 import { localStorageTreeLayoutAdapter, type UserTreeLayout } from '@/lib/tree-layout-persistence'
 import { profileStorageAdapter, type StudentProfile, defaultProfile } from '@/lib/profile-persistence'
 import { HeroSkillTree } from '@/components/hero-skill-tree'
+
+export interface AICompanionContext {
+  courseId?: string
+  courseTitle?: string
+  skillId?: string
+  skillTitle?: string
+  description?: string
+  learningObjective?: string
+  difficulty?: string
+  status?: string
+  prerequisites?: string[]
+}
 
 const nav: { route: AppRoute; label: string; icon: LucideIcon }[] = [
   { route: 'dashboard', label: 'Skill tree', icon: Map },
@@ -155,13 +167,15 @@ function SkillTree({
   masteredIds,
   onToggleMastery,
   selectedDataset,
-  onSelectDataset
+  onSelectDataset,
+  onAskAICompanion
 }: {
   payload: SkillTreePayload
   masteredIds: Set<string>
   onToggleMastery: (skillId: string) => void
   selectedDataset: string
   onSelectDataset: (key: string) => void
+  onAskAICompanion?: (context: AICompanionContext) => void
 }) {
   const userId = 'usr_alex'
   const { course, nodes: rawNodes } = payload
@@ -242,6 +256,23 @@ function SkillTree({
   const currentStatus: SkillStatus = selected && masteredIds.has(selected.id)
     ? 'mastered'
     : (selected ? (calculatedStatusMap.get(selected.id) as SkillStatus) || 'locked' : 'locked')
+
+  const selectedEligibility = useMemo(() => {
+    if (!selected) return null
+    return evaluateSkillUnlockState(selected.id, skills, masteredIds)
+  }, [selected, skills, masteredIds])
+
+  const focusAndSelectNode = (targetId: string) => {
+    const target = skills.find(s => s.id === targetId)
+    if (!target) return
+    setSelectedId(targetId)
+    setZoom(1.0)
+    setPan({
+      x: Math.round((canvasWidth / 2) - target.position.x),
+      y: Math.round((canvasHeight / 2) - target.position.y)
+    })
+    setPanelOpen(true)
+  }
 
   const statusCopy: Record<SkillStatus, string> = {
     mastered: 'Mastered',
@@ -586,49 +617,243 @@ function SkillTree({
         </div>
       </section>
 
-      <aside className="detail-card" aria-hidden={!panelOpen}>
-        {selected ? (
+      <aside className="detail-card" aria-hidden={!panelOpen} style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+        {selected && selectedEligibility ? (
           <>
-            <button className="panel-close" onClick={() => setPanelOpen(false)} aria-label="Collapse skill details">
-              <PanelLeftClose />
-            </button>
-            <div className={`detail-icon ${currentStatus}`}>
-              {(() => { const I = iconMap[selected.icon || 'code'] || Code2; return <I /> })()}
-            </div>
-            <Pill tone={currentStatus === 'mastered' ? 'gold' : 'default'}>{statusCopy[currentStatus]}</Pill>
-            <h2>{selected.title}</h2>
-            <p>{selected.description || 'Master this outcome to unlock advanced challenges in your syllabus path.'}</p>
-            <div className="detail-progress">
-              <span><b>{currentStatus === 'mastered' ? 100 : currentStatus === 'available' ? 45 : 0}%</b> complete</span>
-              <Progress value={currentStatus === 'mastered' ? 100 : currentStatus === 'available' ? 45 : 0} />
-            </div>
-            <dl>
-              <div>
-                <dt>Reward</dt>
-                <dd><Zap /> {selected.xpReward || 150} XP</dd>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className={`detail-icon ${currentStatus}`}>
+                  {(() => { const I = iconMap[selected.icon || 'code'] || Code2; return <I /> })()}
+                </div>
+                <Pill tone={currentStatus === 'mastered' ? 'gold' : currentStatus === 'locked' ? 'muted' : 'default'}>
+                  {statusCopy[currentStatus]}
+                </Pill>
               </div>
-              <div>
-                <dt>Challenges</dt>
-                <dd>{(selected.missionIds || []).length || 1} mission</dd>
+              <button className="panel-close" onClick={() => setPanelOpen(false)} aria-label="Close skill details">
+                <X style={{ width: '18px', height: '18px' }} />
+              </button>
+            </div>
+
+            <h2 style={{ fontSize: '18px', fontWeight: 800, margin: '4px 0 2px' }}>{selected.title}</h2>
+
+            {/* Overview section */}
+            <div className="overview-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0 16px' }}>
+              {selected.moduleName && (
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {selected.moduleName}
+                </span>
+              )}
+              <p style={{ fontSize: '13px', lineHeight: 1.5, margin: 0, color: 'var(--muted-foreground)' }}>
+                {selected.description || 'Master this outcome to unlock advanced challenges in your syllabus path.'}
+              </p>
+
+              {selected.learningObjective && (
+                <div style={{ background: 'rgba(0,0,0,0.03)', padding: '10px 12px', borderRadius: '10px', borderLeft: '3px solid var(--primary)', marginTop: '4px' }}>
+                  <b style={{ fontSize: '10px', textTransform: 'uppercase', display: 'block', color: 'var(--primary)', marginBottom: '2px', letterSpacing: '0.05em' }}>
+                    What you will learn
+                  </b>
+                  <span style={{ fontSize: '12px', color: 'var(--foreground)', lineHeight: 1.4 }}>{selected.learningObjective}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '6px', fontSize: '12px' }}>
+                <div>
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Difficulty</span>
+                  <b style={{ color: 'var(--foreground)' }}>
+                    {selected.difficultyLabel || (selected.difficulty === 1 ? 'Foundational' : selected.difficulty === 3 ? 'Advanced' : 'Intermediate')}
+                  </b>
+                </div>
+                <div>
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Reward</span>
+                  <b style={{ color: '#eab308', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                    <Zap style={{ width: '13px', height: '13px' }} /> {selected.xpReward || 150} XP
+                  </b>
+                </div>
+                {selected.estimatedMinutes && (
+                  <div>
+                    <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Est. Time</span>
+                    <b style={{ color: 'var(--foreground)' }}>{selected.estimatedMinutes} min</b>
+                  </div>
+                )}
               </div>
-            </dl>
-            <button
-              className="primary-action"
-              disabled={currentStatus === 'locked'}
-              onClick={() => onToggleMastery(selected.id)}
-            >
-              {currentStatus === 'mastered'
-                ? 'Review skill'
-                : currentStatus === 'in_progress'
-                  ? 'Complete skill mission'
-                  : currentStatus === 'available'
-                    ? 'Start quest & master'
-                    : 'Complete prerequisites'}
-              <ChevronRight />
-            </button>
+            </div>
+
+            {/* Progress and Missions section */}
+            <div className="progress-section" style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 700 }}>
+                  {currentStatus === 'mastered' ? 'Skill Mastered' : currentStatus === 'locked' ? 'Pathway Locked' : 'Skill Progress'}
+                </span>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-foreground)' }}>
+                  {currentStatus === 'mastered' ? '100% complete' : currentStatus === 'available' ? 'Ready to start' : currentStatus === 'in_progress' ? '45% complete' : 'Prerequisites required'}
+                </span>
+              </div>
+
+              <Progress value={currentStatus === 'mastered' ? 100 : currentStatus === 'in_progress' ? 45 : currentStatus === 'available' ? 0 : 0} />
+
+              {currentStatus === 'mastered' ? (
+                <div style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: '10px', padding: '12px', marginTop: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <CheckCircle2 style={{ width: '18px', height: '18px', color: '#eab308' }} />
+                    <b style={{ fontSize: '13px', color: 'var(--foreground)' }}>Skill Mastered!</b>
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--muted-foreground)', margin: '0 0 10px' }}>
+                    You earned <b>{selected.xpReward || 150} XP</b> for mastering this learning outcome.
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      className="outline-action"
+                      style={{ flex: 1, justifyContent: 'center', fontSize: '12px' }}
+                      onClick={() => onToggleMastery(selected.id)}
+                    >
+                      Review skill
+                    </button>
+                    <button
+                      className="primary-action"
+                      style={{ flex: 1, justifyContent: 'center', fontSize: '12px' }}
+                      onClick={() => {
+                        onAskAICompanion?.({
+                          courseId: course.id,
+                          courseTitle: course.title,
+                          skillId: selected.id,
+                          skillTitle: selected.title,
+                          description: selected.description,
+                          learningObjective: selected.learningObjective,
+                          difficulty: selected.difficultyLabel || 'Intermediate',
+                          status: currentStatus,
+                          prerequisites: selectedEligibility.completedPrerequisites.map(p => p.title)
+                        })
+                      }}
+                    >
+                      <Sparkles style={{ width: '14px', height: '14px' }} />
+                      Ask AI to review
+                    </button>
+                  </div>
+                </div>
+              ) : currentStatus === 'locked' ? (
+                <div style={{ background: 'rgba(152, 30, 47, 0.06)', border: '1px solid rgba(152, 30, 47, 0.2)', borderRadius: '10px', padding: '12px', marginTop: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <Lock style={{ width: '16px', height: '16px', color: '#981e2f' }} />
+                    <b style={{ fontSize: '13px', color: '#981e2f' }}>Locked Pathway</b>
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--foreground)', margin: '0 0 12px', lineHeight: 1.4 }}>
+                    {selectedEligibility.blockedReason || 'Complete the required skills below to unlock this pathway.'}
+                  </p>
+
+                  <button
+                    className="primary-action"
+                    disabled
+                    aria-disabled="true"
+                    style={{ width: '100%', opacity: 0.6, cursor: 'not-allowed', justifyContent: 'center' }}
+                  >
+                    <Lock style={{ width: '14px', height: '14px' }} />
+                    Complete prerequisites to unlock
+                  </button>
+
+                  {selectedEligibility.nextRecommendedPrerequisiteId && (
+                    <button
+                      onClick={() => focusAndSelectNode(selectedEligibility.nextRecommendedPrerequisiteId!)}
+                      className="outline-action"
+                      style={{ width: '100%', marginTop: '8px', justifyContent: 'center', fontSize: '12px' }}
+                    >
+                      View next prerequisite
+                      <ChevronRight style={{ width: '14px', height: '14px' }} />
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: '12px' }}>
+                  <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', margin: '0 0 8px' }}>
+                    Mastering this skill earns <b>+{selected.xpReward || 150} XP</b> towards your level progression.
+                  </p>
+                  <button
+                    className="primary-action"
+                    style={{ width: '100%', justifyContent: 'center' }}
+                    onClick={() => onToggleMastery(selected.id)}
+                  >
+                    {currentStatus === 'in_progress' ? 'Complete skill mission' : 'Start skill & master'}
+                    <ChevronRight style={{ width: '16px', height: '16px' }} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Prerequisites section */}
+            <div className="prereqs-section" style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <h3 style={{ fontSize: '13px', fontWeight: 800, margin: 0 }}>Prerequisites</h3>
+                <span style={{ fontSize: '11px', color: 'var(--muted-foreground)', fontWeight: 600 }}>
+                  {selectedEligibility.completedPrerequisites.length} of {selectedEligibility.totalPrerequisites} mastered
+                </span>
+              </div>
+
+              {selectedEligibility.totalPrerequisites === 0 ? (
+                <p style={{ fontSize: '12px', color: 'var(--muted-foreground)', margin: 0 }}>
+                  No prerequisites required. This is a foundational skill.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {selectedEligibility.completedPrerequisites.map(p => (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'rgba(22, 163, 74, 0.08)', borderRadius: '8px', border: '1px solid rgba(22, 163, 74, 0.2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <CheckCircle2 style={{ width: '14px', height: '14px', color: '#16a34a' }} />
+                        <span style={{ fontSize: '12px', fontWeight: 600 }}>{p.title}</span>
+                      </div>
+                      <button
+                        onClick={() => focusAndSelectNode(p.id)}
+                        style={{ fontSize: '11px', color: '#16a34a', fontWeight: 700, background: 'none', border: 0, cursor: 'pointer', padding: 0 }}
+                      >
+                        View
+                      </button>
+                    </div>
+                  ))}
+                  {selectedEligibility.incompletePrerequisites.map(p => (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'rgba(0,0,0,0.03)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Lock style={{ width: '14px', height: '14px', color: '#981e2f' }} />
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--foreground)' }}>{p.title}</span>
+                      </div>
+                      <button
+                        onClick={() => focusAndSelectNode(p.id)}
+                        style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: 700, background: 'none', border: 0, cursor: 'pointer', padding: 0 }}
+                      >
+                        View prerequisite
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* AI Study Companion Launcher */}
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginTop: 'auto' }}>
+              <button
+                className="outline-action"
+                style={{ width: '100%', justifyContent: 'center', gap: '6px', background: 'var(--card)' }}
+                onClick={() => {
+                  onAskAICompanion?.({
+                    courseId: course.id,
+                    courseTitle: course.title,
+                    skillId: selected.id,
+                    skillTitle: selected.title,
+                    description: selected.description,
+                    learningObjective: selected.learningObjective,
+                    difficulty: selected.difficultyLabel || 'Intermediate',
+                    status: currentStatus,
+                    prerequisites: selectedEligibility.incompletePrerequisites.map(p => p.title)
+                  })
+                }}
+              >
+                <Sparkles style={{ width: '15px', height: '15px', color: 'var(--primary)' }} />
+                Ask AI Companion
+              </button>
+              <span style={{ display: 'block', fontSize: '10px', color: 'var(--muted-foreground)', textAlign: 'center', marginTop: '6px', lineHeight: 1.3 }}>
+                The AI Companion supports your learning and does not complete graded work for you.
+              </span>
+            </div>
           </>
         ) : (
-          <div style={{ color: 'var(--muted-foreground)' }}>Select a node to inspect details</div>
+          <div style={{ color: 'var(--muted-foreground)', padding: '20px', textAlign: 'center' }}>Select a node to inspect details</div>
         )}
       </aside>
 
@@ -689,12 +914,14 @@ function Dashboard({
   masteredIds,
   userXp,
   streakDays,
-  onToggleMastery
+  onToggleMastery,
+  onAskAICompanion
 }: {
   masteredIds: Set<string>
   userXp: number
   streakDays: number
   onToggleMastery: (skillId: string) => void
+  onAskAICompanion?: (context: AICompanionContext) => void
 }) {
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<string>('cs210')
   const [payload, setPayload] = useState<SkillTreePayload | null>(null)
@@ -773,6 +1000,7 @@ function Dashboard({
           onToggleMastery={onToggleMastery}
           selectedDataset={selectedDatasetKey}
           onSelectDataset={setSelectedDatasetKey}
+          onAskAICompanion={onAskAICompanion}
         />
       )}
     </div>
@@ -854,47 +1082,108 @@ function Universal() {
   )
 }
 
-function Companion() {
-  const [messages, setMessages] = useState<string[]>([
-    'Hi Alex — I can help you unpack a concept, plan a study session, or reflect on a mission.'
-  ])
+function Companion({
+  context,
+  onClearContext
+}: {
+  context?: AICompanionContext | null
+  onClearContext?: () => void
+}) {
+  const defaultGreeting = context?.skillTitle
+    ? `I can help you understand ${context.skillTitle}. Would you like a concept explanation, a study plan, or a practice question?`
+    : 'Hi Alex — I can help you unpack a concept, plan a study session, or reflect on a mission.'
+
+  const [messages, setMessages] = useState<string[]>([defaultGreeting])
   const [input, setInput] = useState('')
 
-  const send = () => {
-    if (!input.trim()) return
-    const userQuery = input
-    setMessages(prev => [...prev, userQuery, 'A useful place to start is to map the concept to what you already mastered. Want a guided example or a short practice question?'])
+  useEffect(() => {
+    if (context?.skillTitle) {
+      setMessages([
+        `I can help you understand ${context.skillTitle}. Would you like a concept explanation, a study plan, or a practice question?`
+      ])
+    }
+  }, [context])
+
+  const sendText = (textToSend: string) => {
+    if (!textToSend.trim()) return
+    const userQuery = textToSend.trim()
+    const queryLower = userQuery.toLowerCase()
+
+    let responseText = 'A useful place to start is to map the concept to what you already mastered. Want a guided example or a short practice question?'
+
+    if (queryLower.includes('answer') || queryLower.includes('solution for test') || queryLower.includes('cheat') || queryLower.includes('solve my exam') || queryLower.includes('graded')) {
+      responseText = 'The AI Companion supports your learning and does not complete graded work for you. I can explain the underlying concepts, provide practice problems, or give hints, but you must complete graded assignments yourself.'
+    } else if (context?.skillTitle) {
+      if (queryLower.includes('explain') || queryLower.includes('simply')) {
+        responseText = `Explanation for ${context.skillTitle}: ${context.learningObjective || context.description || 'Focus on core principles and breakdown of the outcome.'}`
+      } else if (queryLower.includes('plan') || queryLower.includes('prepare')) {
+        responseText = `Study plan for ${context.skillTitle}: 1) Review prerequisites (${context.prerequisites?.join(', ') || 'Foundation'}). 2) Work through guided practice. 3) Attempt the skill mission.`
+      } else if (queryLower.includes('quiz') || queryLower.includes('questions')) {
+        responseText = `Practice Question for ${context.skillTitle}: What is the primary advantage or trade-off of this computational technique? Explain the step-by-step logic in your own words!`
+      } else if (queryLower.includes('first')) {
+        responseText = context.prerequisites && context.prerequisites.length > 0
+          ? `Focus on mastering these unfinished prerequisites first: ${context.prerequisites.join(', ')}.`
+          : `Since all prerequisites are mastered for ${context.skillTitle}, you are eligible to start this skill directly!`
+      }
+    }
+
+    setMessages(prev => [...prev, userQuery, responseText])
     setInput('')
   }
+
+  const quickPrompts = context?.skillTitle
+    ? [
+        `Explain ${context.skillTitle} simply`,
+        `Help me prepare`,
+        `Create a study plan`,
+        `Quiz me with practice questions`,
+        `What should I complete first?`
+      ]
+    : ['Explain recursion simply', 'Plan my week', 'Quiz me on trees']
 
   return (
     <>
       <PageHead eyebrow="Study support" title="Cardinal companion" copy="A reflective learning partner grounded in your current skill path." />
       <div className="chat-card">
-        <div className="chat-top">
-          <div><Bot /></div>
-          <p><b>Cardinal</b><span>Learning companion • Online</span></p>
+        <div className="chat-top" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div><Bot /></div>
+            <p>
+              <b>Cardinal AI Companion</b>
+              <span>
+                {context?.skillTitle ? `Context: ${context.skillTitle} (${context.courseTitle || 'CS210'})` : 'Learning companion • Online'}
+              </span>
+            </p>
+          </div>
+          {context?.skillTitle && (
+            <button onClick={onClearContext} className="outline-action" style={{ fontSize: '11px', padding: '4px 8px' }}>
+              Clear context
+            </button>
+          )}
         </div>
         <div className="messages">
           {messages.map((m, i) => (
             <div className={i % 2 ? 'user' : 'bot'} key={i}>{m}</div>
           ))}
         </div>
-        <div className="suggestions">
-          {['Explain recursion simply', 'Plan my week', 'Quiz me on trees'].map(x => (
-            <button key={x} onClick={() => setInput(x)}>{x}</button>
+        <div className="suggestions" style={{ flexWrap: 'wrap', gap: '6px' }}>
+          {quickPrompts.map(x => (
+            <button key={x} onClick={() => sendText(x)}>{x}</button>
           ))}
         </div>
         <div className="composer">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send() }}
-            placeholder="Ask about your learning path…"
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) sendText(input) }}
+            placeholder={`Ask about ${context?.skillTitle || 'your learning path'}…`}
           />
-          <button onClick={send}>Send</button>
+          <button onClick={() => sendText(input)}>Send</button>
         </div>
-        <small>Connected to study guidance system. Secure student-first mode active.</small>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', padding: '8px 12px', background: 'rgba(0,0,0,0.03)', borderRadius: '8px', fontSize: '11px', color: 'var(--muted-foreground)' }}>
+          <ShieldCheck style={{ width: '15px', height: '15px', color: 'var(--primary)', flexShrink: 0 }} />
+          <span>The AI Companion supports your learning and does not complete graded work for you.</span>
+        </div>
       </div>
     </>
   )
@@ -1582,6 +1871,7 @@ function Auth({ setRoute }: { setRoute: (r: AppRoute) => void }) {
 export function CardinalApp() {
   const [route, setRoute] = useState<AppRoute>(APP_ROUTES.welcome)
   const [menu, setMenu] = useState(false)
+  const [companionContext, setCompanionContext] = useState<AICompanionContext | null>(null)
 
   // Profile State Single Source of Truth
   const [profile, setProfile] = useState<StudentProfile>(() => {
@@ -1601,7 +1891,20 @@ export function CardinalApp() {
     profileStorageAdapter.saveProfile(updatedProfile.id, updatedProfile)
   }
 
+  const handleAskAICompanion = (context: AICompanionContext) => {
+    setCompanionContext(context)
+    setRoute('companion')
+  }
+
   const handleToggleMastery = (skillId: string) => {
+    if (!masteredIds.has(skillId)) {
+      const eligibility = evaluateSkillUnlockState(skillId, mockCS210Payload.nodes, masteredIds)
+      if (!eligibility.isUnlocked) {
+        alert(`Cannot start or complete locked skill: ${eligibility.blockedReason}`)
+        return
+      }
+    }
+
     setMasteredIds(prev => {
       const next = new Set(prev)
       if (next.has(skillId)) {
@@ -1615,12 +1918,21 @@ export function CardinalApp() {
   }
 
   const handleCompleteMission = (missionId: string, xpReward: number) => {
+    const mission = missions.find(m => m.id === missionId)
+    if (mission?.skillId && !masteredIds.has(mission.skillId)) {
+      const eligibility = evaluateSkillUnlockState(mission.skillId, mockCS210Payload.nodes, masteredIds)
+      if (!eligibility.isUnlocked) {
+        alert(`Cannot complete mission for a locked skill. Complete prerequisites first.`)
+        return
+      }
+    }
+
     setMissions(prev => prev.map(m => m.id === missionId ? { ...m, status: 'completed' } : m))
     setUserXp(curr => curr + xpReward)
 
-    const mission = missions.find(m => m.id === missionId)
-    if (mission?.skillId) {
-      setMasteredIds(prev => new Set([...prev, mission.skillId]))
+    const mSkillId = mission?.skillId
+    if (mSkillId) {
+      setMasteredIds(prev => new Set([...prev, mSkillId]))
     }
   }
 
@@ -1643,13 +1955,19 @@ export function CardinalApp() {
             userXp={userXp}
             streakDays={streakDays}
             onToggleMastery={handleToggleMastery}
+            onAskAICompanion={handleAskAICompanion}
           />
         )}
         {route === 'missions' && (
           <Missions missions={missions} onCompleteMission={handleCompleteMission} />
         )}
         {route === 'universal' && <Universal />}
-        {route === 'companion' && <Companion />}
+        {route === 'companion' && (
+          <Companion
+            context={companionContext}
+            onClearContext={() => setCompanionContext(null)}
+          />
+        )}
         {route === 'achievements' && <Achievements />}
         {route === 'syllabus' && <Syllabus onPublishSyllabus={handlePublishSyllabus} />}
         {route === 'profile' && (

@@ -23,6 +23,10 @@ export interface SkillNode {
   description?: string
   status: SkillStatus
   difficulty?: number
+  difficultyLabel?: 'Foundational' | 'Intermediate' | 'Advanced'
+  learningObjective?: string
+  estimatedMinutes?: number
+  moduleName?: string
   xpReward?: number
   progress?: number
   prerequisiteIds: string[]

@@ -15,6 +15,10 @@ export interface SkillNode {
   description: string;
   kind: NodeKind;
   xpReward: number;
+  learningObjective?: string;
+  estimatedMinutes?: number;
+  moduleName?: string;
+  difficultyLabel?: 'Foundational' | 'Intermediate' | 'Advanced';
   /** Chart coordinates in tree space, assigned at generation time. */
   x: number;
   y: number;

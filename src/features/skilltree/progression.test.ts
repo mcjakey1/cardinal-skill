@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 // Explicit .ts extension: `node --test` strips types but does not resolve
 // extensionless specifiers the way Metro does.
-import { buildTree, deriveStatuses, levelForXp, levelProgress, nextQuests } from './progression.ts';
+import { buildTree, deriveStatuses, evaluateSkillUnlockState, getSkillEligibility, levelForXp, levelProgress, nextQuests } from './progression.ts';
 import type { SkillNode } from './types.ts';
 
 function node(id: string, sortOrder: number, xpReward = 50): SkillNode {
@@ -40,6 +40,43 @@ test('a node unlocks only once every prerequisite is mastered', () => {
 
   const both = deriveStatuses(tree, ['intro', 'theory']).status;
   assert.equal(both.get('lab'), 'available');
+});
+
+test('evaluateSkillUnlockState correctly evaluates prerequisites eligibility', () => {
+  const tree = buildTree(
+    [node('root', 0), node('prereq1', 1), node('prereq2', 2), node('target', 3)],
+    [
+      { nodeId: 'target', prereqId: 'prereq1' },
+      { nodeId: 'target', prereqId: 'prereq2' },
+    ],
+  );
+
+  // 1. Root node with zero prerequisites
+  const rootEligibility = evaluateSkillUnlockState('root', tree, []);
+  assert.equal(rootEligibility.isUnlocked, true);
+  assert.equal(rootEligibility.totalPrerequisites, 0);
+  assert.equal(rootEligibility.blockedReason, null);
+
+  // 2. Skill with two prerequisites, 0 mastered
+  const targetNone = evaluateSkillUnlockState('target', tree, []);
+  assert.equal(targetNone.isUnlocked, false);
+  assert.equal(targetNone.totalPrerequisites, 2);
+  assert.equal(targetNone.incompletePrerequisites.length, 2);
+  assert.equal(targetNone.nextRecommendedPrerequisiteId, 'prereq1');
+  assert.match(targetNone.blockedReason!, /2 remaining prerequisites/);
+
+  // 3. Skill with two prerequisites, 1 mastered
+  const targetPartial = getSkillEligibility('target', tree, ['prereq1']);
+  assert.equal(targetPartial.isUnlocked, false);
+  assert.equal(targetPartial.completedPrerequisites.length, 1);
+  assert.equal(targetPartial.incompletePrerequisites.length, 1);
+  assert.equal(targetPartial.nextRecommendedPrerequisiteId, 'prereq2');
+
+  // 4. Skill with two prerequisites, both mastered
+  const targetFull = getSkillEligibility('target', tree, ['prereq1', 'prereq2']);
+  assert.equal(targetFull.isUnlocked, true);
+  assert.equal(targetFull.nextRecommendedPrerequisiteId, null);
+  assert.equal(targetFull.blockedReason, null);
 });
 
 test('unknown prerequisite ids are ignored rather than locking a node forever', () => {

@@ -147,7 +147,72 @@ function findCyclicNodes(known: Set<string>, prereqsOf: Map<string, string[]>): 
   return [...bad];
 }
 
+export interface SkillEligibilityPrereqInfo {
+  id: string;
+  title: string;
+  isMastered: boolean;
+}
+
+export interface SkillEligibility {
+  isUnlocked: boolean;
+  completedPrerequisites: SkillEligibilityPrereqInfo[];
+  incompletePrerequisites: SkillEligibilityPrereqInfo[];
+  totalPrerequisites: number;
+  nextRecommendedPrerequisiteId: string | null;
+  blockedReason: string | null;
+}
+
+export function evaluateSkillUnlockState(
+  skillId: string,
+  tree: Tree,
+  masteredIds: Iterable<string>
+): SkillEligibility {
+  const masteredSet = new Set(masteredIds);
+  const prereqEdges = tree.prereqs.filter((p) => p.nodeId === skillId);
+  const prereqIds = prereqEdges.map((p) => p.prereqId);
+
+  const completedPrerequisites: SkillEligibilityPrereqInfo[] = [];
+  const incompletePrerequisites: SkillEligibilityPrereqInfo[] = [];
+
+  for (const pid of prereqIds) {
+    const prereqNode = tree.nodes.find((n) => n.id === pid);
+    const title = prereqNode ? prereqNode.title : pid;
+    const isMastered = masteredSet.has(pid);
+    const info = { id: pid, title, isMastered };
+    if (isMastered) {
+      completedPrerequisites.push(info);
+    } else {
+      incompletePrerequisites.push(info);
+    }
+  }
+
+  const totalPrerequisites = prereqIds.length;
+  const isUnlocked = incompletePrerequisites.length === 0;
+  const nextRecommendedPrerequisiteId = incompletePrerequisites.length > 0 ? incompletePrerequisites[0].id : null;
+  const blockedReason = isUnlocked
+    ? null
+    : `This skill unlocks after you master ${incompletePrerequisites.length} remaining prerequisite${incompletePrerequisites.length > 1 ? 's' : ''}.`;
+
+  return {
+    isUnlocked,
+    completedPrerequisites,
+    incompletePrerequisites,
+    totalPrerequisites,
+    nextRecommendedPrerequisiteId,
+    blockedReason,
+  };
+}
+
+export function getSkillEligibility(
+  skillId: string,
+  tree: Tree,
+  masteredIds: Iterable<string>
+): SkillEligibility {
+  return evaluateSkillUnlockState(skillId, tree, masteredIds);
+}
+
 /** Convenience for tests and for building a tree from flat query rows. */
 export function buildTree(nodes: SkillNode[], prereqs: Prereq[]): Tree {
   return { nodes, prereqs };
 }
+

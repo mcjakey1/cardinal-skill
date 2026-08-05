@@ -1,10 +1,19 @@
 import { supabase } from '@/lib/supabase';
+import {
+  DEMO_COURSE_ID,
+  DEMO_COURSE_TITLE,
+  demoMasteredIds,
+  demoTree,
+  demoXp,
+} from './demoTree';
 import type { Prereq, SkillNode, Tree } from './types';
 
 export interface TreeSnapshot {
   tree: Tree;
   masteredIds: string[];
   xp: number;
+  /** The course's own name. The chart screen puts it on the field. */
+  title: string;
 }
 
 /**
@@ -15,7 +24,13 @@ export interface TreeSnapshot {
  * filter would look like the security control and isn't.
  */
 export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
-  const [nodesRes, prereqsRes, progressRes, xpRes] = await Promise.all([
+  // ponytail: `/tree/demo` reads a fixture so the chart is viewable with no
+  // Supabase project. Remove with `demoTree.ts` once seeding is routine.
+  if (courseId === DEMO_COURSE_ID) {
+    return { tree: demoTree, masteredIds: demoMasteredIds, xp: demoXp, title: DEMO_COURSE_TITLE };
+  }
+
+  const [nodesRes, prereqsRes, progressRes, xpRes, courseRes] = await Promise.all([
     supabase
       .from('skill_nodes')
       .select('id, course_id, track_id, title, description, kind, xp_reward, x, y, sort_order')
@@ -24,6 +39,7 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
     supabase.from('node_prereqs').select('node_id, prereq_id').eq('course_id', courseId),
     supabase.from('node_progress').select('node_id').eq('status', 'mastered'),
     supabase.rpc('total_xp_for_course', { p_course_id: courseId }),
+    supabase.from('courses').select('title').eq('id', courseId).maybeSingle(),
   ]);
 
   const firstError = nodesRes.error ?? prereqsRes.error ?? progressRes.error ?? xpRes.error;
@@ -53,5 +69,8 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
     tree: { nodes, prereqs },
     masteredIds: (progressRes.data ?? []).map((r) => r.node_id).filter((id) => nodeIds.has(id)),
     xp: (xpRes.data as number | null) ?? 0,
+    // A course row that RLS hides, or that was deleted between queries, still
+    // has a chart worth drawing — it just does not have a name to print.
+    title: courseRes.data?.title ?? 'Untitled course',
   };
 }

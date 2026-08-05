@@ -19,21 +19,36 @@ import type { NodeStatus, Prereq, SkillNode, Tree } from './types';
  */
 export const XP_PER_LEVEL = 100;
 
-export function levelForXp(xp: number): number {
-  if (!Number.isFinite(xp) || xp <= 0) return 1;
-  return Math.floor(Math.sqrt(xp / XP_PER_LEVEL)) + 1;
+/**
+ * The curve constant is a trailing parameter on every level function so the
+ * adaptive engine can pass a per-learner value (`personalXpPerLevel`) without
+ * a second copy of the curve. Omit it and you get the shared course curve,
+ * which is what every existing call site wants.
+ *
+ * A zero or negative constant would divide by zero, so it falls back rather
+ * than propagating Infinity into the level meter.
+ */
+function curveConstant(xpPerLevel: number): number {
+  return Number.isFinite(xpPerLevel) && xpPerLevel > 0 ? xpPerLevel : XP_PER_LEVEL;
 }
 
-export function xpForLevel(level: number): number {
-  if (level <= 1) return 0;
-  return XP_PER_LEVEL * (level - 1) ** 2;
+export function levelForXp(xp: number, xpPerLevel: number = XP_PER_LEVEL): number {
+  if (!Number.isFinite(xp) || xp <= 0) return 1;
+  return Math.floor(Math.sqrt(xp / curveConstant(xpPerLevel))) + 1;
+}
+
+export function xpForLevel(level: number, xpPerLevel: number = XP_PER_LEVEL): number {
+  if (!Number.isFinite(level) || level <= 1) return 0;
+  return curveConstant(xpPerLevel) * (level - 1) ** 2;
 }
 
 /** Progress toward the next level, 0–1. Drives the level meter. */
-export function levelProgress(xp: number): number {
-  const level = levelForXp(xp);
-  const floor = xpForLevel(level);
-  const ceiling = xpForLevel(level + 1);
+export function levelProgress(xp: number, xpPerLevel: number = XP_PER_LEVEL): number {
+  if (!Number.isFinite(xp) || xp <= 0) return 0;
+  const k = curveConstant(xpPerLevel);
+  const level = levelForXp(xp, k);
+  const floor = xpForLevel(level, k);
+  const ceiling = xpForLevel(level + 1, k);
   return (xp - floor) / (ceiling - floor);
 }
 

@@ -3,7 +3,17 @@ import { test } from 'node:test';
 
 // Explicit .ts extension: `node --test` strips types but does not resolve
 // extensionless specifiers the way Metro does.
-import { buildTree, deriveStatuses, evaluateSkillUnlockState, getSkillEligibility, levelForXp, levelProgress, nextQuests } from './progression.ts';
+import { demoMasteredIds, demoTree, demoXp } from './demoTree.ts';
+import {
+  buildTree,
+  deriveStatuses,
+  evaluateSkillUnlockState,
+  getSkillEligibility,
+  levelForXp,
+  levelProgress,
+  nextQuests,
+  totalXp,
+} from './progression.ts';
 import type { SkillNode } from './types.ts';
 
 function node(id: string, sortOrder: number, xpReward = 50): SkillNode {
@@ -112,6 +122,27 @@ test('next quests are unlocked, unfinished, and syllabus-ordered', () => {
     nextQuests(tree, ['week1'], 2).map((n) => n.id),
     ['week2'],
   );
+});
+
+test('the demo chart shows all three node states and no dangling prerequisites', () => {
+  const ids = new Set(demoTree.nodes.map((n) => n.id));
+  for (const { nodeId, prereqId } of demoTree.prereqs) {
+    assert.ok(ids.has(nodeId) && ids.has(prereqId), `dangling edge ${prereqId} -> ${nodeId}`);
+  }
+
+  const { status, cyclicNodeIds } = deriveStatuses(demoTree, demoMasteredIds);
+  assert.deepEqual(cyclicNodeIds, []);
+  assert.deepEqual(
+    new Set([...status.values()]),
+    new Set(['mastered', 'available', 'locked']),
+    'the demo exists to show every state at once',
+  );
+
+  const earned = demoTree.nodes
+    .filter((n) => demoMasteredIds.includes(n.id))
+    .reduce((sum, n) => sum + n.xpReward, 0);
+  assert.equal(demoXp, earned, 'the meter would lie otherwise');
+  assert.ok(demoXp < totalXp(demoTree.nodes), 'a full meter is a boring demo');
 });
 
 test('levels follow the quadratic XP curve', () => {

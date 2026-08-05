@@ -1,21 +1,35 @@
 "use client"
 
-import { useMemo, useState, useEffect, useRef } from 'react'
+import { Fragment, useMemo, useState, useEffect, useRef } from 'react'
 import {
-  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, Camera, Check, CheckCircle2, ChevronRight, CircleUserRound, Code2,
-  Database, FileText, FileUp, Flame, GraduationCap, HelpCircle, LayoutDashboard, Lock, LogOut, Map, Menu,
-  MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, RefreshCw, RotateCcw, Search, Settings,
-  ShieldCheck, Sparkles, Target, Terminal, Trophy, UploadCloud, Users, X, Zap, ZoomIn, ZoomOut
+  AlertTriangle, Award, Bell, BookOpen, Bot, Brain, Camera, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleUserRound, Code2,
+  Database, FileText, FileUp, Flame, GraduationCap, HelpCircle, LayoutDashboard, Lock, LogOut, Map as MapIcon, Menu, MoreHorizontal,
+  MessageCircle, Network, Maximize2, PanelLeftClose, PanelRightOpen, Pencil, Plus, RefreshCw, RotateCcw, Search, Settings,
+  ShieldCheck, Sparkles, Target, Terminal, Trash2, Trophy, Undo2, UploadCloud, Users, X, Zap, ZoomIn, ZoomOut
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { prototypeData, getSkillTree, mockCS210Payload } from '@/lib/cardinal-repository'
-import type { SkillNode as DomainSkillNode, SkillTreePayload, Mission as DomainMission, SkillStatus } from '@/lib/cardinal-domain'
+import { prototypeData, getSkillTree, mockCS210Payload, requestHelpSubtree, nameQuests } from '@/lib/cardinal-repository'
+import type {
+  SkillNode as DomainSkillNode, SkillTreePayload, Mission as DomainMission, SkillStatus, NodeKind, QuestNaming
+} from '@/lib/cardinal-domain'
 import { APP_ROUTES, type AppRoute } from '@/lib/cardinal-routes'
-import { deriveStatuses, evaluateSkillUnlockState, levelForXp, levelProgress, xpForLevel } from '@/lib/progression'
+import { deriveStatuses, evaluateSkillUnlockState, levelForXp, levelProgress, totalXp, treeFromSkills, xpForLevel, XP_PER_LEVEL } from '@/lib/progression'
+import { buildHelpSubtree, xpBreakdown, HELP_SHARE } from '@shared/subtree'
+import { fragmentMissionXp, isNodeMastered, missionsForNode, nodeXpEarned, nodeXpFromMissions } from '@shared/missions'
+import { learnerMode, paceTarget, personalXpPerLevel, rankNextQuests, shouldOfferHelp } from '@shared/adaptive'
+import { ALL_PROFILES, LEARNER_PROFILES, generateSignals, type LearnerProfileId } from '@shared/learners'
+import type { NodeSignal } from '@shared/types'
+import {
+  arrowheadPoints, bendsOf, crossbarByPrereq, edgeWaypoints, orthogonalPath, waypointFractions,
+  type Routing
+} from '@shared/edgeRouting'
+import { graftHelpSubtree } from '@/lib/help-subtree'
 import { validateSkillGraph } from '@/lib/graph-validation'
 import { computeAutoLayout } from '@/lib/auto-layout'
 import { localStorageTreeLayoutAdapter, type UserTreeLayout } from '@/lib/tree-layout-persistence'
 import { profileStorageAdapter, type StudentProfile, defaultProfile } from '@/lib/profile-persistence'
+import { questNameStorageAdapter, hasNameOverride, type QuestNameMap } from '@/lib/quest-name-persistence'
+import { shellCollapseStorage, type ShellCollapseState } from '@/lib/sidebar-collapse-persistence'
 import { HeroSkillTree } from '@/components/hero-skill-tree'
 
 export interface AICompanionContext {
@@ -31,7 +45,7 @@ export interface AICompanionContext {
 }
 
 const nav: { route: AppRoute; label: string; icon: LucideIcon }[] = [
-  { route: 'dashboard', label: 'Skill tree', icon: Map },
+  { route: 'dashboard', label: 'Skill tree', icon: MapIcon },
   { route: 'missions', label: 'Missions', icon: Target },
   { route: 'universal', label: 'Universal skills', icon: Sparkles },
   { route: 'companion', label: 'AI companion', icon: Bot },
@@ -49,35 +63,77 @@ const iconMap: Record<string, LucideIcon> = {
   terminal: Terminal
 }
 
-function getEdgePath(
-  source: { x: number; y: number },
-  target: { x: number; y: number },
-  multiOffset: number = 0
-) {
-  const x1 = source.x
-  const y1 = source.y + 38
-  const x2 = target.x
-  const y2 = target.y - 38
+/**
+ * The one XP calculation in this app.
+ *
+ * The header used to carry a hardcoded 2,840 XP / level 6 while the meter below
+ * it computed level 3 from the same chart, so a student saw two levels for
+ * themselves on one screen. Everything that shows XP or a level now calls this,
+ * and the chart is the only input.
+ */
+export interface CourseXpReadout {
+  earned: number
+  available: number
+  graded: { earned: number; available: number }
+  supplemental: { earned: number; available: number }
+  level: number
+  /** Percent of the way to the next level, 0-100. */
+  pct: number
+  toNextLevel: number
+  xpPerLevel: number
+}
 
-  const dx = x2 - x1
-  const dy = y2 - y1
-
-  if (dy > 30) {
-    const verticalGap = dy * 0.5
-    const cp1X = x1 + multiOffset
-    const cp1Y = y1 + verticalGap
-    const cp2X = x2 - multiOffset
-    const cp2Y = y2 - verticalGap
-    return `M ${x1} ${y1} C ${cp1X} ${cp1Y}, ${cp2X} ${cp2Y}, ${x2} ${y2}`
-  } else {
-    const curveDip = Math.max(55, Math.abs(dx) * 0.22)
-    const cp1X = x1 + dx * 0.35 + multiOffset
-    const cp1Y = y1 + curveDip
-    const cp2X = x2 - dx * 0.35 - multiOffset
-    const cp2Y = y2 - curveDip
-    return `M ${x1} ${y1} C ${cp1X} ${cp1Y}, ${cp2X} ${cp2Y}, ${x2} ${y2}`
+function readCourseXp(
+  skills: { id: string; xpReward?: number; prerequisiteIds?: string[]; graded?: boolean }[],
+  masteredIds: Iterable<string>,
+  xpPerLevel: number
+): CourseXpReadout {
+  const breakdown = xpBreakdown(treeFromSkills(skills), masteredIds)
+  const level = levelForXp(breakdown.earned, xpPerLevel)
+  return {
+    earned: breakdown.earned,
+    available: breakdown.available,
+    graded: breakdown.graded,
+    supplemental: breakdown.supplemental,
+    level,
+    pct: Math.round(levelProgress(breakdown.earned, xpPerLevel) * 100),
+    toNextLevel: Math.max(0, xpForLevel(level + 1, xpPerLevel) - breakdown.earned),
+    xpPerLevel
   }
 }
+
+/** What to show as a node's quest title, and where that title came from. */
+function questTitleOf(naming: QuestNaming | undefined, fallback: string) {
+  if (naming?.titleOverride) return { text: naming.titleOverride, source: 'override' as const }
+  if (naming?.title) return { text: naming.title, source: 'generated' as const }
+  return { text: fallback, source: 'syllabus' as const }
+}
+
+function achievementTitleOf(naming: QuestNaming, fallback: string) {
+  if (naming.achievementTitleOverride) return { text: naming.achievementTitleOverride, source: 'override' as const }
+  if (naming.achievementTitle) return { text: naming.achievementTitle, source: 'generated' as const }
+  return { text: fallback, source: 'syllabus' as const }
+}
+
+const NAME_SOURCE_COPY = {
+  override: 'Your name',
+  generated: 'Generated name',
+  syllabus: 'Syllabus title'
+} as const
+
+/** Shows where a title came from in words, not only in colour. */
+function NameSourceTag({ source }: { source: keyof typeof NAME_SOURCE_COPY }) {
+  return <span className={`name-source ${source}`}>{NAME_SOURCE_COPY[source]}</span>
+}
+
+/**
+ * How an edge meets a node here: it arrives on the diamond's top vertex, and
+ * leaves from below the title and status captions — a line drawn straight down
+ * from the bottom vertex would run through the middle of "MASTERED · 200 XP".
+ * The route itself is `@shared/edgeRouting`, so the native chart bends the same
+ * way this one does.
+ */
+const CHART_ROUTING: Routing = { axis: 'vertical', in: 46, out: 90, elbowMin: 12, arrow: 11 }
 
 function Progress({ value }: { value: number }) {
   return (
@@ -91,22 +147,36 @@ function Pill({ children, tone = 'default' }: { children: React.ReactNode; tone?
   return <span className={`pill ${tone}`}>{children}</span>
 }
 
+/**
+ * The rail on the left. Two shapes:
+ *
+ * - Expanded (250px): full labels, the pre-redesign look.
+ * - Collapsed (56px): icons only, the drawio-style rail. Labels come back as
+ *   native `title` tooltips on hover, so the choice never blocks a task.
+ *
+ * On a phone the rail is hidden entirely and returns as a drawer through the
+ * `open` prop, ignoring `collapsed` — an icon rail on 375px steals space the
+ * chart cannot spare.
+ */
 function Sidebar({
   route,
   setRoute,
   open,
   setOpen,
-  userXp,
+  collapsed,
+  setCollapsed,
+  courseXp,
   profile
 }: {
   route: AppRoute
   setRoute: (r: AppRoute) => void
   open: boolean
   setOpen: (v: boolean) => void
-  userXp: number
+  collapsed: boolean
+  setCollapsed: (v: boolean) => void
+  courseXp: CourseXpReadout
   profile: StudentProfile
 }) {
-  const level = levelForXp(userXp)
   const initials = profile.fullName
     .split(' ')
     .map(n => n[0])
@@ -119,7 +189,7 @@ function Sidebar({
       <button className="mobile-menu" onClick={() => setOpen(true)} aria-label="Open navigation">
         <Menu />
       </button>
-      <aside className={`sidebar ${open ? 'open' : ''}`}>
+      <aside className={`sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}>
         <div className="brand">
           <div className="brand-mark">C</div>
           <div>
@@ -132,7 +202,13 @@ function Sidebar({
         </div>
         <nav aria-label="Main navigation">
           {nav.map(item => (
-            <button key={item.route} className={route === item.route ? 'active' : ''} onClick={() => { setRoute(item.route); setOpen(false) }}>
+            <button
+              key={item.route}
+              className={route === item.route ? 'active' : ''}
+              onClick={() => { setRoute(item.route); setOpen(false) }}
+              title={collapsed ? item.label : undefined}
+              aria-label={collapsed ? item.label : undefined}
+            >
               <item.icon />
               <span>{item.label}</span>
               {route === item.route && <ChevronRight />}
@@ -140,11 +216,19 @@ function Sidebar({
           ))}
         </nav>
         <div className="sidebar-foot">
-          <button onClick={() => setRoute('profile')}>
+          <button
+            onClick={() => setRoute('profile')}
+            title={collapsed ? 'Profile' : undefined}
+            aria-label={collapsed ? 'Profile' : undefined}
+          >
             <CircleUserRound />
             <span>Profile</span>
           </button>
-          <button onClick={() => setRoute('settings')}>
+          <button
+            onClick={() => setRoute('settings')}
+            title={collapsed ? 'Settings' : undefined}
+            aria-label={collapsed ? 'Settings' : undefined}
+          >
             <Settings />
             <span>Settings</span>
           </button>
@@ -152,9 +236,22 @@ function Sidebar({
             <div>{initials}</div>
             <p>
               <b>{profile.fullName}</b>
-              <span>Level {level} • {userXp.toLocaleString()} XP</span>
+              <span>Level {courseXp.level} • {courseXp.earned.toLocaleString()} XP on this chart</span>
             </p>
           </div>
+          {/* The rail-collapse control. Persists across reloads so the choice
+              sticks. Hidden on mobile — the hamburger already owns that. */}
+          <button
+            type="button"
+            className="sidebar-collapse"
+            onClick={() => setCollapsed(!collapsed)}
+            aria-label={collapsed ? 'Expand navigation labels' : 'Collapse navigation to icons only'}
+            aria-pressed={collapsed}
+            title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          >
+            {collapsed ? <PanelRightOpen /> : <PanelLeftClose />}
+            <span>Collapse</span>
+          </button>
         </div>
       </aside>
       {open && <button className="backdrop" onClick={() => setOpen(false)} aria-label="Close navigation" />}
@@ -162,23 +259,264 @@ function Sidebar({
   )
 }
 
+/**
+ * One confirm sheet for every "are you sure" on the chart — reset the layout,
+ * lock the nodes again, add extra practice. Same shape, same keyboard
+ * behaviour, one place to fix it.
+ */
+function ConfirmDialog({
+  title,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  children,
+  busy = false,
+  error = null,
+  destructive = false
+}: {
+  title: string
+  confirmLabel: string
+  onConfirm: () => void
+  onCancel: () => void
+  children: React.ReactNode
+  busy?: boolean
+  error?: string | null
+  destructive?: boolean
+}) {
+  const confirmRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => { confirmRef.current?.focus() }, [])
+
+  return (
+    <div
+      className="confirm-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-title"
+      onKeyDown={e => { if (e.key === 'Escape' && !busy) onCancel() }}
+    >
+      <div className="confirm-sheet">
+        <h2 id="confirm-title">{title}</h2>
+        <div className="confirm-body">{children}</div>
+        {error && <p className="confirm-error" role="alert">{error}</p>}
+        <div className="confirm-actions">
+          <button type="button" className="outline-action" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button
+            type="button"
+            ref={confirmRef}
+            className={destructive ? 'primary-action destructive' : 'primary-action'}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? 'Working…' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const MAX_TITLE = 80
+
+/**
+ * The quest title on the details panel, and the instructor's way to replace it.
+ *
+ * A typed title is tagged "Your name" and outlined in brass; a generated one is
+ * tagged "Generated name". Regeneration skips a node that has either override,
+ * so the only thing that removes one is "Use the generated name" below.
+ *
+ * Keyed by node id at the call site, so switching nodes drops any half-typed
+ * edit instead of carrying it to the next node.
+ */
+function QuestNameBlock({
+  nodeId,
+  syllabusTitle,
+  naming,
+  onSave
+}: {
+  nodeId: string
+  syllabusTitle: string
+  naming?: QuestNaming
+  onSave: (nodeId: string, patch: Pick<QuestNaming, 'titleOverride' | 'achievementTitleOverride'>) => void
+}) {
+  const quest = questTitleOf(naming, syllabusTitle)
+  const achievement = naming ? achievementTitleOf(naming, '') : null
+  const overridden = hasNameOverride(naming)
+
+  const [editing, setEditing] = useState(false)
+  const [questTitle, setQuestTitle] = useState(quest.text)
+  const [achievementTitle, setAchievementTitle] = useState(achievement?.text ?? '')
+  const [error, setError] = useState<string | null>(null)
+
+  const startEdit = () => {
+    setQuestTitle(quest.text)
+    setAchievementTitle(achievement?.text ?? '')
+    setError(null)
+    setEditing(true)
+  }
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    const title = questTitle.trim()
+    const badge = achievementTitle.trim()
+    if (!title) {
+      setError('Enter a quest title, or cancel to keep the current one.')
+      return
+    }
+    if (title.length > MAX_TITLE || badge.length > MAX_TITLE) {
+      setError(`Keep both titles under ${MAX_TITLE} characters, then save again.`)
+      return
+    }
+    onSave(nodeId, { titleOverride: title, achievementTitleOverride: badge || null })
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <form className="quest-name editing" onSubmit={submit}>
+        <div className="form-group">
+          <label htmlFor="quest-title-input">Quest title</label>
+          <input
+            id="quest-title-input"
+            type="text"
+            maxLength={MAX_TITLE}
+            value={questTitle}
+            onChange={e => setQuestTitle(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="achievement-title-input">Achievement title</label>
+          <input
+            id="achievement-title-input"
+            type="text"
+            maxLength={MAX_TITLE}
+            value={achievementTitle}
+            onChange={e => setAchievementTitle(e.target.value)}
+            placeholder="Leave empty to keep the generated badge"
+          />
+        </div>
+        {error && <p className="confirm-error" role="alert">{error}</p>}
+        <div className="quest-name-actions">
+          <button type="button" className="outline-action" onClick={() => setEditing(false)}>Cancel</button>
+          <button type="submit" className="primary-action">Save titles</button>
+        </div>
+      </form>
+    )
+  }
+
+  return (
+    <div className={`quest-name ${quest.source}`}>
+      <NameSourceTag source={quest.source} />
+      <h2>{quest.text}</h2>
+      {naming?.subtitle && <p className="quest-subtitle">{naming.subtitle}</p>}
+      {quest.source !== 'syllabus' && (
+        <p className="quest-syllabus">Syllabus skill: {syllabusTitle}</p>
+      )}
+      {achievement?.text && (
+        <p className="quest-achievement">
+          Achievement: <b>{achievement.text}</b> <NameSourceTag source={achievement.source} />
+        </p>
+      )}
+      <div className="quest-name-actions">
+        <button type="button" className="outline-action" onClick={startEdit}>
+          <Pencil style={{ width: '14px', height: '14px' }} />
+          Rename this quest
+        </button>
+        {overridden && (
+          <button
+            type="button"
+            className="outline-action"
+            onClick={() => onSave(nodeId, { titleOverride: null, achievementTitleOverride: null })}
+          >
+            <Undo2 style={{ width: '14px', height: '14px' }} />
+            Use the generated name
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Stand-in for a real `mastered_at` timestamp. `shouldOfferHelp` only checks it
+ * for truthiness, and this prototype records mastery as a set of ids with no
+ * time attached.
+ */
+const MASTERED_MARK = '2026-01-01T00:00:00.000Z'
+
+/** Fixed so a profile's simulated signals never change between renders. */
+const LEARNER_SEED = 42
+
 function SkillTree({
   payload,
   masteredIds,
   onToggleMastery,
+  missions,
+  onToggleMission,
+  onResliceMissions,
+  onRestoreMissionXp,
+  focusSkillId,
+  onFocusHandled,
   selectedDataset,
   onSelectDataset,
-  onAskAICompanion
+  onAskAICompanion,
+  naming,
+  onNamesGenerated,
+  onSaveOverride,
+  onCourseXp
 }: {
   payload: SkillTreePayload
   masteredIds: Set<string>
   onToggleMastery: (skillId: string) => void
+  missions: DomainMission[]
+  onToggleMission: (missionId: string) => void
+  onResliceMissions: (rewards: Record<string, number>) => void
+  onRestoreMissionXp: () => void
+  focusSkillId?: string | null
+  onFocusHandled?: () => void
   selectedDataset: string
   onSelectDataset: (key: string) => void
   onAskAICompanion?: (context: AICompanionContext) => void
+  naming: QuestNameMap
+  onNamesGenerated: (names: QuestNaming[]) => void
+  onSaveOverride: (nodeId: string, patch: Pick<QuestNaming, 'titleOverride' | 'achievementTitleOverride'>) => void
+  onCourseXp: (xp: CourseXpReadout) => void
 }) {
   const userId = 'usr_alex'
-  const { course, nodes: rawNodes } = payload
+  const { course, nodes: syllabusNodes } = payload
+
+  // 0. Supplemental help steps grafted onto the syllabus tree.
+  // Session-only in this prototype: the real rows are written by the
+  // `suggest-subtree` Edge Function and read back with the tree.
+  const [helpNodes, setHelpNodes] = useState<DomainSkillNode[]>([])
+  const [helpPatches, setHelpPatches] = useState<Record<string, { prerequisiteIds: string[] }>>({})
+
+  useEffect(() => {
+    setHelpNodes([])
+    setHelpPatches({})
+    // The steps are gone, so the XP they were carrying has to go back to the
+    // missions it was carved out of. Dropping one without the other is how a
+    // node quietly loses 40% of itself when you switch charts and come back.
+    onRestoreMissionXp()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [course.id])
+
+  const completedMissionIds = useMemo(
+    () => new Set(missions.filter(m => m.status === 'completed').map(m => m.id)),
+    [missions]
+  )
+
+  const rawNodes = useMemo(() => {
+    if (helpNodes.length === 0) return syllabusNodes
+    // The patch carries the parent's new edges to the terminal steps. It no
+    // longer carries a redistributed `xpReward`: the parent's XP is the sum of
+    // its missions, and those were re-sliced instead.
+    return [
+      ...syllabusNodes.map(n => (helpPatches[n.id] ? { ...n, ...helpPatches[n.id] } : n)),
+      ...helpNodes
+    ]
+  }, [syllabusNodes, helpNodes, helpPatches])
 
   // 1. Graph Validation
   const validation = useMemo(() => validateSkillGraph(rawNodes), [rawNodes])
@@ -192,7 +530,12 @@ function SkillTree({
   // 3. User Layout Persistence State
   const [customPositions, setCustomPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [savedNotice, setSavedNotice] = useState(false)
-  const [resetModalOpen, setResetModalOpen] = useState(false)
+  const [confirming, setConfirming] = useState<'reset' | 'static' | 'help' | null>(null)
+
+  // Nodes are static until the student asks for them to be movable. Flipping
+  // back to static shows the generated layout again; it never deletes the saved
+  // arrangement, which is what "Reset layout" is for.
+  const [movable, setMovable] = useState(false)
 
   // Load saved positions when course/dataset changes
   useEffect(() => {
@@ -206,16 +549,65 @@ function SkillTree({
     }
   }, [userId, course.id])
 
-  // Combine automatic layout positions with user custom position overrides
+  /**
+   * A node's own XP: the sum of its missions.
+   *
+   * ponytail: falls back to the stored `xpReward` when a node has no missions.
+   * Only CS210 carries missions today — the other five mock datasets and every
+   * generated help step have none, and a chart that rendered every node as 0 XP
+   * would be worse than a stale number. Delete the fallback once missions come
+   * back with the tree instead of from a fixture.
+   */
+  const ownXp = useMemo(() => {
+    return (node: { id: string; xpReward?: number }) =>
+      missionsForNode(missions, node.id).length > 0
+        ? nodeXpFromMissions(missions, node.id)
+        : node.xpReward ?? 0
+  }, [missions])
+
+  /** The extra practice carved out of a node, by the node it was carved from. */
+  const helpXpByParent = useMemo(() => {
+    const byParent = new Map<string, { total: number; earned: number }>()
+    for (const step of helpNodes) {
+      if (!step.parentNodeId) continue
+      const tally = byParent.get(step.parentNodeId) ?? { total: 0, earned: 0 }
+      tally.total += step.xpReward ?? 0
+      if (masteredIds.has(step.id)) tally.earned += step.xpReward ?? 0
+      byParent.set(step.parentNodeId, tally)
+    }
+    return byParent
+  }, [helpNodes, masteredIds])
+
+  /**
+   * What a node is worth to the student, and the number every readout shows.
+   *
+   * Its help steps count towards it, because their XP was taken out of its
+   * missions rather than minted. That is what makes this figure survive a "need
+   * extra help" request unchanged — the split moves, the total does not.
+   */
+  const totalXpOf = useMemo(() => {
+    return (node: { id: string; xpReward?: number }) =>
+      ownXp(node) + (helpXpByParent.get(node.id)?.total ?? 0)
+  }, [ownXp, helpXpByParent])
+
+  // Combine automatic layout positions with user custom position overrides.
+  // Overrides only apply while nodes are movable, so switching back to static
+  // restores the generated layout without touching what was saved.
+  //
+  // `xpReward` is replaced with the mission-derived figure here, once, so the
+  // graph rules, the meter, and the chart all read the same number. It is the
+  // node's *own* XP: its help steps are separate nodes in this list and would
+  // otherwise be counted twice.
   const skills = useMemo(() => {
     return autoLayoutResult.nodes.map(node => {
-      const customPos = customPositions[node.id]
+      const customPos = movable ? customPositions[node.id] : undefined
       return {
         ...node,
+        xpReward: ownXp(node),
         position: customPos ? customPos : node.position
       }
     })
-  }, [autoLayoutResult.nodes, customPositions])
+  }, [autoLayoutResult.nodes, customPositions, movable, ownXp])
 
   const canvasWidth = autoLayoutResult.width
   const canvasHeight = autoLayoutResult.height
@@ -224,7 +616,11 @@ function SkillTree({
   const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [zoom, setZoom] = useState(.65)
   const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [panelOpen, setPanelOpen] = useState(true)
+  // Panel is docked and closed by default: the chart is the whole point of
+  // opening this route. Clicking a node brings in the compact dock header —
+  // clicking that opens the full panel. One extra click, and the chart is
+  // clean on first paint the way `DESIGN.md` asks for.
+  const [panelOpen, setPanelOpen] = useState(false)
 
   // Canvas Panning vs Node Dragging
   const [canvasDrag, setCanvasDrag] = useState<{ x: number; y: number; px: number; py: number } | null>(null)
@@ -239,20 +635,18 @@ function SkillTree({
   const viewportRef = useRef<HTMLDivElement>(null)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
+  // A stale selection (dataset switched under us) gets cleared, but nothing is
+  // auto-selected: the chart starts blank so the student's first act is a click.
   useEffect(() => {
-    if (skills.length > 0 && (!selectedId || !skills.some(s => s.id === selectedId))) {
-      setSelectedId(skills[0].id)
+    if (selectedId && skills.length > 0 && !skills.some(s => s.id === selectedId)) {
+      setSelectedId('')
+      setPanelOpen(false)
     }
   }, [skills, selectedId])
 
-  const treeInput = useMemo(() => ({
-    nodes: skills.map(s => ({ id: s.id, title: s.title, xpReward: s.xpReward || 100 })),
-    prereqs: skills.flatMap(s => (s.prerequisiteIds || []).map(p => ({ nodeId: s.id, prereqId: p })))
-  }), [skills])
+  const { status: calculatedStatusMap } = useMemo(() => deriveStatuses(skills, masteredIds), [skills, masteredIds])
 
-  const { status: calculatedStatusMap } = useMemo(() => deriveStatuses(treeInput, masteredIds), [treeInput, masteredIds])
-
-  const selected = skills.find(s => s.id === selectedId) || skills[0]
+  const selected = selectedId ? skills.find(s => s.id === selectedId) : undefined
   const currentStatus: SkillStatus = selected && masteredIds.has(selected.id)
     ? 'mastered'
     : (selected ? (calculatedStatusMap.get(selected.id) as SkillStatus) || 'locked' : 'locked')
@@ -261,6 +655,185 @@ function SkillTree({
     if (!selected) return null
     return evaluateSkillUnlockState(selected.id, skills, masteredIds)
   }, [selected, skills, masteredIds])
+
+  // ------------------------------------------------- the work inside the node
+  // Missions are what the student actually does, so they lead the panel. The
+  // node's progress is theirs: earned is what they finished, total is what the
+  // node is worth, and mastery is finishing all of them.
+  const selectedMissions = useMemo(
+    () => (selected ? missionsForNode(missions, selected.id) : []),
+    [missions, selected]
+  )
+  const selectedHelpXp = (selected && helpXpByParent.get(selected.id)) || { total: 0, earned: 0 }
+  const nodeTotal = selected ? totalXpOf(selected) : 0
+  const nodeEarned = selected
+    ? nodeXpEarned(missions, selected.id, completedMissionIds) + selectedHelpXp.earned
+    : 0
+  const nodePct = nodeTotal > 0 ? Math.round((nodeEarned / nodeTotal) * 100) : 0
+  const missionsLeft = selectedMissions.filter(m => !completedMissionIds.has(m.id)).length
+  /** The one mission worth pointing at, so only one control on the panel is cardinal. */
+  const nextMissionId = selectedMissions.find(m => !completedMissionIds.has(m.id))?.id
+
+  // ---------------------------------------------------------- adaptive engine
+  // This prototype has no telemetry, so the engine is fed by a simulated
+  // learner. The picker below is how the five profiles get demonstrated.
+  const [profileId, setProfileId] = useState<LearnerProfileId>('steady')
+
+  const sharedTree = useMemo(() => treeFromSkills(skills), [skills])
+  const helpParentIds = useMemo(
+    () => new Set(helpNodes.map(n => n.parentNodeId).filter(Boolean) as string[]),
+    [helpNodes]
+  )
+
+  const signals = useMemo(
+    () => generateSignals(LEARNER_PROFILES[profileId], sharedTree, LEARNER_SEED),
+    [profileId, sharedTree]
+  )
+
+  /**
+   * The profile decides how much effort a node took; this app decides what is
+   * mastered and what already has help. Merging both keeps the engine from
+   * offering a scaffold on a node the student just finished.
+   */
+  const signalFor = useMemo(() => {
+    const byId = new Map(signals.nodeSignals.map(s => [s.nodeId, s]))
+    return (id: string): NodeSignal | null => {
+      const signal = byId.get(id)
+      if (!signal) return null
+      return {
+        ...signal,
+        helpRequested: helpParentIds.has(id),
+        masteredAt: masteredIds.has(id) ? MASTERED_MARK : null
+      }
+    }
+  }, [signals, helpParentIds, masteredIds])
+
+  const nodeById = useMemo(() => new Map(sharedTree.nodes.map(n => [n.id, n])), [sharedTree])
+
+  /** Nodes the engine wants to scaffold, so the chart can say so before you click. */
+  const offeredHelpIds = useMemo(() => {
+    const offered = new Set<string>()
+    for (const node of sharedTree.nodes) {
+      if (node.graded === false) continue
+      const signal = signalFor(node.id)
+      if (signal && shouldOfferHelp(signal, node).offer) offered.add(node.id)
+    }
+    return offered
+  }, [sharedTree, signalFor])
+
+  const selectedOffer = useMemo(() => {
+    if (!selected) return null
+    const node = nodeById.get(selected.id)
+    const signal = signalFor(selected.id)
+    return node && signal ? shouldOfferHelp(signal, node) : null
+  }, [selected, nodeById, signalFor])
+
+  const mode = useMemo(() => learnerMode(sharedTree, signals), [sharedTree, signals])
+  const nextUp = useMemo(
+    () => rankNextQuests(sharedTree, masteredIds, signals, 3),
+    [sharedTree, masteredIds, signals]
+  )
+  const pace = paceTarget(signals)
+  const xpPerLevel = personalXpPerLevel(signals)
+
+  // ------------------------------------------------------------- the XP meter
+  // One readout, shared with the dashboard header, the sidebar, and the profile
+  // page. They all show the same level because they all read this.
+  const courseXp = useMemo(() => readCourseXp(skills, masteredIds, xpPerLevel), [skills, masteredIds, xpPerLevel])
+  useEffect(() => { onCourseXp(courseXp) }, [courseXp, onCourseXp])
+
+  const breakdown = courseXp
+  // What the syllabus alone is worth. Fragmentation conserves XP, so this must
+  // stay equal to `breakdown.available` no matter how many subtrees exist.
+  const syllabusXp = useMemo(() => totalXp(treeFromSkills(syllabusNodes).nodes), [syllabusNodes])
+  const level = courseXp.level
+  const levelPct = courseXp.pct
+  const xpToNextLevel = courseXp.toNextLevel
+
+  // ------------------------------------------------------- extra help request
+  const [helpBusy, setHelpBusy] = useState(false)
+  const [helpError, setHelpError] = useState<string | null>(null)
+
+  const isSupplemental = selected?.graded === false
+  const selectedHasHelp = selected ? helpParentIds.has(selected.id) : false
+  const canRequestHelp = Boolean(selected) && !isSupplemental && !selectedHasHelp && currentStatus !== 'mastered'
+
+  const handleConfirmHelp = async () => {
+    if (!selected) return
+    setHelpBusy(true)
+    setHelpError(null)
+    try {
+      const steps = await requestHelpSubtree(selected.id, selected.title)
+      const sharedParent = treeFromSkills([selected]).nodes[0]
+
+      // `buildHelpSubtree` is used for structure only — the step ids, the chain
+      // of prerequisites between them, and the edge from the terminal step back
+      // to the parent. Every XP number it produced is thrown away below: it
+      // splits the node's stored `xpReward`, and a node's XP is now the sum of
+      // its missions, so that number is no longer the one being shared out.
+      const subtree = buildHelpSubtree(sharedParent, steps, key => `help_${key}`)
+
+      // The real split. `fragmentMissionXp` guarantees
+      // sum(missionRewards) + sum(stepRewards) === sum(the mission XP going in),
+      // so the node is worth exactly what it was worth a moment ago.
+      const own = missionsForNode(missions, selected.id)
+      const { missionRewards, stepRewards } = fragmentMissionXp(
+        own.map(m => m.xpReward),
+        subtree.nodes.length
+      )
+
+      const graft = graftHelpSubtree(selected, {
+        ...subtree,
+        nodes: subtree.nodes.map((step, i) => ({ ...step, xpReward: stepRewards[i] ?? 0 }))
+      })
+
+      setHelpNodes(prev => [...prev, ...graft.nodes])
+      // `graft.parentPatch.xpReward` is deliberately dropped. Only the new
+      // prerequisite edges are applied; the parent's XP follows its missions.
+      setHelpPatches(prev => ({
+        ...prev,
+        [graft.parentPatch.id]: { prerequisiteIds: graft.parentPatch.prerequisiteIds }
+      }))
+      onResliceMissions(Object.fromEntries(own.map((m, i) => [m.id, missionRewards[i] ?? 0])))
+      setConfirming(null)
+    } catch {
+      setHelpError('Couldn’t build the extra practice steps. Try again in a moment.')
+    } finally {
+      setHelpBusy(false)
+    }
+  }
+
+  // ------------------------------------------------------- quest naming
+  const [namingBusy, setNamingBusy] = useState(false)
+  const [namingNote, setNamingNote] = useState<string | null>(null)
+  const [namingError, setNamingError] = useState<string | null>(null)
+
+  const namedCount = skills.filter(s => naming[s.id]).length
+
+  const handleGenerateNames = async () => {
+    setNamingBusy(true)
+    setNamingError(null)
+    setNamingNote(null)
+    try {
+      // The ids an instructor has renamed are sent as the skip list, which is
+      // how the Edge Function's `title_override` filter behaves. Regeneration
+      // cannot reach a node the instructor has already named.
+      const overridden = skills.filter(s => hasNameOverride(naming[s.id])).map(s => s.id)
+      const result = await nameQuests(course.id, skills, overridden)
+      onNamesGenerated(result.names)
+      setNamingNote(
+        result.skipped > 0
+          ? `Named ${result.names.length} quests. Kept ${result.skipped} you renamed.`
+          : `Named ${result.names.length} quests.`
+      )
+    } catch (e) {
+      setNamingError(
+        e instanceof Error ? e.message : 'Couldn’t name these quests. Try again in a moment.'
+      )
+    } finally {
+      setNamingBusy(false)
+    }
+  }
 
   const focusAndSelectNode = (targetId: string) => {
     const target = skills.find(s => s.id === targetId)
@@ -274,12 +847,52 @@ function SkillTree({
     setPanelOpen(true)
   }
 
+  // Deep link from the missions overview. `skills` is in the dependency list
+  // because the chart loads a render or two after the route changes, and the
+  // node cannot be selected before it exists.
+  useEffect(() => {
+    if (!focusSkillId || !skills.some(s => s.id === focusSkillId)) return
+    focusAndSelectNode(focusSkillId)
+    onFocusHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSkillId, skills])
+
   const statusCopy: Record<SkillStatus, string> = {
     mastered: 'Mastered',
     in_progress: 'In progress',
     available: 'Available',
     locked: 'Locked'
   }
+
+  /**
+   * How far the student is through a node, 0–1. This is what fills the edges
+   * that lead into it: an edge is the run towards its node, and the red part of
+   * it is how much of that node is already banked.
+   *
+   * Mastery short-circuits the arithmetic because five of the six mock datasets
+   * carry no missions at all — without it every edge in them would read as
+   * untouched no matter how much the student had finished.
+   */
+  const progressInto = useMemo(() => {
+    return (node: { id: string; xpReward?: number }) => {
+      if (masteredIds.has(node.id)) return 1
+      const total = totalXpOf(node)
+      if (total <= 0) return 0
+      const earned =
+        nodeXpEarned(missions, node.id, completedMissionIds) +
+        (helpXpByParent.get(node.id)?.earned ?? 0)
+      return Math.min(1, Math.max(0, earned / total))
+    }
+  }, [masteredIds, totalXpOf, missions, completedMissionIds, helpXpByParent])
+
+  const edgeCrossbars = useMemo(
+    () => crossbarByPrereq(
+      skills.map(s => ({ id: s.id, x: s.position.x, y: s.position.y })),
+      skills.flatMap(s => (s.prerequisiteIds || []).map(from => ({ from, to: s.id }))),
+      CHART_ROUTING
+    ),
+    [skills]
+  )
 
   const selectedPathEdges = useMemo(() => {
     if (!selectedId) return new Set<string>()
@@ -336,7 +949,73 @@ function SkillTree({
     return () => el.removeEventListener('wheel', handleWheel)
   }, [])
 
-  const fit = () => { setZoom(.62); setPan({ x: 0, y: 0 }) }
+  // The one place that answers "what zoom shows the whole chart?". A hardcoded
+  // 0.62 clipped the taller redesigned viewport at both ends, and the fit and
+  // mount paths were reaching different answers.
+  const computeFitZoom = () => {
+    const el = viewportRef.current
+    if (!el || canvasWidth === 0 || canvasHeight === 0) return null
+    const vw = el.clientWidth
+    const vh = el.clientHeight
+    if (vw === 0 || vh === 0) return null
+    return Math.max(0.35, Math.min(1.5, Math.min(vw / canvasWidth, vh / canvasHeight) * 0.9))
+  }
+
+  // Fit-on-mount and course-switch. The viewport is not measured on the first
+  // effect tick — clientWidth is 0 until layout finishes — and a single rAF
+  // is not always enough on a slow first paint. Retry until it works, cap at
+  // ~500ms, and let a ResizeObserver keep the fit honest if the viewport
+  // ever resizes afterwards (collapsing the rail, opening the details dock).
+  useEffect(() => {
+    if (canvasWidth === 0 || canvasHeight === 0) return
+    let cancelled = false
+    let raf = 0
+    let tries = 0
+    const attempt = () => {
+      if (cancelled) return
+      const ratio = computeFitZoom()
+      if (ratio !== null) {
+        setZoom(ratio)
+        setPan({ x: 0, y: 0 })
+        return
+      }
+      tries += 1
+      if (tries < 30) raf = requestAnimationFrame(attempt)
+    }
+    raf = requestAnimationFrame(attempt)
+
+    // After the initial fit lands, watch the viewport so a rail collapse or
+    // window resize triggers a re-fit. Debounced through rAF to coalesce bursts.
+    const el = viewportRef.current
+    let resizeRaf = 0
+    const observer = el
+      ? new ResizeObserver(() => {
+          cancelAnimationFrame(resizeRaf)
+          resizeRaf = requestAnimationFrame(() => {
+            const ratio = computeFitZoom()
+            if (ratio !== null) {
+              setZoom(ratio)
+              setPan({ x: 0, y: 0 })
+            }
+          })
+        })
+      : null
+    if (observer && el) observer.observe(el)
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+      cancelAnimationFrame(resizeRaf)
+      observer?.disconnect()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [course.id, canvasWidth, canvasHeight])
+
+  const fit = () => {
+    const ratio = computeFitZoom()
+    if (ratio !== null) setZoom(ratio)
+    setPan({ x: 0, y: 0 })
+  }
   const reset = () => { setZoom(1.0); setPan({ x: 0, y: 0 }) }
   const focusSelected = () => {
     if (!selected) return
@@ -345,87 +1024,62 @@ function SkillTree({
     setPanelOpen(true)
   }
 
-  const handleAutoArrange = () => {
-    setCustomPositions({})
-    localStorageTreeLayoutAdapter.clearLayout(userId, course.id)
-    setSavedNotice(false)
+  const masteredCount = skills.filter(s => masteredIds.has(s.id)).length
+  const hasCustomLayout = Object.keys(customPositions).length > 0
+
+  // The floating "Chart tools" popover on the tool cluster. State kept here
+  // because opening it should feel instant — no separate mount, no fetch.
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const toolsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!toolsOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!toolsRef.current) return
+      if (!toolsRef.current.contains(e.target as Node)) setToolsOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setToolsOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [toolsOpen])
+
+  /** Back to the generated layout. Non-destructive: the arrangement is kept. */
+  const showGeneratedLayout = () => {
+    setMovable(false)
+    setConfirming(null)
     setZoom(.62)
     setPan({ x: 0, y: 0 })
   }
 
-  const handleConfirmReset = () => {
-    handleAutoArrange()
-    setResetModalOpen(false)
+  const handleToggleMovable = () => {
+    if (movable) {
+      // Their arrangement is about to disappear from the screen. It is only
+      // hidden, not deleted, but a student who spent time on it deserves to be
+      // told that before it happens.
+      if (hasCustomLayout) { setConfirming('static'); return }
+      showGeneratedLayout()
+      return
+    }
+    setMovable(true)
   }
 
-  const masteredCount = skills.filter(s => masteredIds.has(s.id)).length
-  const hasCustomLayout = Object.keys(customPositions).length > 0
+  /** The only thing that deletes a saved arrangement. */
+  const handleConfirmReset = () => {
+    setCustomPositions({})
+    localStorageTreeLayoutAdapter.clearLayout(userId, course.id)
+    setSavedNotice(false)
+    showGeneratedLayout()
+  }
+
+  const dockShown = Boolean(selected) && !panelOpen
+  const explorerClass = panelOpen ? 'panel-open' : (dockShown ? 'panel-docked' : 'panel-hidden')
 
   return (
-    <div className={`tree-explorer ${panelOpen ? 'panel-open' : 'panel-closed'}`}>
+    <div className={`tree-explorer ${explorerClass}`}>
       <section className="tree-card">
-        <div className="tree-toolbar">
-          <div className="tree-title">
-            <Pill>{course.code}</Pill>
-            <span>{skills.length} skills • {masteredCount} mastered</span>
-            <b>{course.title}</b>
-          </div>
-          <div className="tree-actions">
-            <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              Dataset:
-              <select
-                value={selectedDataset}
-                onChange={e => onSelectDataset(e.target.value)}
-                style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', fontWeight: 700 }}
-              >
-                <option value="cs210">1. CS210 Branching (16 skills)</option>
-                <option value="linear">2. CS101 Linear (6 skills)</option>
-                <option value="wide">3. CS300 Wide Realm (25 skills)</option>
-                <option value="dual-roots">4. MATH201 Dual Roots (4 skills)</option>
-                <option value="err-missing">5. Invalid: Missing Prereq</option>
-                <option value="err-cycle">6. Invalid: Cycle Loop</option>
-              </select>
-            </label>
-            <span className="toolbar-separator" />
-
-            <button
-              onClick={handleAutoArrange}
-              title="Auto-arrange nodes to default layout"
-              aria-label="Auto arrange layout"
-              style={{ display: 'flex', alignItems: 'center', gap: '4px', width: 'auto', padding: '0 10px', fontSize: '11px', fontWeight: 700 }}
-            >
-              <RotateCcw style={{ width: '14px', height: '14px' }} />
-              Auto-arrange
-            </button>
-
-            {hasCustomLayout && (
-              <button
-                onClick={() => setResetModalOpen(true)}
-                title="Reset layout to AI default"
-                aria-label="Reset layout"
-                style={{ display: 'flex', alignItems: 'center', gap: '4px', width: 'auto', padding: '0 10px', fontSize: '11px', fontWeight: 700, color: '#981e2f' }}
-              >
-                Reset layout
-              </button>
-            )}
-
-            {savedNotice && hasCustomLayout && (
-              <span style={{ fontSize: '11px', fontWeight: 700, color: '#16a34a', display: 'flex', alignItems: 'center', gap: '3px', padding: '0 4px' }}>
-                <Check style={{ width: '13px', height: '13px' }} /> Layout saved
-              </span>
-            )}
-
-            <span className="toolbar-separator" />
-            <button onClick={fit} title="Fit skill tree" aria-label="Fit skill tree"><Maximize2 /></button>
-            <button onClick={reset} title="Reset view" aria-label="Reset view"><RefreshCw /></button>
-            <button onClick={focusSelected} title="Focus selected skill" aria-label="Focus selected skill"><Search /></button>
-            <span className="toolbar-separator" />
-            <button onClick={() => setZoom(z => Math.max(.35, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
-            <b>{Math.round(zoom * 100)}%</b>
-            <button onClick={() => setZoom(z => Math.min(1.5, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
-          </div>
-        </div>
-
         <div
           ref={viewportRef}
           className={`tree-viewport ${canvasDrag || nodeDrag ? 'dragging' : ''}`}
@@ -459,7 +1113,9 @@ function SkillTree({
           }}
           onPointerCancel={() => { setCanvasDrag(null); setNodeDrag(null) }}
         >
-          <div className="canvas-hint">Drag canvas to pan • Drag nodes to customize arrangement • Scroll to zoom</div>
+          <div className="canvas-hint">
+            Drag canvas to pan • {movable ? 'Drag nodes to arrange them' : 'Nodes are static — switch to movable to arrange them'} • Scroll to zoom
+          </div>
 
           {!validation.isValid ? (
             <div style={{ padding: '40px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', textAlign: 'center', gap: '12px' }}>
@@ -496,6 +1152,15 @@ function SkillTree({
 
                 const Icon = iconMap[skill.icon || 'code'] || Code2
                 const isBeingDragged = nodeDrag?.skillId === skill.id
+                const supplemental = skill.graded === false
+                // Badged whatever the status. A plateaued learner's one stuck node
+                // is often still locked behind the thing they are stuck on, and
+                // hiding the badge there loses the case that matters most.
+                const helpOffered = offeredHelpIds.has(skill.id)
+                const kindCopy = supplemental ? 'Extra practice, not graded' : 'Graded skill'
+                // What the node is worth, extra practice included. Requesting
+                // help re-slices this number without changing it.
+                const nodeXp = totalXpOf(skill)
 
                 return (
                   <div
@@ -507,6 +1172,8 @@ function SkillTree({
                     }}
                     onPointerDown={e => {
                       if ((e.target as HTMLElement).tagName === 'BUTTON') return
+                      // Static nodes: let the event through so the canvas pans.
+                      if (!movable) return
                       e.stopPropagation()
                       setNodeDrag({
                         skillId: skill.id,
@@ -519,11 +1186,11 @@ function SkillTree({
                     }}
                   >
                     <button
-                      className={`skill-node ${nodeStatus} ${selected?.id === skill.id ? 'selected' : ''}`}
+                      className={`skill-node ${nodeStatus} ${supplemental ? 'supplemental' : ''} ${selected?.id === skill.id ? 'selected' : ''}`}
                       onClick={() => { setSelectedId(skill.id); setPanelOpen(true) }}
                       onMouseEnter={() => setHoveredId(skill.id)}
                       onMouseLeave={() => setHoveredId(null)}
-                      aria-label={`${skill.title}, ${statusCopy[nodeStatus]}`}
+                      aria-label={`${skill.title}, ${statusCopy[nodeStatus]}, ${kindCopy}, ${nodeXp} XP${helpOffered ? '. Extra practice is offered on this skill' : ''}`}
                       aria-pressed={selected?.id === skill.id}
                     >
                       <Icon />
@@ -531,7 +1198,8 @@ function SkillTree({
                       {nodeStatus === 'mastered' && <CheckCircle2 className="lock" style={{ color: '#eab308' }} />}
                     </button>
                     <span>{skill.shortTitle || skill.title}</span>
-                    <small>{statusCopy[nodeStatus]}</small>
+                    <small>{supplemental ? `Extra practice • ${statusCopy[nodeStatus]}` : statusCopy[nodeStatus]} • {nodeXp} XP</small>
+                    {helpOffered && <em>Extra help offered</em>}
                   </div>
                 )
               })}
@@ -540,23 +1208,19 @@ function SkillTree({
                 {skills.flatMap(targetNode => {
                   const targetPos = targetNode.position
                   const prereqs = targetNode.prerequisiteIds || []
-                  const prereqCount = prereqs.length
 
                   return prereqs.map((prereqId, pIdx) => {
                     const sourceNode = skills.find(s => s.id === prereqId)
                     if (!sourceNode) return null
                     const sourcePos = sourceNode.position
 
-                    const multiOffset = prereqCount > 1
-                      ? (pIdx === 0 ? -16 : pIdx === 1 ? 16 : 0)
-                      : 0
+                    const points = edgeWaypoints(sourcePos, targetPos, CHART_ROUTING, edgeCrossbars.get(prereqId))
+                    const pathData = orthogonalPath(points)
+                    const bends = bendsOf(points, 2 * CHART_ROUTING.elbowMin)
 
-                    const pathData = getEdgePath(sourcePos, targetPos, multiOffset)
-
-                    const sourceMastered = masteredIds.has(sourceNode.id)
-                    const targetMastered = masteredIds.has(targetNode.id)
-                    const isMasteredLink = sourceMastered && targetMastered
-                    const isAvailableLink = sourceMastered && !targetMastered
+                    // The edge is a progress bar for the node it runs into.
+                    const progress = progressInto(targetNode)
+                    const fractions = waypointFractions(points)
 
                     const edgeKey = `${sourceNode.id}->${targetNode.id}`
                     const isSelectedEdge = selectedPathEdges.has(edgeKey)
@@ -567,19 +1231,49 @@ function SkillTree({
                       ? (isHighlighted ? 1.0 : 0.22)
                       : 0.9
 
-                    const linkClass = isMasteredLink
-                      ? 'link-mastered'
-                      : isAvailableLink
-                        ? 'link-available'
-                        : 'link-locked'
+                    const dotR = (progress > 0 ? 4 : 3) + (isHighlighted ? 1 : 0)
+                    /** Red once the fill has reached this far along the run. */
+                    const reached = (fraction: number) => (fraction <= progress ? 'edge-fill' : 'edge-track')
 
                     return (
-                      <path
+                      <g
                         key={edgeKey}
-                        d={pathData}
-                        className={`${linkClass} ${isHighlighted ? 'highlighted' : ''}`}
+                        className={isHighlighted ? 'highlighted' : ''}
                         style={{ opacity: strokeOpacity }}
-                      />
+                      >
+                        <path className="edge-track" d={pathData} />
+                        {progress > 0 && (
+                          // pathLength normalises the run to 1, so the dash can
+                          // be written as the fraction earned without measuring
+                          // the geometry.
+                          <path
+                            className="edge-fill"
+                            d={pathData}
+                            pathLength={1}
+                            strokeDasharray={`${progress} 1`}
+                          />
+                        )}
+                        {/* Every prerequisite's edge arrives on the same port,
+                            so one arrowhead per edge stacks four of them on one
+                            tip and reads as a blot. The node gets one, drawn by
+                            its first edge; they would all be identical anyway,
+                            down to the colour, since they share a target. */}
+                        {pIdx === 0 && (
+                          <polygon
+                            className={reached(1)}
+                            points={arrowheadPoints(points, CHART_ROUTING.arrow ?? 11)}
+                          />
+                        )}
+                        {bends.map((bend, bIdx) => (
+                          <circle
+                            key={bIdx}
+                            className={reached(fractions[points.indexOf(bend)] ?? 1)}
+                            cx={bend.x}
+                            cy={bend.y}
+                            r={dotR}
+                          />
+                        ))}
+                      </g>
                     )
                   })
                 })}
@@ -604,18 +1298,250 @@ function SkillTree({
               )
             })}
           </div>
-        </div>
-        <div className="legend">
-          <span><i className="mastered" />Mastered</span>
-          <span><i className="active" />In progress</span>
-          <span><i className="available" />Available</span>
-          <span><i className="locked" />Locked</span>
-          <button onClick={() => setPanelOpen(!panelOpen)}>
-            {panelOpen ? <PanelLeftClose /> : <PanelRightOpen />}
-            {panelOpen ? 'Hide details' : 'Show details'}
-          </button>
+
+          {/* ---------------------------------------- floating tool cluster
+              Chart-configuration controls that used to sit in a full toolbar
+              row above the canvas. Everything textual folds behind the Chart
+              tools popover; the movable switch stays visible because it is
+              the one control a student flips mid-look. */}
+          <div className="tool-cluster" ref={toolsRef}>
+            <button
+              type="button"
+              className={`tool-cluster-more ${toolsOpen ? 'is-open' : ''}`}
+              onClick={() => setToolsOpen(v => !v)}
+              aria-haspopup="menu"
+              aria-expanded={toolsOpen}
+              aria-label="Chart tools"
+              title="Chart tools"
+            >
+              <MoreHorizontal />
+              <span>Chart tools</span>
+            </button>
+
+            {/* Movable/static switch keeps a slot on the cluster: it is the
+                one action that visibly reshapes the chart, and hiding it
+                behind a popover makes moving nodes a chore.
+                display/place-items overrides live in globals.css so the
+                switch's knob is not centred like an icon button — see the
+                fix that made the switch stop parking mid-track. */}
+            <span className="tree-switch">
+              <span aria-hidden="true">Movable nodes</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={movable}
+                aria-label="Movable nodes"
+                className={movable ? 'on' : ''}
+                onClick={handleToggleMovable}
+              >
+                <i />
+              </button>
+            </span>
+
+            {movable && (
+              <button
+                type="button"
+                className="tool-cluster-btn"
+                onClick={handleToggleMovable}
+                title="Show the generated layout"
+                aria-label="Auto-arrange the chart"
+              >
+                <RotateCcw /> <span>Auto-arrange</span>
+              </button>
+            )}
+
+            {toolsOpen && (
+              <div className="tool-menu" role="menu">
+                <div className="tool-menu-title">Chart</div>
+                <label className="tool-menu-field">
+                  <span>Dataset</span>
+                  <select
+                    value={selectedDataset}
+                    onChange={e => onSelectDataset(e.target.value)}
+                    aria-label="Chart dataset"
+                  >
+                    <option value="cs210">CS210 Branching (16 skills)</option>
+                    <option value="linear">CS101 Linear (6 skills)</option>
+                    <option value="wide">CS300 Wide Realm (25 skills)</option>
+                    <option value="dual-roots">MATH201 Dual Roots (4 skills)</option>
+                    <option value="err-missing">Invalid: Missing Prereq</option>
+                    <option value="err-cycle">Invalid: Cycle Loop</option>
+                  </select>
+                </label>
+                <label className="tool-menu-field">
+                  <span>Learner (dev)</span>
+                  <select
+                    value={profileId}
+                    onChange={e => setProfileId(e.target.value as LearnerProfileId)}
+                    aria-label="Simulated learner profile"
+                  >
+                    {ALL_PROFILES.map(p => (
+                      <option key={p.id} value={p.id}>{p.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="tool-menu-divider" role="separator" />
+                <div className="tool-menu-title">Names</div>
+                <button
+                  type="button"
+                  className="tool-menu-item"
+                  onClick={handleGenerateNames}
+                  disabled={namingBusy || skills.length === 0}
+                  aria-label={namedCount > 0 ? 'Rename unnamed quests' : 'Name the quests on this chart'}
+                >
+                  <Sparkles />
+                  {namingBusy ? 'Naming quests…' : namedCount > 0 ? 'Regenerate names' : 'Name quests'}
+                </button>
+                {namingNote && !namingError && (
+                  <p className="tool-menu-note" role="status">{namingNote}</p>
+                )}
+                {namingError && (
+                  <p className="tool-menu-note error" role="alert">{namingError}</p>
+                )}
+
+                <div className="tool-menu-divider" role="separator" />
+                <div className="tool-menu-title">Layout</div>
+                {hasCustomLayout ? (
+                  <button
+                    type="button"
+                    className="tool-menu-item destructive"
+                    onClick={() => { setToolsOpen(false); setConfirming('reset') }}
+                    aria-label="Reset the saved arrangement to the generated layout"
+                  >
+                    <Undo2 /> Reset saved arrangement
+                  </button>
+                ) : (
+                  <p className="tool-menu-note">Move a node to save your own arrangement.</p>
+                )}
+                {savedNotice && hasCustomLayout && (
+                  <p className="tool-menu-note saved"><Check /> Layout saved</p>
+                )}
+
+                <div className="tool-menu-divider" role="separator" />
+                <div className="tool-menu-title">Your pace</div>
+                <p className="tool-menu-note">
+                  <b>{pace} {pace === 1 ? 'node' : 'nodes'}/week</b> · Level every <b>{xpPerLevel} XP</b> ·
+                  {' '}Order: <b>{mode === 'struggling' ? 'shortest first' : mode === 'fast' ? 'opens the most' : 'syllabus order'}</b>
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ---------------------------------------- floating zoom cluster
+              Zoom, fit, focus, reset. All view-only, so they sit apart from
+              the tool cluster and stay quiet in the corner. */}
+          <div className="zoom-cluster">
+            <button type="button" onClick={() => setZoom(z => Math.max(.35, z - .1))} aria-label="Zoom out"><ZoomOut /></button>
+            <b>{Math.round(zoom * 100)}%</b>
+            <button type="button" onClick={() => setZoom(z => Math.min(1.5, z + .1))} aria-label="Zoom in"><ZoomIn /></button>
+            <span className="zoom-cluster-divider" aria-hidden="true" />
+            <button type="button" onClick={fit} title="Fit skill tree" aria-label="Fit skill tree"><Maximize2 /></button>
+            <button type="button" onClick={reset} title="Reset view" aria-label="Reset view"><RefreshCw /></button>
+            <button type="button" onClick={focusSelected} title="Focus selected skill" aria-label="Focus selected skill" disabled={!selected}><Search /></button>
+          </div>
+
+          {/* ---------------------------------------- chart status footer
+              The one persistently visible strip of text, over the canvas at
+              the bottom. Every readout the student used to see across an XP
+              band and an adaptive strip is here — meter, split, conservation,
+              next up chips — but on one line and without page chrome. */}
+          {validation.isValid && skills.length > 0 && (
+            <div className="chart-footer" role="region" aria-label="Chart status">
+              <div className="chart-footer-row primary">
+                <span className="chart-footer-course">
+                  <Pill>{course.code}</Pill>
+                  <b>{course.title}</b>
+                  <span className="chart-footer-count">{skills.length} skills · {masteredCount} mastered</span>
+                </span>
+                <span className="chart-footer-level"><b>Level {level}</b></span>
+                <span
+                  className="meter-track"
+                  role="progressbar"
+                  aria-valuenow={levelPct}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Level ${level}, ${levelPct}% of the way to level ${level + 1}`}
+                >
+                  <i style={{ width: `${levelPct}%` }} />
+                </span>
+                <span className="chart-footer-xp">
+                  <b>{breakdown.earned.toLocaleString()}</b> / {breakdown.available.toLocaleString()} XP
+                  <span className="chart-footer-next-lvl"> · {xpToNextLevel.toLocaleString()} to L{level + 1}</span>
+                </span>
+                <span className="chart-footer-next">
+                  <span className="chart-footer-next-lbl">Next up:</span>
+                  {nextUp.length === 0 ? (
+                    <span className="chart-footer-empty">Nothing available yet.</span>
+                  ) : nextUp.map(n => (
+                    <button
+                      key={n.id}
+                      type="button"
+                      className="chart-footer-chip"
+                      onClick={() => focusAndSelectNode(n.id)}
+                      aria-label={`Go to ${n.title}, ${totalXpOf(n)} XP`}
+                    >
+                      {n.title}
+                    </button>
+                  ))}
+                </span>
+              </div>
+              <div className="chart-footer-row meta">
+                <span className="chart-footer-split">
+                  Graded {breakdown.graded.earned}/{breakdown.graded.available} XP · Extra practice {breakdown.supplemental.earned}/{breakdown.supplemental.available} XP
+                </span>
+                <span className={breakdown.available === syllabusXp ? 'chart-footer-conserved' : 'chart-footer-off'}>
+                  {breakdown.available === syllabusXp
+                    ? `Chart total ${syllabusXp.toLocaleString()} XP — unchanged by extra practice`
+                    : `Chart total ${breakdown.available.toLocaleString()} XP — the syllabus is worth ${syllabusXp.toLocaleString()} XP`}
+                </span>
+                <span className="chart-footer-legend" aria-label="Node legend">
+                  <span><i className="mastered" />Mastered</span>
+                  <span><i className="active" />In progress</span>
+                  <span><i className="available" />Available</span>
+                  <span><i className="locked" />Locked</span>
+                  <span><i className="supplemental" />Extra practice</span>
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </section>
+
+      {/* Collapsed dock header — appears only when a node is selected and the
+          panel is closed. Clicking it opens the full panel; the small X
+          alongside clears the selection so the dock disappears. */}
+      {dockShown && selected && (
+        <button
+          type="button"
+          className="detail-dock"
+          onClick={() => setPanelOpen(true)}
+          aria-label={`Open details for ${selected.title}`}
+          aria-expanded={false}
+        >
+          <div className={`detail-icon ${currentStatus}`}>
+            {(() => { const I = iconMap[selected.icon || 'code'] || Code2; return <I /> })()}
+          </div>
+          <div className="detail-dock-body">
+            <span className="detail-dock-title">{selected.title}</span>
+            <span className="detail-dock-sub">
+              {statusCopy[currentStatus]} · {totalXpOf(selected).toLocaleString()} XP
+            </span>
+          </div>
+          <ChevronLeft className="detail-dock-chev" aria-hidden="true" />
+          <span
+            role="button"
+            tabIndex={0}
+            className="detail-dock-dismiss"
+            onClick={e => { e.stopPropagation(); setSelectedId('') }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); setSelectedId('') } }}
+            aria-label="Clear selection"
+            title="Clear selection"
+          >
+            <X />
+          </span>
+        </button>
+      )}
 
       <aside className="detail-card" aria-hidden={!panelOpen} style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
         {selected && selectedEligibility ? (
@@ -634,51 +1560,120 @@ function SkillTree({
               </button>
             </div>
 
-            <h2 style={{ fontSize: '18px', fontWeight: 800, margin: '4px 0 2px' }}>{selected.title}</h2>
+            <QuestNameBlock
+              key={selected.id}
+              nodeId={selected.id}
+              syllabusTitle={selected.title}
+              naming={naming[selected.id]}
+              onSave={onSaveOverride}
+            />
 
-            {/* Overview section */}
-            <div className="overview-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0 16px' }}>
-              {selected.moduleName && (
-                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  {selected.moduleName}
+            {/* The missions are the node. They lead the panel because they are
+                the only thing here a student can act on right now; the syllabus
+                description and the prerequisites are reference and sit below. */}
+            {selectedMissions.length > 0 && (
+              <section className="node-missions" aria-labelledby="node-missions-title">
+                <div className="node-missions-head">
+                  <h3 id="node-missions-title">Missions</h3>
+                  <b>{nodeEarned.toLocaleString()} of {nodeTotal.toLocaleString()} XP</b>
+                </div>
+
+                <span
+                  className="meter-track"
+                  role="progressbar"
+                  aria-valuenow={nodePct}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`${selected.title}: ${nodeEarned} of ${nodeTotal} XP earned`}
+                >
+                  <i style={{ width: `${nodePct}%` }} />
                 </span>
-              )}
-              <p style={{ fontSize: '13px', lineHeight: 1.5, margin: 0, color: 'var(--muted-foreground)' }}>
-                {selected.description || 'Master this outcome to unlock advanced challenges in your syllabus path.'}
-              </p>
 
-              {selected.learningObjective && (
-                <div style={{ background: 'rgba(0,0,0,0.03)', padding: '10px 12px', borderRadius: '10px', borderLeft: '3px solid var(--primary)', marginTop: '4px' }}>
-                  <b style={{ fontSize: '10px', textTransform: 'uppercase', display: 'block', color: 'var(--primary)', marginBottom: '2px', letterSpacing: '0.05em' }}>
-                    What you will learn
-                  </b>
-                  <span style={{ fontSize: '12px', color: 'var(--foreground)', lineHeight: 1.4 }}>{selected.learningObjective}</span>
-                </div>
-              )}
+                <p className="node-missions-note">
+                  {currentStatus === 'locked'
+                    ? `Locked — ${selectedEligibility.blockedReason ?? 'master the prerequisites below first.'}`
+                    : missionsLeft === 0
+                      ? 'Every mission is done, so this skill is mastered.'
+                      : `${missionsLeft} of ${selectedMissions.length} missions left. Finishing all of them masters this skill.`}
+                </p>
 
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '6px', fontSize: '12px' }}>
-                <div>
-                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Difficulty</span>
-                  <b style={{ color: 'var(--foreground)' }}>
-                    {selected.difficultyLabel || (selected.difficulty === 1 ? 'Foundational' : selected.difficulty === 3 ? 'Advanced' : 'Intermediate')}
-                  </b>
-                </div>
-                <div>
-                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Reward</span>
-                  <b style={{ color: '#eab308', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                    <Zap style={{ width: '13px', height: '13px' }} /> {selected.xpReward || 150} XP
-                  </b>
-                </div>
-                {selected.estimatedMinutes && (
-                  <div>
-                    <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Est. Time</span>
-                    <b style={{ color: 'var(--foreground)' }}>{selected.estimatedMinutes} min</b>
-                  </div>
+                {selectedHelpXp.total > 0 && (
+                  <p className="node-missions-note">
+                    Extra practice holds {selectedHelpXp.total.toLocaleString()} XP of this total. Finish those
+                    steps on the chart to earn it — the skill is still worth {nodeTotal.toLocaleString()} XP.
+                  </p>
                 )}
+
+                <ul className="mission-list">
+                  {selectedMissions.map(m => {
+                    const done = completedMissionIds.has(m.id)
+                    const blocked = !done && currentStatus === 'locked'
+                    return (
+                      <li key={m.id} className={`mission-row ${done ? 'done' : ''}`}>
+                        <div className="mission-row-body">
+                          <b>{m.title}</b>
+                          <p>{m.description}</p>
+                          <span className="mission-row-meta">
+                            <span>{m.type}</span>
+                            <span>{m.difficulty}</span>
+                            <span>{m.durationMinutes} min</span>
+                            <b>{m.xpReward.toLocaleString()} XP</b>
+                          </span>
+                          {/* State in words, never only in colour or a tick. */}
+                          <span className={`mission-state ${done ? 'done' : ''}`}>
+                            {done ? <Check aria-hidden="true" /> : null}
+                            {done ? 'Marked complete' : blocked ? 'Locked' : 'Not complete'}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className={m.id === nextMissionId && !blocked ? 'primary-action' : 'outline-action'}
+                          onClick={() => onToggleMission(m.id)}
+                          disabled={blocked}
+                          aria-label={done ? `Undo ${m.title}` : `Mark complete: ${m.title}`}
+                        >
+                          {done ? <Undo2 aria-hidden="true" /> : null}
+                          {done ? 'Undo' : 'Mark complete'}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </section>
+            )}
+
+            {/* Adaptive help offer. The engine's main job, so it sits above the
+                mastery action rather than at the bottom of the panel. */}
+            <div className={`help-offer ${selectedOffer?.offer ? 'offered' : ''}`}>
+              <div className="help-offer-head">
+                <HelpCircle style={{ width: '15px', height: '15px' }} />
+                <b>{selectedOffer?.offer ? 'Extra practice would help here' : 'Extra practice'}</b>
               </div>
+              <p>
+                {isSupplemental
+                  ? 'This is a supplemental step. It is not graded, and it carries part of the XP of the skill it scaffolds.'
+                  : selectedOffer?.reason ?? 'Break this skill into smaller steps if it is not landing.'}
+              </p>
+              {!isSupplemental && (
+                <button
+                  type="button"
+                  className={selectedOffer?.offer ? 'primary-action' : 'outline-action'}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                  onClick={() => { setHelpError(null); setConfirming('help') }}
+                  disabled={!canRequestHelp}
+                >
+                  <HelpCircle style={{ width: '15px', height: '15px' }} />
+                  Need extra help
+                </button>
+              )}
             </div>
 
-            {/* Progress and Missions section */}
+            {/* The mastery action for a node that has no missions of its own:
+                every help step, and the five mock datasets that were authored
+                before missions existed. Where missions do exist, the list above
+                is the only way through the node — one skill must not have two
+                different ways to be finished. */}
+            {selectedMissions.length === 0 && (
             <div className="progress-section" style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginBottom: '14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                 <span style={{ fontSize: '12px', fontWeight: 700 }}>
@@ -698,7 +1693,7 @@ function SkillTree({
                     <b style={{ fontSize: '13px', color: 'var(--foreground)' }}>Skill Mastered!</b>
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--muted-foreground)', margin: '0 0 10px' }}>
-                    You earned <b>{selected.xpReward || 150} XP</b> for mastering this learning outcome.
+                    You earned <b>{nodeTotal.toLocaleString()} XP</b> for mastering this learning outcome.
                   </p>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <button
@@ -764,7 +1759,7 @@ function SkillTree({
               ) : (
                 <div style={{ marginTop: '12px' }}>
                   <p style={{ fontSize: '11px', color: 'var(--muted-foreground)', margin: '0 0 8px' }}>
-                    Mastering this skill earns <b>+{selected.xpReward || 150} XP</b> towards your level progression.
+                    Mastering this skill earns <b>+{nodeTotal.toLocaleString()} XP</b> towards your level progression.
                   </p>
                   <button
                     className="primary-action"
@@ -777,6 +1772,7 @@ function SkillTree({
                 </div>
               )}
             </div>
+            )}
 
             {/* Prerequisites section */}
             <div className="prereqs-section" style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginBottom: '14px' }}>
@@ -825,6 +1821,49 @@ function SkillTree({
               )}
             </div>
 
+            {/* Reference: what the syllabus says about this node. Below the
+                work, because it does not change what the student does next. */}
+            <div className="overview-section" style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+              {selected.moduleName && (
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  {selected.moduleName}
+                </span>
+              )}
+              <p style={{ fontSize: '13px', lineHeight: 1.5, margin: 0, color: 'var(--muted-foreground)' }}>
+                {selected.description || 'Master this outcome to unlock advanced challenges in your syllabus path.'}
+              </p>
+
+              {selected.learningObjective && (
+                <div style={{ background: 'rgba(0,0,0,0.03)', padding: '10px 12px', borderRadius: '10px', marginTop: '4px' }}>
+                  <b style={{ fontSize: '10px', textTransform: 'uppercase', display: 'block', color: 'var(--primary)', marginBottom: '2px', letterSpacing: '0.05em' }}>
+                    What you will learn
+                  </b>
+                  <span style={{ fontSize: '12px', color: 'var(--foreground)', lineHeight: 1.4 }}>{selected.learningObjective}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '6px', fontSize: '12px' }}>
+                <div>
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Difficulty</span>
+                  <b style={{ color: 'var(--foreground)' }}>
+                    {selected.difficultyLabel || (selected.difficulty === 1 ? 'Foundational' : selected.difficulty === 3 ? 'Advanced' : 'Intermediate')}
+                  </b>
+                </div>
+                <div>
+                  <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Worth</span>
+                  <b style={{ color: '#eab308', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                    <Zap style={{ width: '13px', height: '13px' }} /> {nodeTotal.toLocaleString()} XP
+                  </b>
+                </div>
+                {selected.estimatedMinutes && (
+                  <div>
+                    <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: 'var(--muted-foreground)', display: 'block' }}>Est. Time</span>
+                    <b style={{ color: 'var(--foreground)' }}>{selected.estimatedMinutes} min</b>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* AI Study Companion Launcher */}
             <div style={{ borderTop: '1px solid var(--border)', paddingTop: '14px', marginTop: 'auto' }}>
               <button
@@ -857,29 +1896,56 @@ function SkillTree({
         )}
       </aside>
 
-      {resetModalOpen && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'grid', placeItems: 'center', padding: '20px' }}>
-          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '16px', padding: '28px', maxWidth: '440px', width: '100%', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
-            <h2 style={{ fontSize: '20px', fontWeight: 800, margin: '0 0 10px' }}>Reset your skill-tree arrangement?</h2>
-            <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: '0 0 24px', lineHeight: 1.5 }}>
-              This returns nodes to the recommended AI-generated layout. Your learning progress will not be affected.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button
-                onClick={() => setResetModalOpen(false)}
-                style={{ padding: '9px 16px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', fontWeight: 700 }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmReset}
-                style={{ padding: '9px 16px', borderRadius: '10px', border: 0, background: '#981e2f', color: '#fff', fontWeight: 800 }}
-              >
-                Reset layout
-              </button>
-            </div>
-          </div>
-        </div>
+      {confirming === 'reset' && (
+        <ConfirmDialog
+          title="Reset your chart arrangement?"
+          confirmLabel="Reset layout"
+          destructive
+          onCancel={() => setConfirming(null)}
+          onConfirm={handleConfirmReset}
+        >
+          <p>
+            This deletes the arrangement you saved and returns every node to the generated
+            layout. Your progress and XP are not affected.
+          </p>
+        </ConfirmDialog>
+      )}
+
+      {confirming === 'static' && (
+        <ConfirmDialog
+          title="Make nodes static again?"
+          confirmLabel="Make nodes static"
+          onCancel={() => setConfirming(null)}
+          onConfirm={showGeneratedLayout}
+        >
+          <p>
+            The chart goes back to the generated layout. Your arrangement is kept — switch nodes
+            to movable again and it returns exactly as you left it.
+          </p>
+          <p>Only “Reset layout” deletes it.</p>
+        </ConfirmDialog>
+      )}
+
+      {confirming === 'help' && selected && (
+        <ConfirmDialog
+          title={`Add extra practice to ${selected.title}?`}
+          confirmLabel="Add extra practice"
+          busy={helpBusy}
+          error={helpError}
+          onCancel={() => { setHelpError(null); setConfirming(null) }}
+          onConfirm={handleConfirmHelp}
+        >
+          <ul>
+            <li>Smaller supplemental steps are added under this skill to scaffold it.</li>
+            <li>They are not graded. Your course is worth exactly what it was worth before.</li>
+            <li>
+              This skill’s {nodeTotal.toLocaleString()} XP is shared out across its missions and the
+              new steps, not added to — up to {Math.round(HELP_SHARE * 100)}% moves down to the
+              steps and the missions keep the rest. The skill stays worth {nodeTotal.toLocaleString()} XP.
+            </li>
+            <li>The steps become prerequisites, so finish them to unlock this skill again.</li>
+          </ul>
+        </ConfirmDialog>
       )}
     </div>
   )
@@ -912,20 +1978,48 @@ function Stat({ icon: Icon, value, label, progress }: { icon: LucideIcon; value:
 
 function Dashboard({
   masteredIds,
-  userXp,
+  courseXp,
   streakDays,
   onToggleMastery,
-  onAskAICompanion
+  missions,
+  onToggleMission,
+  onResliceMissions,
+  onRestoreMissionXp,
+  focusSkillId,
+  onFocusHandled,
+  onAskAICompanion,
+  naming,
+  onNamesGenerated,
+  onSaveOverride,
+  onCourseXp
 }: {
   masteredIds: Set<string>
-  userXp: number
+  courseXp: CourseXpReadout
   streakDays: number
   onToggleMastery: (skillId: string) => void
+  missions: DomainMission[]
+  onToggleMission: (missionId: string) => void
+  onResliceMissions: (rewards: Record<string, number>) => void
+  onRestoreMissionXp: () => void
+  focusSkillId?: string | null
+  onFocusHandled?: () => void
   onAskAICompanion?: (context: AICompanionContext) => void
+  naming: QuestNameMap
+  onNamesGenerated: (names: QuestNaming[]) => void
+  onSaveOverride: (nodeId: string, patch: Pick<QuestNaming, 'titleOverride' | 'achievementTitleOverride'>) => void
+  onCourseXp: (xp: CourseXpReadout) => void
 }) {
   const [selectedDatasetKey, setSelectedDatasetKey] = useState<string>('cs210')
   const [payload, setPayload] = useState<SkillTreePayload | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
+
+  // A deep link from the missions overview names a skill, not a chart.
+  // ponytail: every fixture mission belongs to CS210, so that is the chart to
+  // open. Once missions come back with their tree, the mission carries the
+  // course and this line reads it instead of assuming.
+  useEffect(() => {
+    if (focusSkillId) setSelectedDatasetKey('cs210')
+  }, [focusSkillId])
 
   useEffect(() => {
     let isMounted = true
@@ -939,87 +2033,71 @@ function Dashboard({
     return () => { isMounted = false }
   }, [selectedDatasetKey])
 
-  const currentXp = 2840
-  const currentLevel = 6
-  const nextLevelXp = 4000
-  const remainingXp = nextLevelXp - currentXp
-  const progressPct = 71
-
-  const skillsCount = payload?.nodes.length || 0
-  const masteredCount = payload?.nodes.filter(s => masteredIds.has(s.id)).length || 0
-  const courseMasteryPct = skillsCount > 0 ? Math.round((masteredCount / skillsCount) * 100) : 0
-
+  // The eyebrow, display heading, stats row, and section-title are gone on
+  // this route: everything they carried is now on the chart's own footer or
+  // inside the sidebar's active state. The chart is the whole screen.
   return (
-    <div className="dashboard-page">
-      <PageHead
-        eyebrow="Your learning realm"
-        title="Forge your path, Alex"
-        copy="Every skill is a step forward. Drag nodes to customize your personal layout or reset to AI default anytime."
-      />
-      <div className="stats">
-        <Stat icon={Flame} value={`${streakDays} days`} label="Current streak" />
-        <article className="stat-card">
-          <div><Zap /></div>
-          <div className="xp-card-row">
-            <div className="xp-info">
-              <b>{currentXp.toLocaleString()} XP</b>
-              <span>Level {currentLevel} progress</span>
-            </div>
-            <div className="xp-bar-container">
-              <div className="xp-bar-labels">
-                <span>{remainingXp.toLocaleString()} XP to Level 7</span>
-                <span>{progressPct}%</span>
-              </div>
-              <div className="xp-bar-track">
-                <div className="xp-bar-fill" style={{ width: `${progressPct}%` }} />
-              </div>
-            </div>
-          </div>
-        </article>
-        <Stat icon={Trophy} value={`${masteredCount} skills`} label="Mastered this term" />
-      </div>
-      <div className="section-title">
-        <div>
-          <p>{payload?.course.code || 'CS210'} • {payload?.course.title || 'Skill Map'}</p>
-          <h2>Academic skill tree</h2>
-        </div>
-        <Pill tone="gold">{courseMasteryPct}% course mastery</Pill>
-      </div>
-
+    <div className="dashboard-page dashboard-page--tree">
       {loading || !payload ? (
-        <div className="tree-card" style={{ height: '650px', display: 'grid', placeItems: 'center', color: 'var(--muted-foreground)' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-            <RefreshCw className="animate-spin" style={{ width: '32px', height: '32px', color: 'var(--primary)' }} />
-            <b>Loading syllabus skill tree…</b>
-          </div>
+        <div className="tree-loading" role="status">
+          <RefreshCw className="animate-spin" style={{ width: '32px', height: '32px', color: 'var(--primary)' }} />
+          <b>Loading syllabus skill tree…</b>
         </div>
       ) : (
         <SkillTree
           payload={payload}
           masteredIds={masteredIds}
           onToggleMastery={onToggleMastery}
+          missions={missions}
+          onToggleMission={onToggleMission}
+          onResliceMissions={onResliceMissions}
+          onRestoreMissionXp={onRestoreMissionXp}
+          focusSkillId={focusSkillId}
+          onFocusHandled={onFocusHandled}
           selectedDataset={selectedDatasetKey}
           onSelectDataset={setSelectedDatasetKey}
           onAskAICompanion={onAskAICompanion}
+          naming={naming}
+          onNamesGenerated={onNamesGenerated}
+          onSaveOverride={onSaveOverride}
+          onCourseXp={onCourseXp}
         />
       )}
     </div>
   )
 }
 
+/**
+ * Everything outstanding, across the charts, in one list.
+ *
+ * Read-only on purpose. A mission counts towards the XP of the skill it belongs
+ * to, so it is completed on that skill in the chart, where the student can see
+ * what it moves. Two places to finish the same mission is two places to keep in
+ * step, and one of them would eventually be wrong.
+ */
 function Missions({
   missions,
-  onCompleteMission
+  onOpenSkill
 }: {
   missions: DomainMission[]
-  onCompleteMission: (id: string, xp: number) => void
+  onOpenSkill: (skillId: string) => void
 }) {
   const [filter, setFilter] = useState('all')
   const list = missions.filter(m => filter === 'all' || m.status === filter)
 
+  // ponytail: one chart's titles, because every mission in the fixture belongs
+  // to CS210. When missions arrive with the tree they carry their own course,
+  // and this map becomes a lookup over whatever is loaded.
+  const skillTitle = (skillId: string) =>
+    mockCS210Payload.nodes.find(n => n.id === skillId)?.title ?? skillId
+
   return (
     <>
-      <PageHead eyebrow="Quest log" title="Missions" copy="Turn course concepts into proof of mastery through focused challenges." />
+      <PageHead
+        eyebrow="Quest log"
+        title="Missions"
+        copy="Every mission across your charts. Open one on its skill to mark it complete — that is where the XP lands."
+      />
       <div className="filter-row">
         {['all', 'in-progress', 'available', 'completed'].map(f => (
           <button className={filter === f ? 'active' : ''} onClick={() => setFilter(f)} key={f}>
@@ -1027,31 +2105,33 @@ function Missions({
           </button>
         ))}
       </div>
-      <div className="card-grid">
-        {list.map(m => (
-          <article className="mission-card" key={m.id}>
-            <div>
-              <Pill tone={m.status === 'completed' ? 'gold' : 'default'}>{m.status.replace('-', ' ')}</Pill>
-              <Pill tone="muted">{m.type}</Pill>
-            </div>
-            <h2>{m.title}</h2>
-            <p>{m.description}</p>
-            <footer>
-              <span>{m.durationMinutes} min • {m.xpReward} XP</span>
-              <button
-                onClick={() => {
-                  if (m.status !== 'completed' && m.status !== 'locked') {
-                    onCompleteMission(m.id, m.xpReward)
-                  }
-                }}
-              >
-                {m.status === 'completed' ? 'Review' : m.status === 'locked' ? 'Locked' : 'Complete mission'}
-                <ChevronRight />
-              </button>
-            </footer>
-          </article>
-        ))}
-      </div>
+      {list.length === 0 ? (
+        <p className="mission-empty">Nothing here yet — pick another filter, or open a skill on the chart to start one.</p>
+      ) : (
+        <div className="card-grid">
+          {list.map(m => (
+            <article className="mission-card" key={m.id}>
+              <div>
+                <Pill tone={m.status === 'completed' ? 'gold' : 'default'}>{m.status.replace('-', ' ')}</Pill>
+                <Pill tone="muted">{m.type}</Pill>
+              </div>
+              <h2>{m.title}</h2>
+              <span className="mission-skill">Part of {skillTitle(m.skillId)}</span>
+              <p>{m.description}</p>
+              <footer>
+                <span>{m.durationMinutes} min • {m.xpReward.toLocaleString()} XP</span>
+                <button
+                  onClick={() => onOpenSkill(m.skillId)}
+                  aria-label={`Open ${skillTitle(m.skillId)} in the skill tree`}
+                >
+                  Open in skill tree
+                  <ChevronRight />
+                </button>
+              </footer>
+            </article>
+          ))}
+        </div>
+      )}
     </>
   )
 }
@@ -1147,7 +2227,7 @@ function Companion({
       <div className="chat-card">
         <div className="chat-top" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div><Bot /></div>
+            <div className="chat-avatar"><Bot /></div>
             <p>
               <b>Cardinal AI Companion</b>
               <span>
@@ -1189,16 +2269,65 @@ function Companion({
   )
 }
 
-function Achievements() {
+function Achievements({
+  naming,
+  masteredIds
+}: {
+  naming: QuestNameMap
+  masteredIds: Set<string>
+}) {
+  // One badge per named quest. The title is the instructor's if they typed one,
+  // otherwise the generated one, and the tag says which.
+  const questBadges = Object.values(naming)
+  const unlockedQuests = questBadges.filter(n => masteredIds.has(n.nodeId)).length
+  const milestoneUnlocked = prototypeData.achievements.filter(a => a.unlockedAt).length
+  const total = questBadges.length + prototypeData.achievements.length
+
   return (
     <>
       <PageHead eyebrow="Milestones" title="Achievements" copy="A record of your momentum, consistency, and academic growth." />
       <div className="achievement-hero">
         <Trophy />
         <div>
-          <Pill tone="gold">2 of 4 unlocked</Pill>
+          <Pill tone="gold">{unlockedQuests + milestoneUnlocked} of {total} unlocked</Pill>
           <h2>Your effort is becoming expertise.</h2>
-          <p>Keep your streak alive and master the Trees branch to reveal your next rare badge.</p>
+          <p>
+            {questBadges.length === 0
+              ? 'Name the quests on your chart and every skill earns a badge you can rename.'
+              : 'Master a skill and its badge unlocks. Rename any badge from the skill details panel.'}
+          </p>
+        </div>
+      </div>
+      {questBadges.length > 0 && (
+        <>
+          <div className="section-title">
+            <div>
+              <p>From your chart</p>
+              <h2>Quest badges</h2>
+            </div>
+            <Pill tone="muted">{unlockedQuests} of {questBadges.length} unlocked</Pill>
+          </div>
+          <div className="card-grid">
+            {questBadges.map(n => {
+              const unlocked = masteredIds.has(n.nodeId)
+              const badge = achievementTitleOf(n, n.nodeId)
+              return (
+                <article className={`achievement-card ${unlocked ? '' : 'locked'}`} key={n.nodeId}>
+                  <div>{unlocked ? <Award /> : <Lock />}</div>
+                  <NameSourceTag source={badge.source} />
+                  <h2>{badge.text}</h2>
+                  <p>{n.achievementDescription}</p>
+                  <span>{unlocked ? 'Unlocked' : 'Still hidden'}</span>
+                </article>
+              )
+            })}
+          </div>
+        </>
+      )}
+      <div className="section-title">
+        <div>
+          <p>Across your term</p>
+          <h2>Milestones</h2>
         </div>
       </div>
       <div className="card-grid">
@@ -1216,164 +2345,549 @@ function Achievements() {
   )
 }
 
+/**
+ * Two ways to build a chart, one pipeline.
+ *
+ * The AI parser and the instructor produce the same node shape and hand it to
+ * the same three steps: `validateSkillGraph`, then `computeAutoLayout`, then
+ * publish. A tree an instructor typed by hand can fail on a cycle or a dangling
+ * prerequisite exactly like the model's output can, and it is reported the same
+ * way. There is no weaker second path.
+ */
+type SyllabusMode = 'choose' | 'ai' | 'manual'
+
+const NODE_KINDS: { value: NodeKind; label: string }[] = [
+  { value: 'topic', label: 'Topic' },
+  { value: 'reading', label: 'Reading' },
+  { value: 'assignment', label: 'Assignment' },
+  { value: 'assessment', label: 'Assessment' },
+  { value: 'project', label: 'Project' }
+]
+
+const MAX_NODE_XP = 2000
+
+interface NodeFormState {
+  title: string
+  description: string
+  kind: NodeKind
+  xpReward: string
+  prerequisiteIds: string[]
+}
+
+const emptyNodeForm: NodeFormState = {
+  title: '',
+  description: '',
+  kind: 'topic',
+  xpReward: '150',
+  prerequisiteIds: []
+}
+
+/** Slug from the title, kept unique against the ids already in the draft. */
+function nodeIdFrom(title: string, taken: Set<string>): string {
+  const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 32) || 'node'
+  if (!taken.has(base)) return base
+  let n = 2
+  while (taken.has(`${base}_${n}`)) n++
+  return `${base}_${n}`
+}
+
+/**
+ * The chart the pipeline produced, drawn from `computeAutoLayout`'s own
+ * coordinates. Not a second renderer: dots and hairlines only, enough to show
+ * that the layout ran and where the roots are.
+ */
+function LayoutPreview({ layout }: { layout: ReturnType<typeof computeAutoLayout> }) {
+  const positions = new Map(layout.nodes.map(n => [n.id, n.position]))
+  const edges = layout.nodes.flatMap(n =>
+    (n.prerequisiteIds || [])
+      .filter(p => positions.has(p))
+      .map(p => ({ key: `${p}->${n.id}`, from: positions.get(p)!, to: n.position }))
+  )
+
+  return (
+    <svg
+      className="layout-preview"
+      viewBox={`0 0 ${layout.width} ${layout.height}`}
+      role="img"
+      aria-label={`Chart preview: ${layout.nodes.length} ${layout.nodes.length === 1 ? 'node' : 'nodes'} and ${edges.length} prerequisite ${edges.length === 1 ? 'link' : 'links'}, laid out top to bottom.`}
+    >
+      {edges.map(e => (
+        <line key={e.key} x1={e.from.x} y1={e.from.y} x2={e.to.x} y2={e.to.y} />
+      ))}
+      {layout.nodes.map(n => (
+        <circle key={n.id} cx={n.position.x} cy={n.position.y} r={18} />
+      ))}
+    </svg>
+  )
+}
+
 function Syllabus({ onPublishSyllabus }: { onPublishSyllabus: () => void }) {
+  const [mode, setMode] = useState<SyllabusMode>('choose')
+  const [draft, setDraft] = useState<DomainSkillNode[]>([])
+  const [published, setPublished] = useState(false)
+
+  // AI path
   const [selectedFile, setSelectedFile] = useState<{ name: string; size: string } | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
-  const [published, setPublished] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Manual path
+  const [form, setForm] = useState<NodeFormState>(emptyNodeForm)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  // ------------------------------------------------------------- the pipeline
+  // Both paths land here. Same validator, same layout engine, same publish.
+  const validation = useMemo(() => validateSkillGraph(draft), [draft])
+  const layout = useMemo(
+    () => (validation.isValid && draft.length > 0 ? computeAutoLayout(draft, { rankSep: 95, nodeSep: 75 }) : null),
+    [draft, validation.isValid]
+  )
+  const draftXp = draft.reduce((sum, n) => sum + (n.xpReward ?? 0), 0)
+
+  const handleFile = (f: File) => {
+    const sizeMB = (f.size / (1024 * 1024)).toFixed(1)
+    setSelectedFile({ name: f.name, size: `${sizeMB} MB` })
+  }
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const f = e.target.files[0]
-      const sizeMB = (f.size / (1024 * 1024)).toFixed(1)
-      setSelectedFile({ name: f.name, size: `${sizeMB} MB` })
-    }
+    if (e.target.files && e.target.files[0]) handleFile(e.target.files[0])
   }
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const f = e.dataTransfer.files[0]
-      const sizeMB = (f.size / (1024 * 1024)).toFixed(1)
-      setSelectedFile({ name: f.name, size: `${sizeMB} MB` })
-    }
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0])
   }
 
   const handleAnalyze = () => {
     setAnalyzing(true)
+    // ponytail: the parse is mocked with the CS210 dataset, so the AI path
+    // hands the review step a real node list instead of a spinner and a promise.
+    // The real one is `supabase/functions/parse-syllabus`; swapping it in
+    // changes this call and nothing downstream of it.
     setTimeout(() => {
       setAnalyzing(false)
-      setPublished(true)
-      onPublishSyllabus()
+      setDraft(mockCS210Payload.nodes)
     }, 1200)
   }
 
-  const handleReset = () => {
-    setSelectedFile(null)
+  const startNewNode = () => {
+    setEditingId(null)
+    setForm(emptyNodeForm)
+    setFormError(null)
+  }
+
+  const startEditNode = (node: DomainSkillNode) => {
+    setEditingId(node.id)
+    setForm({
+      title: node.title,
+      description: node.description ?? '',
+      kind: node.kind ?? 'topic',
+      xpReward: String(node.xpReward ?? 150),
+      prerequisiteIds: node.prerequisiteIds ?? []
+    })
+    setFormError(null)
+  }
+
+  const submitNode = (e: React.FormEvent) => {
+    e.preventDefault()
+    const title = form.title.trim()
+    if (!title) {
+      setFormError('Enter a title for this node, then add it again.')
+      return
+    }
+    const xp = Number(form.xpReward)
+    if (!Number.isInteger(xp) || xp < 1 || xp > MAX_NODE_XP) {
+      setFormError(`Enter a whole XP reward between 1 and ${MAX_NODE_XP}.`)
+      return
+    }
+
+    setFormError(null)
+    if (editingId) {
+      setDraft(prev => prev.map(n => n.id === editingId
+        ? { ...n, title, description: form.description.trim(), kind: form.kind, xpReward: xp, prerequisiteIds: form.prerequisiteIds }
+        : n))
+    } else {
+      const id = nodeIdFrom(title, new Set(draft.map(n => n.id)))
+      setDraft(prev => [...prev, {
+        id,
+        title,
+        description: form.description.trim(),
+        kind: form.kind,
+        xpReward: xp,
+        prerequisiteIds: form.prerequisiteIds,
+        status: 'available',
+        progress: 0
+      }])
+    }
+    setEditingId(null)
+    setForm(emptyNodeForm)
+  }
+
+  const deleteNode = (id: string) => {
+    // Prerequisite references to the deleted node are left alone on purpose:
+    // that is a dangling reference, and `validateSkillGraph` below names it in
+    // the review step the same way it names one the parser produced.
+    setDraft(prev => prev.filter(n => n.id !== id))
+    if (editingId === id) startNewNode()
+  }
+
+  const togglePrereq = (id: string) => {
+    setForm(prev => ({
+      ...prev,
+      prerequisiteIds: prev.prerequisiteIds.includes(id)
+        ? prev.prerequisiteIds.filter(p => p !== id)
+        : [...prev.prerequisiteIds, id]
+    }))
+  }
+
+  const handlePublish = () => {
+    setPublished(true)
+    onPublishSyllabus()
+  }
+
+  const startOver = () => {
+    setMode('choose')
+    setDraft([])
     setPublished(false)
+    setSelectedFile(null)
+    setAnalyzing(false)
+    startNewNode()
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
+
+  const step = published ? 4 : draft.length > 0 ? 3 : mode === 'choose' ? 1 : 2
+  const steps = ['Choose how to start', 'Add outcomes', 'Review the chart', 'Publish the pathway']
 
   return (
     <div className="import-page-container">
       <PageHead
         eyebrow="COURSE SETUP WORKFLOW"
-        title="Import your syllabus"
-        copy="Transform a course outline into a navigable skill path. You stay in control before anything is published."
+        title="Build your skill tree"
+        copy="Let the parser read a syllabus, or lay the nodes out yourself. Both go through the same checks before anything is published."
       />
 
       <div className="import-stepper-bar" aria-label="Course setup progression">
-        <div className={`step-item ${!published ? 'active' : ''}`}>
-          <i className="step-num">1</i>
-          <span>Upload Syllabus</span>
-        </div>
-        <div className="step-divider" />
-        <div className={`step-item ${analyzing || published ? 'active' : ''}`}>
-          <i className="step-num">2</i>
-          <span>Extract Outcomes</span>
-        </div>
-        <div className="step-divider" />
-        <div className={`step-item ${published ? 'active' : ''}`}>
-          <i className="step-num">3</i>
-          <span>Review Skill Tree</span>
-        </div>
-        <div className="step-divider" />
-        <div className={`step-item ${published ? 'active' : ''}`}>
-          <i className="step-num">4</i>
-          <span>Publish Pathway</span>
-        </div>
+        {steps.map((label, i) => (
+          <Fragment key={label}>
+            {i > 0 && <div className="step-divider" />}
+            <div className={`step-item ${step >= i + 1 ? 'active' : ''}`} aria-current={step === i + 1 ? 'step' : undefined}>
+              <i className="step-num">{i + 1}</i>
+              <span>{label}</span>
+            </div>
+          </Fragment>
+        ))}
       </div>
 
       <div className="import-grid">
         <section className="import-card">
-          {!selectedFile ? (
-            <div
-              className={`upload-dropzone ${isDragging ? 'dragging' : ''}`}
-              onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.doc,.docx"
-                onChange={handleFileChange}
-                aria-label="Upload syllabus file"
-              />
-              <div className="dropzone-icon-box">
-                <UploadCloud />
-              </div>
-              <h2 className="dropzone-title">Drop your syllabus here</h2>
-              <p className="dropzone-sub">
-                Upload your official course syllabus to automatically extract learning outcomes, modules, and prerequisites.
+          {mode === 'choose' && (
+            <>
+              <h2 style={{ fontSize: '18px', fontWeight: 800 }}>How do you want to start?</h2>
+              <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: 0 }}>
+                Both routes produce the same nodes, run the same graph checks, and use the same
+                auto-layout. Pick whichever you have to hand.
               </p>
-              <div className="format-pills">
-                <Pill tone="muted">PDF</Pill>
-                <Pill tone="muted">DOCX</Pill>
-                <Pill tone="muted">Max 10 MB</Pill>
+              <div className="mode-choice">
+                <button type="button" className="mode-card" onClick={() => setMode('ai')}>
+                  <Sparkles />
+                  <b>Parse a syllabus with AI</b>
+                  <span>Upload a PDF or DOCX and let the parser pull out outcomes and prerequisites.</span>
+                </button>
+                <button type="button" className="mode-card" onClick={() => { setMode('manual'); startNewNode() }}>
+                  <Plus />
+                  <b>Build the tree myself</b>
+                  <span>Add each node by hand and set which ones come first. Same fields, same checks.</span>
+                </button>
               </div>
-              <button
-                type="button"
-                className="primary-action"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <FileUp style={{ width: '16px', height: '16px' }} />
-                Choose a file
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div className="file-selected-box">
-                <div className="file-icon-badge">
-                  <FileText style={{ width: '24px', height: '24px' }} />
+            </>
+          )}
+
+          {mode === 'ai' && draft.length === 0 && (
+            <>
+              {!selectedFile ? (
+                <div
+                  className={`upload-dropzone ${isDragging ? 'dragging' : ''}`}
+                  onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.doc,.docx"
+                    onChange={handleFileChange}
+                    aria-label="Upload syllabus file"
+                  />
+                  <div className="dropzone-icon-box">
+                    <UploadCloud />
+                  </div>
+                  <h2 className="dropzone-title">Drop your syllabus here</h2>
+                  <p className="dropzone-sub">
+                    Upload your official course syllabus to automatically extract learning outcomes, modules, and prerequisites.
+                  </p>
+                  <div className="format-pills">
+                    <Pill tone="muted">PDF</Pill>
+                    <Pill tone="muted">DOCX</Pill>
+                    <Pill tone="muted">Max 10 MB</Pill>
+                  </div>
+                  <button
+                    type="button"
+                    className="primary-action"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <FileUp style={{ width: '16px', height: '16px' }} />
+                    Choose a file
+                  </button>
                 </div>
-                <div className="file-details">
-                  <b>{selectedFile.name}</b>
-                  <span>{selectedFile.size} • Ready for AI extraction</span>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                  <div className="file-selected-box">
+                    <div className="file-icon-badge">
+                      <FileText style={{ width: '24px', height: '24px' }} />
+                    </div>
+                    <div className="file-details">
+                      <b>{selectedFile.name}</b>
+                      <span>{selectedFile.size} • Ready for AI extraction</span>
+                    </div>
+                    <Pill tone="default">Ready</Pill>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="primary-action"
+                      disabled={analyzing}
+                      onClick={handleAnalyze}
+                      style={{ flex: 1 }}
+                    >
+                      {analyzing ? (
+                        <>
+                          <RefreshCw className="animate-spin" style={{ width: '16px', height: '16px' }} />
+                          Extracting outcomes…
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles style={{ width: '16px', height: '16px' }} />
+                          Analyze and generate skill tree
+                          <ChevronRight style={{ width: '16px', height: '16px' }} />
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="outline-action"
+                      onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+                    >
+                      Choose a different file
+                    </button>
+                  </div>
                 </div>
-                <Pill tone={published ? 'gold' : 'default'}>
-                  {published ? 'Published' : 'Ready'}
-                </Pill>
+              )}
+            </>
+          )}
+
+          {mode === 'manual' && (
+            <>
+              <div className="section-title" style={{ margin: 0 }}>
+                <div>
+                  <p>{draft.length} {draft.length === 1 ? 'node' : 'nodes'} • {draftXp.toLocaleString()} XP</p>
+                  <h2>Your nodes</h2>
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+              {draft.length === 0 ? (
+                <p style={{ fontSize: '13px', color: 'var(--muted-foreground)', margin: 0 }}>
+                  No nodes yet — add the first outcome below and it becomes the root of the chart.
+                </p>
+              ) : (
+                <ul className="draft-node-list">
+                  {draft.map(n => (
+                    <li key={n.id} className={editingId === n.id ? 'editing' : ''}>
+                      <div>
+                        <b>{n.title}</b>
+                        <span>
+                          {NODE_KINDS.find(k => k.value === n.kind)?.label ?? 'Topic'} • {n.xpReward} XP •{' '}
+                          {n.prerequisiteIds.length === 0
+                            ? 'no prerequisites'
+                            : `after ${n.prerequisiteIds.map(p => draft.find(d => d.id === p)?.title ?? p).join(', ')}`}
+                        </span>
+                      </div>
+                      <button type="button" className="outline-action" onClick={() => startEditNode(n)} aria-label={`Edit ${n.title}`}>
+                        <Pencil style={{ width: '14px', height: '14px' }} />
+                        Edit
+                      </button>
+                      <button type="button" className="outline-action" onClick={() => deleteNode(n.id)} aria-label={`Delete ${n.title}`}>
+                        <Trash2 style={{ width: '14px', height: '14px' }} />
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* noValidate: the browser's own bubble would win on the XP field
+                  and leave the empty-title case unreported. One validator, one
+                  message, announced as an alert. */}
+              <form className="node-form" onSubmit={submitNode} noValidate>
+                <h3 style={{ fontSize: '14px', fontWeight: 800 }}>
+                  {editingId ? 'Edit this node' : 'Add a node'}
+                </h3>
+
+                <div className="form-group">
+                  <label htmlFor="node-title">Title</label>
+                  <input
+                    id="node-title"
+                    type="text"
+                    value={form.title}
+                    onChange={e => setForm({ ...form, title: e.target.value })}
+                    placeholder="Recursion and induction"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="node-description">Description</label>
+                  <textarea
+                    id="node-description"
+                    rows={2}
+                    value={form.description}
+                    onChange={e => setForm({ ...form, description: e.target.value })}
+                    placeholder="What a student can do once they finish this node."
+                  />
+                </div>
+
+                <div className="node-form-row">
+                  <div className="form-group">
+                    <label htmlFor="node-kind">Kind</label>
+                    <select
+                      id="node-kind"
+                      value={form.kind}
+                      onChange={e => setForm({ ...form, kind: e.target.value as NodeKind })}
+                    >
+                      {NODE_KINDS.map(k => <option key={k.value} value={k.value}>{k.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="node-xp">XP reward</label>
+                    <input
+                      id="node-xp"
+                      type="number"
+                      min={1}
+                      max={MAX_NODE_XP}
+                      value={form.xpReward}
+                      onChange={e => setForm({ ...form, xpReward: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <fieldset className="prereq-picker">
+                  <legend>Prerequisites</legend>
+                  {draft.filter(n => n.id !== editingId).length === 0 ? (
+                    <p>Nothing to depend on yet. The first node has no prerequisites.</p>
+                  ) : (
+                    draft.filter(n => n.id !== editingId).map(n => (
+                      <label key={n.id}>
+                        <input
+                          type="checkbox"
+                          checked={form.prerequisiteIds.includes(n.id)}
+                          onChange={() => togglePrereq(n.id)}
+                        />
+                        {n.title}
+                      </label>
+                    ))
+                  )}
+                </fieldset>
+
+                {formError && <p className="confirm-error" role="alert">{formError}</p>}
+
+                <div className="quest-name-actions">
+                  {editingId && (
+                    <button type="button" className="outline-action" onClick={startNewNode}>Cancel edit</button>
+                  )}
+                  <button type="submit" className="primary-action">
+                    <Plus style={{ width: '15px', height: '15px' }} />
+                    {editingId ? 'Save this node' : 'Add this node'}
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
+
+          {/* -------------------------------------------------- review, both paths */}
+          {draft.length > 0 && (
+            <div className="review-block">
+              <div className="section-title" style={{ margin: 0 }}>
+                <div>
+                  <p>{mode === 'manual' ? 'Built by you' : 'Extracted by the parser'}</p>
+                  <h2>Review the chart</h2>
+                </div>
+                <Pill tone={published ? 'gold' : 'default'}>{published ? 'Published' : 'Not published'}</Pill>
+              </div>
+
+              {!validation.isValid ? (
+                <div role="alert" className="review-errors">
+                  <b>
+                    <AlertTriangle style={{ width: '16px', height: '16px' }} />
+                    This chart can’t be laid out yet
+                  </b>
+                  {validation.errors.map((err, i) => (
+                    <div key={i}>
+                      <b>{err.message}</b>
+                      <span>{err.details}</span>
+                    </div>
+                  ))}
+                  <span className="review-fix">
+                    {mode === 'manual'
+                      ? 'Edit the nodes above to remove the loop or the missing prerequisite, then review again.'
+                      : 'Switch to building it yourself to repair the nodes, or upload a cleaner syllabus.'}
+                  </span>
+                </div>
+              ) : layout ? (
+                <>
+                  <p className="review-summary">
+                    {draft.length} nodes • {draftXp.toLocaleString()} XP total • no cycles, no missing
+                    prerequisites • laid out at {layout.width}×{layout.height}.
+                  </p>
+                  <LayoutPreview layout={layout} />
+                </>
+              ) : null}
+
+              <div className="quest-name-actions">
+                <button type="button" className="outline-action" onClick={startOver}>Start over</button>
                 <button
                   type="button"
                   className="primary-action"
-                  disabled={analyzing}
-                  onClick={handleAnalyze}
-                  style={{ flex: 1 }}
+                  onClick={handlePublish}
+                  disabled={!validation.isValid || published}
                 >
-                  {analyzing ? (
-                    <>
-                      <RefreshCw className="animate-spin" style={{ width: '16px', height: '16px' }} />
-                      Extracting outcomes…
-                    </>
-                  ) : published ? (
+                  {published ? (
                     <>
                       <CheckCircle2 style={{ width: '16px', height: '16px' }} />
-                      Skill Tree Published!
+                      Pathway published
                     </>
                   ) : (
                     <>
-                      <Sparkles style={{ width: '16px', height: '16px' }} />
-                      Analyze & generate skill tree
+                      Publish the pathway
                       <ChevronRight style={{ width: '16px', height: '16px' }} />
                     </>
                   )}
                 </button>
-
-                <button
-                  type="button"
-                  className="outline-action"
-                  onClick={handleReset}
-                >
-                  Choose different file
-                </button>
               </div>
+              {published && (
+                <p role="status" className="review-summary">
+                  Published. Open the skill tree to see the chart.
+                </p>
+              )}
             </div>
+          )}
+
+          {mode !== 'choose' && draft.length === 0 && (
+            <button type="button" className="outline-action" style={{ alignSelf: 'flex-start' }} onClick={startOver}>
+              Choose a different way to start
+            </button>
           )}
 
           <div style={{ fontSize: '12px', color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1384,37 +2898,37 @@ function Syllabus({ onPublishSyllabus }: { onPublishSyllabus: () => void }) {
 
         <aside className="info-cards-stack">
           <div className="import-card">
-            <Pill tone="gold">AI PARSER PIPELINE</Pill>
+            <Pill tone="gold">ONE PIPELINE</Pill>
             <h3 style={{ fontSize: '18px', fontWeight: 800, margin: '4px 0 12px' }}>How it works</h3>
             <div className="how-steps-list">
               <div className="how-step-row">
                 <span className="how-step-num">01</span>
                 <div className="how-step-content">
-                  <b>Upload syllabus</b>
-                  <p>Drop your official PDF or DOCX course outline.</p>
+                  <b>Choose how to start</b>
+                  <p>Upload a syllabus, or add the nodes yourself.</p>
                 </div>
               </div>
 
               <div className="how-step-row">
                 <span className="how-step-num">02</span>
                 <div className="how-step-content">
-                  <b>AI outcome extraction</b>
-                  <p>Claude AI identifies topics, modules, and prerequisites.</p>
+                  <b>Write the nodes</b>
+                  <p>Title, description, kind, XP, and what comes first — the same fields either way.</p>
                 </div>
               </div>
 
               <div className="how-step-row">
                 <span className="how-step-num">03</span>
                 <div className="how-step-content">
-                  <b>Review skill tree</b>
-                  <p>Inspect the auto-layout graph and adjust node positions.</p>
+                  <b>Check and lay out</b>
+                  <p>Cycles and missing prerequisites are caught here, whoever wrote the nodes.</p>
                 </div>
               </div>
 
               <div className="how-step-row">
                 <span className="how-step-num">04</span>
                 <div className="how-step-content">
-                  <b>Publish pathway</b>
+                  <b>Publish the pathway</b>
                   <p>Unlock student missions, earn XP, and track mastery.</p>
                 </div>
               </div>
@@ -1424,7 +2938,7 @@ function Syllabus({ onPublishSyllabus }: { onPublishSyllabus: () => void }) {
           <div className="privacy-banner">
             <ShieldCheck />
             <div>
-              <b style={{ display: 'block', marginBottom: '2px' }}>Student Privacy & FERPA Bound</b>
+              <b style={{ display: 'block', marginBottom: '2px' }}>Student Privacy &amp; FERPA Bound</b>
               <span style={{ color: 'var(--muted-foreground)' }}>Your syllabus is processed securely to generate your personal learning pathway. Course records remain confidential.</span>
             </div>
           </div>
@@ -1437,12 +2951,14 @@ function Syllabus({ onPublishSyllabus }: { onPublishSyllabus: () => void }) {
 function Profile({
   profile,
   onSaveProfile,
-  userXp,
+  courseXp,
+  masteredCount,
   streakDays
 }: {
   profile: StudentProfile
   onSaveProfile: (p: StudentProfile) => void
-  userXp: number
+  courseXp: CourseXpReadout
+  masteredCount: number
   streakDays: number
 }) {
   const [isEditing, setIsEditing] = useState(false)
@@ -1455,7 +2971,6 @@ function Profile({
     setFormData(profile)
   }, [profile])
 
-  const level = levelForXp(userXp)
   const initials = formData.fullName
     .split(' ')
     .map(n => n[0])
@@ -1523,17 +3038,18 @@ function Profile({
             </div>
           </div>
 
+          {/* Same source as the chart meter and the dashboard header. */}
           <div className="profile-stats-grid">
             <div className="profile-stat-item">
-              <b>{level}</b>
+              <b>{courseXp.level}</b>
               <span>Level</span>
             </div>
             <div className="profile-stat-item">
-              <b>{userXp.toLocaleString()}</b>
-              <span>Total XP</span>
+              <b>{courseXp.earned.toLocaleString()}</b>
+              <span>XP on this chart</span>
             </div>
             <div className="profile-stat-item">
-              <b>13</b>
+              <b>{masteredCount}</b>
               <span>Mastered</span>
             </div>
             <div className="profile-stat-item">
@@ -1722,7 +3238,18 @@ function Setting({ title, copy, on, set }: { title: string; copy: string; on: bo
   return (
     <div className="setting">
       <div><b>{title}</b><p>{copy}</p></div>
-      <button role="switch" aria-checked={on} className={on ? 'on' : ''} onClick={() => set?.(!on)}><i /></button>
+      {/* The label is the setting's own title: the switch is a bare <i/>, so
+          without this a screen reader announces only "switch, on". */}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={title}
+        className={on ? 'on' : ''}
+        onClick={() => set?.(!on)}
+      >
+        <i />
+      </button>
     </div>
   )
 }
@@ -1873,6 +3400,17 @@ export function CardinalApp() {
   const [menu, setMenu] = useState(false)
   const [companionContext, setCompanionContext] = useState<AICompanionContext | null>(null)
 
+  // The rail collapse choice is persisted; the default is collapsed so the
+  // chart is the hero out of the box. Hydration reads the stored value once
+  // — SSR paint always matches the pre-hydration DOM.
+  const [sidebarCollapsed, setSidebarCollapsedState] = useState(true)
+  useEffect(() => { setSidebarCollapsedState(shellCollapseStorage.load().sidebarCollapsed) }, [])
+  const setSidebarCollapsed = (v: boolean) => {
+    setSidebarCollapsedState(v)
+    const current = shellCollapseStorage.load()
+    shellCollapseStorage.save({ ...current, sidebarCollapsed: v })
+  }
+
   // Profile State Single Source of Truth
   const [profile, setProfile] = useState<StudentProfile>(() => {
     return profileStorageAdapter.loadProfile('usr_alex')
@@ -1882,9 +3420,76 @@ export function CardinalApp() {
   const [masteredIds, setMasteredIds] = useState<Set<string>>(
     new Set(['skill_1', 'skill_2', 'skill_3', 'skill_4', 'skill_5', 'skill_6', 'l1', 'l2', 'l3', 'r1', 'r2', 'w_1', 'w_2', 'w_3', 'w_4', 'w_5'])
   )
-  const [userXp, setUserXp] = useState<number>(prototypeData.user.xp)
   const [streakDays, setStreakDays] = useState<number>(prototypeData.user.streakDays)
   const [missions, setMissions] = useState<DomainMission[]>(prototypeData.missions)
+
+  /**
+   * Mission XP after a "need extra help" request re-sliced it, by mission id.
+   *
+   * Kept beside the missions rather than written into them, so the fixture stays
+   * the fixture and clearing this restores the original split exactly.
+   */
+  const [missionXp, setMissionXp] = useState<Record<string, number>>({})
+  const effectiveMissions = useMemo(
+    () => missions.map(m => (missionXp[m.id] === undefined ? m : { ...m, xpReward: missionXp[m.id] })),
+    [missions, missionXp]
+  )
+
+  /** Where a deep link from the missions overview wants the chart to land. */
+  const [focusSkillId, setFocusSkillId] = useState<string | null>(null)
+
+  /**
+   * The one XP number, computed from the chart. Seeded from the default course
+   * so the sidebar and profile page have a real figure before the chart mounts,
+   * then kept current by the chart itself — including its help subtrees and the
+   * learner's personal XP-per-level.
+   */
+  const [courseXp, setCourseXp] = useState<CourseXpReadout>(() =>
+    readCourseXp(mockCS210Payload.nodes, masteredIds, XP_PER_LEVEL)
+  )
+
+  // Generated quest names and the titles an instructor typed over them.
+  const [naming, setNaming] = useState<QuestNameMap>({})
+  useEffect(() => { setNaming(questNameStorageAdapter.loadNames('usr_alex')) }, [])
+
+  const persistNaming = (next: QuestNameMap) => {
+    setNaming(next)
+    questNameStorageAdapter.saveNames('usr_alex', next)
+  }
+
+  const handleNamesGenerated = (names: QuestNaming[]) => {
+    const next = { ...naming }
+    for (const name of names) {
+      // The overrides are carried over rather than replaced. The repository
+      // already leaves an overridden node out of the batch; this is the same
+      // re-check `name-quest` does at write time, for an override typed while
+      // the request was in flight.
+      next[name.nodeId] = {
+        ...name,
+        titleOverride: naming[name.nodeId]?.titleOverride ?? null,
+        achievementTitleOverride: naming[name.nodeId]?.achievementTitleOverride ?? null
+      }
+    }
+    persistNaming(next)
+  }
+
+  const handleSaveOverride = (
+    nodeId: string,
+    patch: Pick<QuestNaming, 'titleOverride' | 'achievementTitleOverride'>
+  ) => {
+    const existing = naming[nodeId]
+    persistNaming({
+      ...naming,
+      [nodeId]: {
+        nodeId,
+        title: existing?.title ?? '',
+        subtitle: existing?.subtitle ?? '',
+        achievementTitle: existing?.achievementTitle ?? '',
+        achievementDescription: existing?.achievementDescription ?? '',
+        ...patch
+      }
+    })
+  }
 
   const handleSaveProfile = (updatedProfile: StudentProfile) => {
     setProfile(updatedProfile)
@@ -1905,40 +3510,67 @@ export function CardinalApp() {
       }
     }
 
+    // No separate XP counter to bump: the node's own reward is already in the
+    // chart, and every readout derives from what is mastered.
     setMasteredIds(prev => {
       const next = new Set(prev)
       if (next.has(skillId)) {
         next.delete(skillId)
       } else {
         next.add(skillId)
-        setUserXp(curr => curr + 150)
       }
       return next
     })
   }
 
-  const handleCompleteMission = (missionId: string, xpReward: number) => {
+  /**
+   * Mark one mission complete, or undo it, and let the node follow.
+   *
+   * Mastery is not set here so much as recomputed: a node is mastered when all
+   * of its missions are done, so completing the last one masters it and undoing
+   * any one of them takes it back. `masteredIds` stays the single set every
+   * status derives from — there is no second idea of "finished".
+   */
+  const handleToggleMission = (missionId: string) => {
     const mission = missions.find(m => m.id === missionId)
-    if (mission?.skillId && !masteredIds.has(mission.skillId)) {
+    if (!mission) return
+
+    const completing = mission.status !== 'completed'
+    if (completing && !masteredIds.has(mission.skillId)) {
+      // Backstop. The panel disables the control on a locked node, so this only
+      // fires if something else reaches the handler.
       const eligibility = evaluateSkillUnlockState(mission.skillId, mockCS210Payload.nodes, masteredIds)
       if (!eligibility.isUnlocked) {
-        alert(`Cannot complete mission for a locked skill. Complete prerequisites first.`)
+        alert(`Cannot complete a mission on a locked skill. ${eligibility.blockedReason ?? ''}`)
         return
       }
     }
 
-    setMissions(prev => prev.map(m => m.id === missionId ? { ...m, status: 'completed' } : m))
-    setUserXp(curr => curr + xpReward)
+    const next = missions.map(m =>
+      m.id === missionId ? { ...m, status: (completing ? 'completed' : 'available') as DomainMission['status'] } : m
+    )
+    setMissions(next)
 
-    const mSkillId = mission?.skillId
-    if (mSkillId) {
-      setMasteredIds(prev => new Set([...prev, mSkillId]))
-    }
+    const done = next.filter(m => m.status === 'completed').map(m => m.id)
+    setMasteredIds(prev => {
+      const ids = new Set(prev)
+      if (isNodeMastered(next, mission.skillId, done)) ids.add(mission.skillId)
+      else ids.delete(mission.skillId)
+      return ids
+    })
   }
 
   const handlePublishSyllabus = () => {
-    setMasteredIds(prev => new Set([...prev, 'skill_7', 'skill_8', 'skill_9']))
-    setUserXp(curr => curr + 450)
+    // Mastery follows the missions, so the demo has to complete them rather
+    // than declare the nodes done behind their own work.
+    const published = new Set(['skill_7', 'skill_8', 'skill_9'])
+    setMissions(prev => prev.map(m => (published.has(m.skillId) ? { ...m, status: 'completed' } : m)))
+    setMasteredIds(prev => new Set([...prev, ...published]))
+  }
+
+  const handleOpenSkillFromMissions = (skillId: string) => {
+    setFocusSkillId(skillId)
+    setRoute('dashboard')
   }
 
   if (route === 'welcome') return <Welcome setRoute={setRoute} />
@@ -1946,20 +3578,39 @@ export function CardinalApp() {
   if (route === 'onboarding') return <Onboarding setRoute={setRoute} />
 
   return (
-    <div className="app-shell">
-      <Sidebar route={route} setRoute={setRoute} open={menu} setOpen={setMenu} userXp={userXp} profile={profile} />
+    <div className={`app-shell ${sidebarCollapsed ? 'rail-collapsed' : ''} route-${route}`}>
+      <Sidebar
+        route={route}
+        setRoute={setRoute}
+        open={menu}
+        setOpen={setMenu}
+        collapsed={sidebarCollapsed}
+        setCollapsed={setSidebarCollapsed}
+        courseXp={courseXp}
+        profile={profile}
+      />
       <main className="app-main">
         {route === 'dashboard' && (
           <Dashboard
             masteredIds={masteredIds}
-            userXp={userXp}
+            courseXp={courseXp}
             streakDays={streakDays}
             onToggleMastery={handleToggleMastery}
+            missions={effectiveMissions}
+            onToggleMission={handleToggleMission}
+            onResliceMissions={rewards => setMissionXp(prev => ({ ...prev, ...rewards }))}
+            onRestoreMissionXp={() => setMissionXp({})}
+            focusSkillId={focusSkillId}
+            onFocusHandled={() => setFocusSkillId(null)}
             onAskAICompanion={handleAskAICompanion}
+            naming={naming}
+            onNamesGenerated={handleNamesGenerated}
+            onSaveOverride={handleSaveOverride}
+            onCourseXp={setCourseXp}
           />
         )}
         {route === 'missions' && (
-          <Missions missions={missions} onCompleteMission={handleCompleteMission} />
+          <Missions missions={effectiveMissions} onOpenSkill={handleOpenSkillFromMissions} />
         )}
         {route === 'universal' && <Universal />}
         {route === 'companion' && (
@@ -1968,13 +3619,14 @@ export function CardinalApp() {
             onClearContext={() => setCompanionContext(null)}
           />
         )}
-        {route === 'achievements' && <Achievements />}
+        {route === 'achievements' && <Achievements naming={naming} masteredIds={masteredIds} />}
         {route === 'syllabus' && <Syllabus onPublishSyllabus={handlePublishSyllabus} />}
         {route === 'profile' && (
           <Profile
             profile={profile}
             onSaveProfile={handleSaveProfile}
-            userXp={userXp}
+            courseXp={courseXp}
+            masteredCount={masteredIds.size}
             streakDays={streakDays}
           />
         )}

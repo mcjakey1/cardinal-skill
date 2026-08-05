@@ -1,7 +1,13 @@
+import path from 'node:path'
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   devIndicators: false,
   images: { unoptimized: true },
+  // The progression rules live in ../src so the Expo app and this app share one
+  // implementation and one test suite. Importing across the app root is only
+  // safe once Next knows where the real project root is.
+  outputFileTracingRoot: path.join(import.meta.dirname, '..'),
   async headers() {
     return [{
       source: '/(.*)',

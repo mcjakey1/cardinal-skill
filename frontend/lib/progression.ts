@@ -1,184 +1,100 @@
 /**
- * Pure progression rules for Cardinal Skill:
- * Graph status derivation, level calculation, and quest suggestions.
+ * Adapter over the shared progression rules in `src/features/skilltree/`.
+ *
+ * This file used to be a verbatim second copy of those rules. Two copies of an
+ * unlock rule is how a student ends up seeing a node as available on the web and
+ * locked on their phone, so the logic now lives in exactly one place, under one
+ * `node --test` suite, and this file only translates shapes.
+ *
+ * The translation is real work, not ceremony: this app stores prerequisites as
+ * `prerequisiteIds` on the node, the shared model stores them as edges.
  */
+
+import {
+  deriveStatuses as sharedDeriveStatuses,
+  evaluateSkillUnlockState as sharedEvaluate,
+} from '@shared/progression'
+import type { Prereq, SkillNode as SharedNode, Tree } from '@shared/types'
+
+export {
+  levelForXp,
+  levelProgress,
+  totalXp,
+  xpForLevel,
+  XP_PER_LEVEL,
+} from '@shared/progression'
+export type {
+  SkillEligibility,
+  SkillEligibilityPrereqInfo,
+  StatusResult,
+} from '@shared/progression'
+
+/** What this app's components actually hold. Everything else is optional. */
+export interface SkillLike {
+  id: string
+  title?: string
+  xpReward?: number
+  prerequisiteIds?: string[]
+  parentNodeId?: string | null
+  graded?: boolean
+}
 
 export type NodeStatus = 'locked' | 'available' | 'mastered' | 'active'
 
-export interface SkillNodeInput {
-  id: string
-  title: string
-  xpReward: number
-  sortOrder?: number
+/**
+ * Widen this app's node shape to the shared one.
+ *
+ * ponytail: the placeholder fields (`x`, `y`, `kind`, …) are never read by the
+ * status or eligibility rules — only ids and edges are. They exist to satisfy
+ * the shared type. If the shared rules ever start reading geometry, this lie
+ * becomes a bug, so keep them structural-only.
+ */
+export function treeFromSkills(skills: SkillLike[]): Tree {
+  const known = new Set(skills.map((s) => s.id))
+
+  const nodes: SharedNode[] = skills.map((s, i) => ({
+    id: s.id,
+    courseId: null,
+    trackId: null,
+    title: s.title ?? s.id,
+    description: '',
+    kind: 'topic',
+    xpReward: s.xpReward ?? 0,
+    x: 0,
+    y: 0,
+    sortOrder: i,
+    parentNodeId: s.parentNodeId ?? null,
+    graded: s.graded ?? true,
+  }))
+
+  // Edges naming a node that isn't in this tree are dropped here rather than
+  // passed through — the shared rules drop them too, but a caller reading
+  // `tree.prereqs` directly would otherwise see a dangling edge.
+  const prereqs: Prereq[] = skills.flatMap((s) =>
+    (s.prerequisiteIds ?? [])
+      .filter((p) => known.has(p))
+      .map((prereqId) => ({ nodeId: s.id, prereqId })),
+  )
+
+  return { nodes, prereqs }
 }
 
-export interface PrereqInput {
-  nodeId: string
-  prereqId: string
-}
-
-export interface TreeInput {
-  nodes: SkillNodeInput[]
-  prereqs: PrereqInput[]
-}
-
-export const XP_PER_LEVEL = 100
-
-export function levelForXp(xp: number): number {
-  if (!Number.isFinite(xp) || xp <= 0) return 1
-  return Math.floor(Math.sqrt(xp / XP_PER_LEVEL)) + 1
-}
-
-export function xpForLevel(level: number): number {
-  if (level <= 1) return 0
-  return XP_PER_LEVEL * (level - 1) ** 2
-}
-
-export function levelProgress(xp: number): number {
-  const level = levelForXp(xp)
-  const floor = xpForLevel(level)
-  const ceiling = xpForLevel(level + 1)
-  return (xp - floor) / (ceiling - floor)
-}
-
-export interface StatusResult {
-  status: Map<string, NodeStatus>
-  cyclicNodeIds: string[]
-}
-
-export function deriveStatuses(tree: TreeInput, masteredIds: Iterable<string>): StatusResult {
-  const known = new Set(tree.nodes.map((n) => n.id))
-  const mastered = new Set([...masteredIds].filter((id) => known.has(id)))
-
-  const prereqsOf = new Map<string, string[]>()
-  for (const { nodeId, prereqId } of tree.prereqs) {
-    if (!known.has(nodeId) || !known.has(prereqId) || nodeId === prereqId) continue
-    const list = prereqsOf.get(nodeId)
-    if (list) list.push(prereqId)
-    else prereqsOf.set(nodeId, [prereqId])
-  }
-
-  const cyclic = new Set(findCyclicNodes(known, prereqsOf))
-  const status = new Map<string, NodeStatus>()
-
-  for (const node of tree.nodes) {
-    if (mastered.has(node.id)) {
-      status.set(node.id, 'mastered')
-      continue
-    }
-    if (cyclic.has(node.id)) {
-      status.set(node.id, 'locked')
-      continue
-    }
-    const unmet = (prereqsOf.get(node.id) ?? []).some((id) => !mastered.has(id))
-    status.set(node.id, unmet ? 'locked' : 'available')
-  }
-
-  return { status, cyclicNodeIds: [...cyclic] }
-}
-
-export interface SkillEligibilityPrereqInfo {
-  id: string
-  title: string
-  isMastered: boolean
-}
-
-export interface SkillEligibility {
-  isUnlocked: boolean
-  completedPrerequisites: SkillEligibilityPrereqInfo[]
-  incompletePrerequisites: SkillEligibilityPrereqInfo[]
-  totalPrerequisites: number
-  nextRecommendedPrerequisiteId: string | null
-  blockedReason: string | null
+export function deriveStatuses(skills: SkillLike[], masteredIds: Iterable<string>) {
+  return sharedDeriveStatuses(treeFromSkills(skills), masteredIds)
 }
 
 export function evaluateSkillUnlockState(
   skillId: string,
-  allSkills: { id: string; title: string; prerequisiteIds?: string[] }[],
-  masteredIds: Iterable<string>
-): SkillEligibility {
-  const masteredSet = new Set(masteredIds)
-  const targetSkill = allSkills.find((s) => s.id === skillId)
-  const prereqIds = targetSkill?.prerequisiteIds || []
-
-  const completedPrerequisites: SkillEligibilityPrereqInfo[] = []
-  const incompletePrerequisites: SkillEligibilityPrereqInfo[] = []
-
-  for (const pid of prereqIds) {
-    const prereqSkill = allSkills.find((s) => s.id === pid)
-    const title = prereqSkill ? prereqSkill.title : pid
-    const isMastered = masteredSet.has(pid)
-    const info: SkillEligibilityPrereqInfo = { id: pid, title, isMastered }
-
-    if (isMastered) {
-      completedPrerequisites.push(info)
-    } else {
-      incompletePrerequisites.push(info)
-    }
-  }
-
-  const totalPrerequisites = prereqIds.length
-  const isUnlocked = incompletePrerequisites.length === 0
-  const nextRecommendedPrerequisiteId = incompletePrerequisites.length > 0 ? incompletePrerequisites[0].id : null
-  const blockedReason = isUnlocked
-    ? null
-    : `This skill unlocks after you master ${incompletePrerequisites.length} remaining prerequisite${incompletePrerequisites.length > 1 ? 's' : ''}.`
-
-  return {
-    isUnlocked,
-    completedPrerequisites,
-    incompletePrerequisites,
-    totalPrerequisites,
-    nextRecommendedPrerequisiteId,
-    blockedReason,
-  }
+  skills: SkillLike[],
+  masteredIds: Iterable<string>,
+) {
+  return sharedEvaluate(skillId, treeFromSkills(skills), masteredIds)
 }
 
 export function getSkillEligibility(
   skillId: string,
-  allSkills: { id: string; title: string; prerequisiteIds?: string[] }[],
-  masteredIds: Iterable<string>
-): SkillEligibility {
-  return evaluateSkillUnlockState(skillId, allSkills, masteredIds)
+  skills: SkillLike[],
+  masteredIds: Iterable<string>,
+) {
+  return evaluateSkillUnlockState(skillId, skills, masteredIds)
 }
-
-function findCyclicNodes(known: Set<string>, prereqsOf: Map<string, string[]>): string[] {
-  const WHITE = 0
-  const GREY = 1
-  const BLACK = 2
-  const colour = new Map<string, number>()
-  const bad = new Set<string>()
-
-  for (const start of known) {
-    if (colour.get(start) !== undefined) continue
-    const stack: { id: string; next: number }[] = [{ id: start, next: 0 }]
-    colour.set(start, GREY)
-
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1]!
-      const edges = prereqsOf.get(frame.id) ?? []
-
-      if (frame.next >= edges.length) {
-        colour.set(frame.id, BLACK)
-        stack.pop()
-        continue
-      }
-
-      const child = edges[frame.next]!
-      frame.next += 1
-
-      const childColour = colour.get(child) ?? WHITE
-      if (childColour === GREY) {
-        for (const f of stack) bad.add(f.id)
-      } else if (childColour === WHITE) {
-        colour.set(child, GREY)
-        stack.push({ id: child, next: 0 })
-      } else if (bad.has(child)) {
-        bad.add(frame.id)
-      }
-    }
-  }
-
-  return [...bad]
-}
-

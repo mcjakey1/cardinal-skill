@@ -71,20 +71,98 @@ h1, h2, h3, .brand {
   font-family: var(--font-manrope), sans-serif;
 }
 
+/* --------------------------------------------------------- app shell (grid)
+   The rail column animates its own width via grid-template-columns so nothing
+   below it layout-thrashes — the sidebar and app-main both sit in fixed grid
+   cells. Mobile keeps the pre-redesign fixed/drawer pattern, since a 56px rail
+   on a phone is a rail-shaped patch of missing chart. */
 .app-shell {
   min-height: 100vh;
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  transition: grid-template-columns 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.app-shell.rail-collapsed {
+  grid-template-columns: 56px 1fr;
 }
 
 .sidebar {
-  position: fixed;
-  inset: 0 auto 0 0;
-  width: 250px;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  width: 100%;
   background: #32181c;
   color: #fffdf8;
   padding: 22px 14px;
   display: flex;
   flex-direction: column;
   z-index: 30;
+  overflow: hidden;
+  transition: padding 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Icon-rail state: labels vanish, padding tightens, single-column icons.
+   Native `title` tooltips carry the label a hover reveals — added at the
+   markup layer so the label is available to screen readers via aria-label too. */
+.sidebar.collapsed {
+  padding: 22px 6px;
+}
+.sidebar.collapsed .brand div:nth-child(2),
+.sidebar.collapsed nav button span,
+.sidebar.collapsed .sidebar-foot > button span,
+.sidebar.collapsed .student-chip p {
+  display: none;
+}
+.sidebar.collapsed nav button,
+.sidebar.collapsed .sidebar-foot > button {
+  justify-content: center;
+  gap: 0;
+  padding: 11px 6px;
+}
+.sidebar.collapsed nav button svg:last-child {
+  display: none;
+}
+.sidebar.collapsed .brand {
+  justify-content: center;
+}
+.sidebar.collapsed .student-chip {
+  justify-content: center;
+  padding: 8px 0;
+}
+.sidebar.collapsed .sidebar-collapse span {
+  display: none;
+}
+
+/* The rail-collapse toggle. Sits at the very bottom of the sidebar, matching
+   drawio's panel controls. Always visible on desktop; hidden on mobile where
+   the drawer's own close button is the affordance. */
+.sidebar-collapse {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid #ffffff18;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.sidebar-collapse:hover {
+  background: #ffffff10;
+}
+.sidebar-collapse:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.sidebar-collapse svg {
+  width: 16px;
+  height: 16px;
 }
 
 .brand {
@@ -208,10 +286,17 @@ h1, h2, h3, .brand {
 }
 
 .app-main {
-  margin-left: 250px;
   padding: 42px clamp(24px, 4vw, 64px) 70px;
   max-width: none;
+  min-width: 0;
   overflow: hidden;
+}
+
+/* On the skill-tree route the shell drops its outer padding so the chart
+   truly runs edge to edge. Every other route (missions, syllabus, etc.)
+   keeps the pre-redesign padded content layout. */
+.app-shell.route-dashboard .app-main {
+  padding: 0;
 }
 
 .page-head {
@@ -284,7 +369,11 @@ h1, h2, h3, .brand {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Fluid, not a fixed three. A hard `repeat(3, 1fr)` floors each track at its
+     content's min-width, so between the 760px and 1050px breakpoints the three
+     cards stayed side by side while their contents were clipped. auto-fit drops
+     to two columns and then one as the room runs out. */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 14px;
   margin-bottom: 32px;
   align-items: stretch;
@@ -341,6 +430,11 @@ h1, h2, h3, .brand {
   align-items: center;
   gap: 16px;
   width: 100%;
+  min-width: 0;
+  /* The meter and its percentage drop below the level readout rather than
+     being clipped when the card is narrow. */
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
 .xp-info {
@@ -431,21 +525,32 @@ h1, h2, h3, .brand {
   color: var(--muted-foreground);
 }
 
-/* Two-column desktop grid for Skill Tree */
+/* Full-viewport chart + collapsible right dock. The right column animates
+   between three widths without shifting the chart's own layout: nothing but
+   the grid gap and column resolve, so the SVG never re-lays-out. */
 .tree-explorer {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 16px;
-  height: calc(100vh - 310px);
-  min-height: 650px;
-  max-height: 920px;
-  transition: grid-template-columns 0.45s cubic-bezier(0.22, 1, 0.36, 1), gap 0.45s ease;
-}
-
-.tree-explorer.panel-closed {
   grid-template-columns: minmax(0, 1fr) 0;
   gap: 0;
+  height: 100vh;
+  transition: grid-template-columns 0.28s cubic-bezier(0.2, 0, 0, 1), gap 0.28s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* When a node is selected but the panel is closed, a 56px dock strip is what
+   the student sees on the right edge. */
+.tree-explorer.panel-docked {
+  grid-template-columns: minmax(0, 1fr) 56px;
+}
+
+.tree-explorer.panel-open {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
+/* Hidden state — no node selected. The panel column collapses to zero and
+   the chart owns the entire width. */
+.tree-explorer.panel-hidden {
+  grid-template-columns: minmax(0, 1fr) 0;
 }
 
 .tree-card {
@@ -454,9 +559,9 @@ h1, h2, h3, .brand {
   flex-direction: column;
   overflow: hidden;
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  box-shadow: 0 18px 50px #32181c0d;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .tree-toolbar {
@@ -467,6 +572,13 @@ h1, h2, h3, .brand {
   padding: 14px 18px;
   gap: 20px;
   border-bottom: 1px solid var(--border);
+  /* This row carries fourteen controls. It wraps rather than running off the
+     card edge, which is what put zoom and reset out of reach at every width. */
+  flex-wrap: wrap;
+}
+
+.tree-toolbar > * {
+  min-width: 0;
 }
 
 .tree-title {
@@ -487,6 +599,16 @@ h1, h2, h3, .brand {
   display: flex !important;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 8px;
+}
+
+/* A select sizes itself to its longest option, so the dataset picker alone was
+   claiming 257px of the row and forcing the toolbar into a tall stack. The full
+   text is still readable in the open dropdown. */
+.tree-actions select {
+  max-width: 120px;
 }
 
 .tree-actions button {
@@ -542,8 +664,10 @@ h1, h2, h3, .brand {
 }
 
 .canvas-hint {
+  /* Sits low over the canvas — the tool cluster owns the top-left corner now. */
   position: absolute;
-  top: 14px;
+  top: auto;
+  bottom: 108px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 3;
@@ -555,6 +679,371 @@ h1, h2, h3, .brand {
   font-size: 12px;
   backdrop-filter: blur(8px);
   animation: hint-fade 4s forwards;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------- floating tool cluster
+   Sits over the canvas top-left, drawio-style. Movable switch is always
+   visible; Auto-arrange appears when it becomes actionable; everything
+   textual lives in a "Chart tools" popover. */
+.tool-cluster {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 18px #32181c1a;
+  backdrop-filter: blur(6px);
+}
+.tool-cluster-more,
+.tool-cluster-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+.tool-cluster-more svg,
+.tool-cluster-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.tool-cluster-more:hover,
+.tool-cluster-btn:hover,
+.tool-cluster-more.is-open {
+  background: var(--secondary);
+}
+.tool-cluster-more:focus-visible,
+.tool-cluster-btn:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tool-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 280px;
+  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 18px 40px #32181c2a;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-menu-title {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted-foreground);
+}
+.tool-menu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.tool-menu-field select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+.tool-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tool-menu-item svg {
+  width: 15px;
+  height: 15px;
+}
+.tool-menu-item:hover {
+  background: var(--secondary);
+}
+.tool-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tool-menu-item.destructive {
+  color: var(--destructive);
+  border-color: #981e2f44;
+}
+.tool-menu-note {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  margin: 0;
+}
+.tool-menu-note.error {
+  color: var(--destructive);
+  font-weight: 700;
+}
+.tool-menu-note.saved {
+  color: #16653c;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tool-menu-note.saved svg {
+  width: 13px;
+  height: 13px;
+}
+.tool-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* Override the icon-button grid centring inherited from any legacy button
+   selectors. The switch's knob starts at flex-start so the transform actually
+   moves it — same fix as before, only in the new home. */
+.tool-cluster .tree-switch > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+/* ---------------------------------------------- floating zoom cluster */
+.zoom-cluster {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 18px #32181c1a;
+  backdrop-filter: blur(6px);
+}
+.zoom-cluster button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+.zoom-cluster button svg {
+  width: 15px;
+  height: 15px;
+}
+.zoom-cluster button:hover {
+  background: var(--secondary);
+}
+.zoom-cluster button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.zoom-cluster button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.zoom-cluster b {
+  min-width: 44px;
+  padding: 0 6px;
+  font-family: var(--font-jetbrains-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.zoom-cluster-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+/* ---------------------------------------------- chart status footer
+   The one persistent text strip. Floats over the canvas at the bottom so
+   the chart still owns the vertical run of the screen. Two rows so the
+   XP conservation copy and the split stay visible — both are load-bearing
+   per the invariants; hiding them would be a regression. */
+.chart-footer {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  background: #fffdf8ee;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 26px #32181c1a;
+  backdrop-filter: blur(6px);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.chart-footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.chart-footer-course {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.chart-footer-course b {
+  font-family: var(--font-manrope), sans-serif;
+  font-size: 13px;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+.chart-footer-count {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.chart-footer-level b {
+  font-family: var(--font-manrope), sans-serif;
+  font-size: 13px;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+.chart-footer-xp {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.chart-footer-xp b {
+  color: var(--foreground);
+}
+.chart-footer-next-lvl {
+  color: var(--muted-foreground);
+}
+.chart-footer .meter-track {
+  width: 180px;
+}
+.chart-footer-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.chart-footer-next-lbl {
+  font-weight: 800;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+.chart-footer-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--primary);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.16s ease, transform 0.16s ease;
+}
+.chart-footer-chip:hover {
+  background: var(--secondary);
+}
+.chart-footer-chip:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chart-footer-row.meta {
+  font-size: 11px;
+}
+.chart-footer-split {
+  color: var(--foreground);
+}
+.chart-footer-conserved {
+  color: #16653c;
+  font-weight: 700;
+}
+.chart-footer-off {
+  color: var(--destructive);
+  font-weight: 700;
+}
+.chart-footer-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-left: auto;
+}
+.chart-footer-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.chart-footer-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+}
+.chart-footer-legend i.mastered { background: #981e2f; }
+.chart-footer-legend i.active { background: #d2a33a; }
+.chart-footer-legend i.available { border: 1px solid #d2a33a; background: transparent; }
+.chart-footer-legend i.supplemental { border: 1px dashed var(--muted-foreground); background: transparent; }
+
+.tree-loading {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  height: 100vh;
+  color: var(--muted-foreground);
+}
+.tree-loading b {
+  font-size: 14px;
 }
 
 .tree-canvas {
@@ -562,17 +1051,23 @@ h1, h2, h3, .brand {
   top: 50%;
   left: 50%;
   transform-origin: center;
-  transition: transform 0.18s ease-out;
+  /* No transition on transform. The prefers-reduced-motion block sets a
+     0.01ms transition-duration on `*`, and any inline transform change then
+     fires an instant transition whose compositor-side snapshot wins over the
+     inline value — the chart appears stuck at its initial zoom no matter
+     what React writes. Naming `none` explicitly wins over both the * rule
+     and the fixed 0.18s the redesigned shell used to have. */
+  transition: none !important;
   will-change: transform;
-}
-
-.tree-viewport.dragging .tree-canvas {
-  transition: none;
 }
 
 .skill-wrap {
   position: absolute;
-  transform: translate(-50%, -50%);
+  /* Anchor the diamond, not the whole group. Centring the wrap made a node's
+     y depend on how many lines of label sat under it, so a node offering extra
+     help rode ~7px higher than its rank and the edges met it off-centre. -38px
+     is half the node's own height, and it holds whatever the labels do. */
+  transform: translate(-50%, -38px);
   width: 130px;
   display: flex;
   flex-direction: column;
@@ -676,7 +1171,7 @@ h1, h2, h3, .brand {
   pointer-events: none;
 }
 
-/* SVG links & smooth Bezier curves */
+/* SVG links: orthogonal routes with rounded bends, a dot on every turn */
 .links {
   position: absolute;
   inset: 0;
@@ -686,31 +1181,56 @@ h1, h2, h3, .brand {
   pointer-events: none;
 }
 
+/* Every edge is a progress bar for the node it runs into. It is drawn twice: a
+   dashed grey track for the whole run, and a solid red fill over the part the
+   student has already earned. Turn dots and the arrowhead take whichever colour
+   the fill has reached.
+
+   Dashed-versus-solid carries the same information as grey-versus-red, so the
+   state survives greyscale and every common form of colour vision — DESIGN.md's
+   rule that colour never carries meaning alone. */
 .links path {
   fill: none;
-  transition: opacity 0.3s ease, stroke-width 0.3s ease, stroke 0.3s ease;
+  /* Square corners. A rounded join cuts the turn, and the dot marking that
+     turn then sits beside the line instead of on it. */
+  stroke-linejoin: miter;
 }
 
-.links path.link-mastered {
-  stroke: #981e2f;
-  stroke-width: 2.5px;
-  stroke-dasharray: none;
-}
-
-.links path.link-available {
-  stroke: #d2a33a;
-  stroke-width: 2.0px;
-  stroke-dasharray: none;
-}
-
-.links path.link-locked {
+.links .edge-track {
   stroke: #c8bca9;
-  stroke-width: 1.2px;
+  stroke-width: 1.6px;
   stroke-dasharray: 4 4;
 }
 
-.links path.highlighted {
-  stroke-width: 3.2px !important;
+.links .edge-fill {
+  stroke: #981e2f;
+  stroke-width: 2.6px;
+  /* The "node unlocks — its edge draws in" moment from DESIGN.md's motion
+     table, at its 400ms. Skipped wholesale under prefers-reduced-motion, where
+     the end state is already correct. */
+  transition: stroke-dasharray 0.4s cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The turn markers. A hairline of the canvas colour keeps a dot legible where
+   two edges cross at the same height. */
+.links circle {
+  stroke: var(--card);
+  stroke-width: 1.5px;
+  transition: fill 0.4s cubic-bezier(0.2, 0, 0, 1);
+}
+.links circle.edge-track { fill: #c8bca9; }
+.links circle.edge-fill { fill: #981e2f; }
+
+.links polygon {
+  stroke: none;
+  transition: fill 0.4s cubic-bezier(0.2, 0, 0, 1);
+}
+.links polygon.edge-track { fill: #c8bca9; }
+.links polygon.edge-fill { fill: #981e2f; }
+
+.links .highlighted .edge-track { stroke-width: 2.2px; }
+.links .highlighted .edge-fill {
+  stroke-width: 3.4px;
   filter: drop-shadow(0 0 5px rgba(152, 30, 47, 0.45));
 }
 
@@ -757,26 +1277,116 @@ h1, h2, h3, .brand {
   width: 17px;
 }
 
+/* Docked details header — the compact strip that hugs the canvas edge when a
+   node is selected but the panel is closed. Clicking it slides the full panel
+   out; the small X inside clears the selection so the dock disappears. */
+.detail-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100vh;
+  width: 56px;
+  padding: 12px 6px;
+  background: var(--card);
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--foreground);
+  writing-mode: horizontal-tb;
+  cursor: pointer;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  text-align: center;
+  transition: background 0.18s ease;
+}
+.detail-dock:hover {
+  background: var(--secondary);
+}
+.detail-dock:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
+}
+.detail-dock .detail-dock-body {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  min-height: 0;
+  flex: 1;
+}
+.detail-dock .detail-dock-title {
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  max-height: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-dock .detail-dock-sub {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.detail-dock .detail-dock-chev {
+  width: 16px;
+  height: 16px;
+  color: var(--muted-foreground);
+}
+.detail-dock .detail-dock-dismiss {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+.detail-dock .detail-dock-dismiss:hover,
+.detail-dock .detail-dock-dismiss:focus-visible {
+  background: var(--muted);
+  color: var(--foreground);
+  outline: none;
+}
+.detail-dock .detail-dock-dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
 .detail-card {
   position: relative;
   top: auto;
-  width: 340px;
-  height: 100%;
+  width: 380px;
+  height: 100vh;
   overflow: auto;
-  padding: 30px 26px;
+  padding: 24px 22px;
   opacity: 1;
   transform: translateX(0);
-  transition: opacity 0.3s ease, transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-  box-shadow: 0 18px 50px #32181c0d;
+  transition: opacity 0.22s ease, transform 0.28s cubic-bezier(0.2, 0, 0, 1);
+  box-shadow: -18px 0 40px #32181c14;
   background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
 }
 
-.panel-closed .detail-card {
+.panel-docked .detail-card,
+.panel-hidden .detail-card {
   pointer-events: none;
   opacity: 0;
   transform: translateX(28px);
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 0;
+  padding: 0;
 }
 
 .panel-close {
@@ -993,11 +1603,15 @@ h1, h2, h3, .brand {
   border-bottom: 1px solid var(--border);
 }
 
-.chat-top > div {
+/* Class-scoped, not `.chat-top > div`: that selector also matched the flex
+   wrapper added around the avatar and its title, squeezing 119px of content
+   into a 38px avatar chip. */
+.chat-avatar {
   display: grid;
   place-items: center;
   width: 38px;
   height: 38px;
+  flex: 0 0 auto;
   border-radius: 12px;
   background: var(--primary);
   color: var(--primary-foreground);
@@ -1996,6 +2610,17 @@ html {
 .dashboard-page > *:nth-child(3) { animation-delay: 0.1s; }
 .dashboard-page > *:nth-child(4) { animation-delay: 0.14s; }
 
+/* The tree route is full-bleed: its single child (SkillTree) fills the
+   viewport. Skip the entrance rise here — a transform on a full-viewport
+   child causes a first-paint flicker on the SVG canvas. */
+.dashboard-page--tree {
+  height: 100vh;
+  animation: none;
+}
+.dashboard-page--tree > * {
+  animation: none;
+}
+
 @keyframes page-enter {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -2026,8 +2651,24 @@ html {
 }
 
 @media (max-width: 1050px) {
-  .tree-layout, .analytics-layout { grid-template-columns: 1fr; }
-  .detail-card { position: static; }
+  /* Narrow desktop / tablet: the details dock reads the same, but the panel
+     opens over the canvas rather than pushing it. The chart keeps its full
+     column width and the panel floats above via absolute positioning. */
+  .tree-explorer {
+    height: 100vh;
+  }
+  .tree-explorer.panel-open,
+  .tree-explorer.panel-docked {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tree-explorer .detail-dock,
+  .tree-explorer .detail-card {
+    position: absolute;
+    right: 0;
+    top: 0;
+    z-index: 8;
+  }
+  .analytics-layout { grid-template-columns: 1fr; }
   .card-grid, .track-grid { grid-template-columns: repeat(2, 1fr); }
   .hero { grid-template-columns: 1fr; text-align: center; gap: 40px; }
   .hero > div > div { justify-content: center; }
@@ -2035,15 +2676,90 @@ html {
 }
 
 @media (max-width: 760px) {
-  .sidebar { transform: translateX(-100%); transition: 0.2s; }
+  /* Mobile: rail hides entirely, hamburger opens it as a drawer. The grid
+     shell drops to a single column so the app-main has the whole viewport. */
+  .app-shell,
+  .app-shell.rail-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 250px;
+    transform: translateX(-100%);
+    transition: transform 0.2s;
+  }
+  /* Force back to the expanded look on mobile even if desktop was collapsed. */
+  .sidebar.collapsed {
+    padding: 22px 14px;
+  }
+  .sidebar.collapsed .brand div:nth-child(2),
+  .sidebar.collapsed nav button span,
+  .sidebar.collapsed .sidebar-foot > button span,
+  .sidebar.collapsed .student-chip p {
+    display: initial;
+  }
+  .sidebar.collapsed nav button,
+  .sidebar.collapsed .sidebar-foot > button {
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 11px 12px;
+  }
+  .sidebar-collapse { display: none; }
   .sidebar.open { transform: translateX(0); }
   .brand > button { display: block; margin-left: auto; color: inherit; }
   .backdrop { display: block; position: fixed; inset: 0; background: #0008; border: 0; z-index: 20; }
-  .mobile-menu { display: grid; place-items: center; position: fixed; top: 12px; left: 12px; width: 42px; height: 42px; border: 0; border-radius: 10px; background: #32181c; color: #fffdf8; z-index: 18; }
-  .app-main { margin-left: 0; padding: 75px 16px 50px; }
-  .stats, .card-grid, .track-grid, .profile-grid, .upload-layout { grid-template-columns: 1fr; }
+  .mobile-menu { display: grid; place-items: center; position: fixed; top: 12px; left: 12px; width: 42px; height: 42px; border: 0; border-radius: 10px; background: #32181c; color: #fffdf8; z-index: 40; }
+  .app-main { padding: 75px 16px 50px; }
+  .app-shell.route-dashboard .app-main { padding: 0; padding-top: 60px; }
+  .card-grid, .track-grid, .profile-grid, .upload-layout { grid-template-columns: 1fr; }
   .page-head h1 { font-size: 32px; }
-  .tree-viewport { height: 520px; }
+
+  /* Chart route on mobile: chart occupies the whole viewport minus a small
+     top strip for the hamburger. Dock is hidden — the panel opens as a
+     bottom drawer instead, so the compact dock header would be redundant. */
+  .dashboard-page--tree {
+    height: calc(100vh - 60px);
+  }
+  .tree-explorer {
+    height: 100%;
+  }
+  .tree-viewport { height: 100%; min-height: 520px; }
+  .tree-explorer .detail-dock { display: none; }
+  .tree-explorer.panel-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tree-explorer.panel-open .detail-card {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    width: 100%;
+    max-height: 65vh;
+    padding: 16px 16px 24px;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -12px 40px #32181c22;
+    z-index: 10;
+  }
+  .chart-footer {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    padding: 8px 10px;
+  }
+  .chart-footer .meter-track { width: 100%; min-width: 120px; }
+  .chart-footer-next { margin-left: 0; }
+  .tool-cluster {
+    top: 8px;
+    left: 60px;
+  }
+  .zoom-cluster {
+    top: 8px;
+    right: 8px;
+  }
   .auth-page { grid-template-columns: 1fr; }
   .auth-page > section { display: none; }
   .auth-page form { min-height: 100vh; justify-content: center; }
@@ -2341,4 +3057,748 @@ html {
   .hero-node-item {
     transform: translate(-50%, -50%) !important;
   }
+}
+
+/* ---------------------------------------------------------- extra practice
+   Supplemental help steps are round with a dashed edge; graded syllabus nodes
+   stay diamonds. Shape and the label under the node carry the difference, so
+   it survives greyscale and colour-vision differences. */
+.skill-node.supplemental {
+  transform: none;
+  border-radius: 50%;
+  border-style: dashed;
+}
+
+.skill-node.supplemental svg {
+  transform: none;
+}
+
+.skill-node.supplemental:hover {
+  transform: translateY(-5px) scale(1.07);
+}
+
+.skill-node.supplemental.selected {
+  transform: scale(1.13);
+}
+
+.skill-wrap > em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--primary);
+  background: var(--card);
+  border: 1px solid var(--primary);
+  border-radius: 999px;
+  padding: 1px 8px;
+  pointer-events: none;
+}
+
+.legend i.supplemental {
+  border: 1px dashed var(--muted-foreground);
+  background: transparent;
+}
+
+/* -------------------------------------------------- static / movable switch */
+.tree-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted-foreground);
+}
+
+.tree-switch > button {
+  /* Declared explicitly: `.tree-actions button` makes every toolbar button a
+     centring grid for icon buttons, which parked the knob mid-track. The knob
+     travels from one end to the other, so it must start at the start. */
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 43px;
+  height: 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--border);
+  padding: 3px;
+  transition: background 0.2s ease;
+}
+
+.tree-switch > button i {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--card);
+  transition: transform 0.2s ease;
+}
+
+.tree-switch > button.on {
+  background: var(--primary);
+}
+
+.tree-switch > button.on i {
+  transform: translateX(19px);
+}
+
+.tree-switch > button:hover {
+  background: var(--muted-foreground);
+  transform: none;
+}
+
+.tree-switch > button.on:hover {
+  background: var(--primary);
+}
+
+.tree-switch > button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tree-actions button:disabled {
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------- the XP meter */
+.tree-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.meter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+
+.meter-row b {
+  color: var(--foreground);
+}
+
+.meter-track {
+  display: block;
+  width: 140px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+  overflow: hidden;
+}
+
+.meter-track i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--primary);
+}
+
+.meter-split {
+  color: var(--foreground);
+}
+
+.meter-conserved {
+  color: #16653c;
+  font-weight: 700;
+}
+
+.meter-off {
+  color: var(--destructive);
+  font-weight: 700;
+}
+
+.meter-next {
+  margin-left: auto;
+  font-weight: 800;
+  color: var(--foreground);
+}
+
+.meter-row button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--primary);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.meter-row button:hover {
+  background: var(--secondary);
+}
+
+.meter-row button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* -------------------------------------------------------- help offer block */
+.help-offer {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.help-offer.offered {
+  border: 1px solid var(--primary);
+  border-radius: 12px;
+  padding: 12px;
+  background: #981e2f0a;
+}
+
+.help-offer-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.help-offer p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.help-offer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------ confirm sheet */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.confirm-sheet {
+  width: 100%;
+  max-width: 460px;
+  padding: 28px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+}
+
+.confirm-sheet h2 {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.confirm-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+.confirm-body p + p {
+  margin-top: 8px;
+}
+
+.confirm-body ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.confirm-error {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--destructive);
+  border-radius: 10px;
+  color: var(--destructive);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.primary-action.destructive {
+  background: var(--destructive);
+  border-color: var(--destructive);
+}
+
+/* ------------------------------------------------ quest and achievement names
+   A generated name and a name an instructor typed must never look alike. The
+   tag says which in words; brass and a left rule carry it visually, so the
+   difference survives greyscale. Cardinal stays rationed — it is not used here. */
+.name-source {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.name-source.override {
+  border-color: var(--accent);
+  background: #d2a33a1f;
+  color: #6b4c0d;
+}
+
+.quest-name {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+
+/* An override is already named in words by NameSourceTag, so the state does not
+   also need a coloured side rule to carry it. */
+.quest-name.override {
+  padding-left: 0;
+}
+
+.quest-name h2 {
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.quest-subtitle {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.quest-syllabus,
+.quest-achievement {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.quest-achievement b {
+  color: var(--foreground);
+}
+
+.quest-name-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.quest-name-actions button {
+  font-size: 12px;
+  padding: 7px 12px;
+}
+
+.quest-name.editing {
+  width: 100%;
+  gap: 10px;
+}
+
+.quest-name.editing .form-group {
+  width: 100%;
+}
+
+/* ---------------------------------------------------- syllabus: two ways in */
+.mode-choice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  text-align: left;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--card);
+  color: var(--foreground);
+}
+
+.mode-card:hover {
+  border-color: var(--primary);
+  background: var(--secondary);
+}
+
+.mode-card:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mode-card svg {
+  width: 22px;
+  height: 22px;
+  color: var(--primary);
+}
+
+.mode-card b {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.mode-card span {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+/* ------------------------------------------------ syllabus: manual authoring */
+.draft-node-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.draft-node-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.draft-node-list li.editing {
+  border-color: var(--primary);
+}
+
+.draft-node-list li > div {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.draft-node-list li b {
+  font-size: 13px;
+}
+
+.draft-node-list li span {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.draft-node-list li button {
+  font-size: 12px;
+  padding: 6px 10px;
+  gap: 5px;
+}
+
+.node-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--background);
+}
+
+.node-form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.node-form textarea {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.node-form textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.prereq-picker {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.prereq-picker legend {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.prereq-picker label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.prereq-picker p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+/* -------------------------------------------- syllabus: review, both paths */
+.review-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+
+.review-summary {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.review-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--destructive);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #981e2f0a;
+}
+
+.review-errors > b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--destructive);
+}
+
+.review-errors > div {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+.review-errors > div b {
+  color: var(--destructive);
+}
+
+.review-errors > div span {
+  color: var(--foreground);
+}
+
+.review-fix {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.layout-preview {
+  width: 100%;
+  max-height: 300px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.layout-preview line {
+  stroke: var(--border);
+  stroke-width: 3;
+}
+
+.layout-preview circle {
+  fill: var(--card);
+  stroke: var(--primary);
+  stroke-width: 4;
+}
+
+/* --------------------------------------------- the missions inside a node
+   A node's XP is the sum of these, so this block is the node's progress, not a
+   sidebar to it. Completion is spelled out in words next to every mission —
+   the brass tint and the tick are the second and third encodings, never the
+   only one. Exactly one control here is cardinal: the next mission to do. */
+.node-missions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 16px;
+}
+
+.node-missions-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.node-missions-head h3 {
+  font-size: 13px;
+  font-weight: 800;
+  margin: 0;
+}
+
+.node-missions-head b {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+.node-missions .meter-track {
+  width: 100%;
+}
+
+.node-missions-note {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.mission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.mission-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.mission-row.done {
+  border-color: #d2a33a66;
+  background: #d2a33a14;
+}
+
+.mission-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mission-row-body b {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.mission-row-body p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.mission-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  text-transform: capitalize;
+}
+
+.mission-row-meta b {
+  color: var(--foreground);
+  text-transform: none;
+}
+
+.mission-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted-foreground);
+}
+
+.mission-state.done {
+  color: #6b4c0d;
+}
+
+.mission-state svg {
+  width: 13px;
+  height: 13px;
+}
+
+.mission-row button {
+  width: 100%;
+  font-size: 12px;
+  padding: 9px 12px;
+}
+
+.mission-row button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mission-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.node-missions :focus-visible,
+.mission-row button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The missions overview is a list of where to go, not a place to finish work. */
+.mission-skill {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted-foreground);
+  margin-bottom: 8px;
+}
+
+.mission-empty {
+  font-size: 13px;
+  color: var(--muted-foreground);
 }

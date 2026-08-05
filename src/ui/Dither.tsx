@@ -15,41 +15,22 @@
 import { StyleSheet, View } from 'react-native';
 import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 
-import { palette } from '@/theme/tokens';
+import {
+  DITHER_CELL as CELL,
+  DITHER_TILE as TILE,
+  ditherFill,
+  ditherId,
+  fieldLevels,
+  litCells,
+  type DitherLevel,
+} from '@/theme/dither';
+import { useTheme } from '@/theme/useTheme';
 
-/** Cell size in dp. The pattern tile is 4 cells square. */
-const CELL = 2;
-const TILE = CELL * 4;
-
-/** Bayer 4×4 threshold matrix. Cell (x, y) lights when its value < level. */
-const BAYER = [
-  [0, 8, 2, 10],
-  [12, 4, 14, 6],
-  [3, 11, 1, 9],
-  [15, 7, 13, 5],
-];
-
-/** The 17 levels: 0 lights nothing, 16 lights everything. */
-export type DitherLevel = number;
-
-export function litCells(level: DitherLevel): { x: number; y: number }[] {
-  const cells: { x: number; y: number }[] = [];
-  for (let y = 0; y < 4; y += 1) {
-    for (let x = 0; x < 4; x += 1) {
-      if (BAYER[y]![x]! < level) cells.push({ x: x * CELL, y: y * CELL });
-    }
-  }
-  return cells;
-}
-
-/** Stable id for one dither pattern, so a fill can reference it by name. */
-export function ditherId(name: string, level: DitherLevel): string {
-  return `csk-${name}-${level}`;
-}
-
-export function ditherFill(name: string, level: DitherLevel): string {
-  return `url(#${ditherId(name, level)})`;
-}
+// The threshold matrix and the level maths moved to `@/theme/dither` when the
+// instructor workspace started drawing the same field on the web. Re-exported
+// here so every existing import keeps working.
+export { ditherFill, ditherId, litCells };
+export type { DitherLevel };
 
 interface DefsProps {
   /** Namespace, so two dithers of different colour pairs never collide. */
@@ -84,9 +65,15 @@ export function DitherDefs({ name, colour, levels }: DefsProps) {
 }
 
 interface FieldProps {
-  /** Base colour, the one showing through the unlit cells. */
+  /**
+   * `chart` is the full-strength field the skill tree sits on; `quiet` is the
+   * calmer one every other screen uses. Both come from the theme, so neither
+   * caller has to know whether it is drawing on paper or on a lit screen.
+   */
+  variant?: 'chart' | 'quiet';
+  /** Base colour, the one showing through the unlit cells. Overrides `variant`. */
   from?: string;
-  /** Dithered colour, densest at the top. */
+  /** Dithered colour, densest at the top. Overrides `variant`. */
   to?: string;
   /** How many bands the gradient is cut into. */
   bands?: number;
@@ -101,23 +88,20 @@ interface FieldProps {
  * The chart ground: a vertical gradient built entirely out of dither bands,
  * densest at the top. Absolutely positioned behind its siblings.
  */
-export function DitherField({
-  from = palette.wine,
-  to = palette.cardinal,
-  bands = 9,
-  flat = false,
-}: FieldProps) {
-  const levels = Array.from({ length: bands }, (_, i) =>
-    Math.round(16 - (i * 15) / Math.max(bands - 1, 1)),
-  );
+export function DitherField({ variant = 'chart', from, to, bands = 9, flat = false }: FieldProps) {
+  const theme = useTheme();
+  const [baseColour, overColour] = variant === 'quiet' ? theme.quietField : theme.field;
+  const base = from ?? baseColour;
+  const over = to ?? overColour;
+  const levels = fieldLevels(bands);
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <Svg width="100%" height="100%" preserveAspectRatio="none">
-        {flat ? null : <DitherDefs name="field" colour={to} levels={levels} />}
+        {flat ? null : <DitherDefs name="field" colour={over} levels={levels} />}
         {/* Flat mode keeps the dominant colour, not the base one: the field
-            should still read as cardinal when the texture is gone. */}
-        <Rect x="0" y="0" width="100%" height="100%" fill={flat ? to : from} />
+            should still read as itself when the texture is gone. */}
+        <Rect x="0" y="0" width="100%" height="100%" fill={flat ? over : base} />
         {flat
           ? null
           : levels.map((level, i) => (

@@ -14,16 +14,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
 
-import type { SkillNode } from '@/features/skilltree/types';
-
 /** node id → ISO timestamp of the moment it was marked complete. */
 export type CompletionLog = Record<string, string>;
 
-const key = (courseId: string) => `cardinal.progress.v1.${courseId}`;
+/**
+ * Two logs, because they answer different questions. `nodes` records a node
+ * marked complete outright — only meaningful for a node with no missions.
+ * `missions` records the individual pieces of work, and is what node mastery is
+ * derived from everywhere else.
+ */
+type Scope = 'nodes' | 'missions';
 
-export async function loadLocal(courseId: string): Promise<CompletionLog> {
+const key = (scope: Scope, courseId: string) =>
+  scope === 'nodes' ? `cardinal.progress.v1.${courseId}` : `cardinal.missions.v1.${courseId}`;
+
+export async function loadLocal(courseId: string, scope: Scope = 'nodes'): Promise<CompletionLog> {
   try {
-    const raw = await AsyncStorage.getItem(key(courseId));
+    const raw = await AsyncStorage.getItem(key(scope, courseId));
     return raw ? (JSON.parse(raw) as CompletionLog) : {};
   } catch {
     return {};
@@ -32,56 +39,39 @@ export async function loadLocal(courseId: string): Promise<CompletionLog> {
 
 export async function markLocal(
   courseId: string,
-  nodeId: string,
+  id: string,
+  scope: Scope = 'nodes',
   at: Date = new Date(),
 ): Promise<CompletionLog> {
-  const log = await loadLocal(courseId);
-  if (log[nodeId]) return log;
-  const next = { ...log, [nodeId]: at.toISOString() };
-  await AsyncStorage.setItem(key(courseId), JSON.stringify(next));
+  const log = await loadLocal(courseId, scope);
+  if (log[id]) return log;
+  const next = { ...log, [id]: at.toISOString() };
+  await AsyncStorage.setItem(key(scope, courseId), JSON.stringify(next));
+  return next;
+}
+
+/** Undo. A student who ticked the wrong mission should not have to live with it. */
+export async function unmarkLocal(
+  courseId: string,
+  id: string,
+  scope: Scope = 'nodes',
+): Promise<CompletionLog> {
+  const log = await loadLocal(courseId, scope);
+  if (!log[id]) return log;
+  const next = { ...log };
+  delete next[id];
+  await AsyncStorage.setItem(key(scope, courseId), JSON.stringify(next));
   return next;
 }
 
 export async function clearLocal(courseId: string): Promise<void> {
-  await AsyncStorage.removeItem(key(courseId));
+  await AsyncStorage.multiRemove([key('nodes', courseId), key('missions', courseId)]);
 }
 
-export interface MergedProgress {
-  masteredIds: string[];
-  xp: number;
-}
-
-/**
- * Fold the local log into what the server returned.
- *
- * XP is only added for completions the server does not already know about, so a
- * node that syncs later does not get counted twice.
- */
-export function mergeLocalProgress(
-  nodes: SkillNode[],
-  serverMasteredIds: string[],
-  log: CompletionLog,
-  serverXp: number,
-): MergedProgress {
-  const server = new Set(serverMasteredIds);
-  const known = new Map(nodes.map((n) => [n.id, n] as const));
-
-  let xp = serverXp;
-  for (const id of Object.keys(log)) {
-    if (server.has(id)) continue;
-    const node = known.get(id);
-    if (node) xp += node.xpReward;
-  }
-
-  const merged = new Set(serverMasteredIds);
-  for (const id of Object.keys(log)) if (known.has(id)) merged.add(id);
-
-  return { masteredIds: [...merged], xp };
-}
-
-/** Read/write access to one course's local log, for a screen. */
+/** Read/write access to one course's local logs, for a screen. */
 export function useLocalProgress(courseId: string | undefined) {
   const [log, setLog] = useState<CompletionLog>({});
+  const [missionLog, setMissionLog] = useState<CompletionLog>({});
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -90,12 +80,14 @@ export function useLocalProgress(courseId: string | undefined) {
       setReady(true);
       return;
     }
-    loadLocal(courseId).then((l) => {
-      if (live) {
-        setLog(l);
+    Promise.all([loadLocal(courseId, 'nodes'), loadLocal(courseId, 'missions')]).then(
+      ([nodes, missions]) => {
+        if (!live) return;
+        setLog(nodes);
+        setMissionLog(missions);
         setReady(true);
-      }
-    });
+      },
+    );
     return () => {
       live = false;
     };
@@ -104,7 +96,19 @@ export function useLocalProgress(courseId: string | undefined) {
   const complete = useCallback(
     async (nodeId: string) => {
       if (!courseId) return;
-      setLog(await markLocal(courseId, nodeId));
+      setLog(await markLocal(courseId, nodeId, 'nodes'));
+    },
+    [courseId],
+  );
+
+  const toggleMission = useCallback(
+    async (missionId: string, done: boolean) => {
+      if (!courseId) return;
+      setMissionLog(
+        done
+          ? await markLocal(courseId, missionId, 'missions')
+          : await unmarkLocal(courseId, missionId, 'missions'),
+      );
     },
     [courseId],
   );
@@ -113,7 +117,8 @@ export function useLocalProgress(courseId: string | undefined) {
     if (!courseId) return;
     await clearLocal(courseId);
     setLog({});
+    setMissionLog({});
   }, [courseId]);
 
-  return { log, ready, complete, reset };
+  return { log, missionLog, ready, complete, toggleMission, reset };
 }

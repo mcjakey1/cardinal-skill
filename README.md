@@ -1,4 +1,4 @@
-# Cardinal Skill (formerly SkillQuest)
+# Cardinal Skill
 
 Transform course syllabi into navigable, interactive skill trees.
 

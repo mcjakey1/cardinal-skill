@@ -1,29 +1,33 @@
 {
   "expo": {
-    "name": "SkillQuest",
+    "name": "Cardinal Skill",
     "slug": "cardinal-skill",
     "version": "0.1.0",
     "orientation": "portrait",
-    "scheme": "skillquest",
+    "scheme": "cardinalskill",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "backgroundColor": "#F5EFE3",
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0B1622"
+      "backgroundColor": "#F5EFE3",
+      "dark": {
+        "backgroundColor": "#0A0407"
+      }
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "edu.cintana.skillquest"
+      "bundleIdentifier": "edu.cintana.cardinalskill"
     },
     "android": {
-      "package": "edu.cintana.skillquest",
+      "package": "edu.cintana.cardinalskill",
+      "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0B1622"
-      },
-      "edgeToEdgeEnabled": true
+        "backgroundColor": "#0A0407"
+      }
     },
     "web": {
       "bundler": "metro",

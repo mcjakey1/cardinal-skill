@@ -24,6 +24,10 @@ export function computeAutoLayout(
   const nodeHeight = config.nodeHeight || 110
   const rankSep = config.rankSep || 95  // Compact vertical layer spacing (80-110px range)
   const nodeSep = config.nodeSep || 75  // Compact horizontal sibling spacing (65-90px range)
+  // Room for a label that overhangs its mark. Captions are centred on the node,
+  // so a wide one on the outermost column runs past the graph box and gets
+  // clipped by the SVG edge.
+  const pad = Math.max(80, nodeWidth)
 
   const isHelp = (n: SkillNode) => Boolean(n.parentNodeId)
   const byId = new Map(nodes.map(n => [n.id, n]))
@@ -121,11 +125,18 @@ export function computeAutoLayout(
   const minY = layoutNodes.reduce((m, n) => Math.min(m, n.position.y), Infinity)
 
   const graphInfo = g.graph()
-  const graphWidth = Math.max(960, Math.round((graphInfo.width || 960) + 160), maxX + nodeWidth + 80)
+  // Sized to the graph, not to a fixed floor. The old 960×860 minimum meant a
+  // six-node course still drew a canvas big enough for twenty-five, which on a
+  // full-bleed field reads as a mostly-empty red page rather than as a chart.
+  const graphWidth = Math.max(
+    Math.round((graphInfo.width || 0) + pad * 2),
+    maxX + pad,
+    360
+  )
   const graphHeight = Math.max(
-    860,
-    Math.round((graphInfo.height || 860) + 160),
-    maxY - Math.min(0, minY) + nodeHeight + 80
+    Math.round((graphInfo.height || 0) + pad),
+    maxY - Math.min(0, minY) + nodeHeight + pad,
+    280
   )
 
   return {

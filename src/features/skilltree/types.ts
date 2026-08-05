@@ -38,8 +38,34 @@ export interface SkillNode {
    * a grade filters on it rather than guessing from `parentNodeId`.
    */
   graded?: boolean;
+  /** Quest name written by `name-quest`. Null until the course has been named. */
+  questTitle?: string | null;
+  /** One line of flavour under the quest name. */
+  questSubtitle?: string | null;
+  /** Badge for finishing this node, written by `name-quest`. */
+  achievementTitle?: string | null;
+  /** One sentence saying what the student proved. */
+  achievementDescription?: string | null;
   /** Title an instructor typed by hand, overriding the generated one. */
   titleOverride?: string | null;
+}
+
+/**
+ * One piece of work inside a node.
+ *
+ * A node's XP is the sum of its missions, never a number typed on the node —
+ * see `missions.ts`. This is the display-carrying shape; the XP maths only ever
+ * needs `MissionLike` (`id`, `skillId`, `xpReward`).
+ */
+export interface Mission {
+  id: string;
+  /** The node this mission belongs to. */
+  skillId: string;
+  title: string;
+  description: string;
+  kind: NodeKind;
+  xpReward: number;
+  estimatedMinutes?: number;
 }
 
 /** Directed edge: `nodeId` requires `prereqId` to be mastered first. */
@@ -96,6 +122,34 @@ export interface LearnerSignals {
   streakDays: number;
   /** Days since enrolment. Denominator for pace. */
   daysActive: number;
+}
+
+// ------------------------------------------------------------------- profile
+
+/** How hard a student wants to be pushed. Their choice, never inferred. */
+export type StudyPace = 'relaxed' | 'balanced' | 'intense';
+
+/**
+ * Who the student is, as they described themselves.
+ *
+ * The web prototype carried two conflicting shapes for this — `UserProfile`
+ * (`name`, `yearLevel: number`) and `StudentProfile` (`fullName`,
+ * `yearLevel: string`). This is the one that survives, and the string year is
+ * the reason: a foundation year, a placement year, and "5+" are all real
+ * answers, and a number cannot hold any of them.
+ *
+ * Only `fullName`, `email` and `studentNumber` are required. Everything else is
+ * a detail a student may not want to give, and a required field is a reason to
+ * abandon a form.
+ */
+export interface StudentProfile {
+  fullName: string;
+  email: string;
+  studentNumber: string;
+  program: string;
+  yearLevel: string;
+  campus: string;
+  studyPace: StudyPace;
 }
 
 // -------------------------------------------------------------- quest naming

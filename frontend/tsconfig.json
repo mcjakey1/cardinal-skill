@@ -32,6 +32,12 @@
       ],
       "@shared/*": [
         "../src/features/skilltree/*"
+      ],
+      // The student app's design tokens. The authoring canvas draws the tree in
+      // the grammar a student receives it in, and DESIGN.md's Sixteen Rule means
+      // that palette has exactly one source of truth — this one.
+      "@theme/*": [
+        "../src/theme/*"
       ]
     }
   },

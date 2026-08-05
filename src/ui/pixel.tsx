@@ -1,7 +1,7 @@
 /**
  * The screen's component vocabulary: text, bevels, controls, and icons.
  *
- * Two rules run through all of it.
+ * Three rules run through all of it.
  *
  * **Depth is an edge, not a shadow.** A raised control is lit on its top-left
  * and dark on its bottom-right, one bevel wide. Pressing it swaps the two, which
@@ -11,6 +11,10 @@
  * **Icons are drawn, never typed.** Each one below is a bitmap authored on an
  * 8×8 grid and rendered as rects, so it is the same object at any size and in
  * any palette colour. No glyph font, no emoji.
+ *
+ * **Nothing here names a colour.** Every value comes from the resolved theme, so
+ * one component draws correctly on paper and on the lit screen. A raw `palette.`
+ * reference in this file is how one control ends up dark in a light app.
  */
 
 import { forwardRef } from 'react';
@@ -30,7 +34,8 @@ import {
 import Svg, { Rect } from 'react-native-svg';
 
 import type { NodeStatus } from '@/features/skilltree/types';
-import { bevel, nodeStyle, palette, space, touch, type } from '@/theme/tokens';
+import { bevel, space, touch, type, type Theme } from '@/theme/tokens';
+import { useTheme } from '@/theme/useTheme';
 
 // ----------------------------------------------------------------------- text
 
@@ -42,16 +47,11 @@ interface PixelTextProps extends TextProps {
   centred?: boolean;
 }
 
-export function PixelText({
-  variant = 'body',
-  colour = palette.bone,
-  centred,
-  style,
-  ...rest
-}: PixelTextProps) {
+export function PixelText({ variant = 'body', colour, centred, style, ...rest }: PixelTextProps) {
+  const t = useTheme();
   return (
     <Text
-      style={[type[variant], { color: colour }, centred && styles.centred, style]}
+      style={[type[variant], { color: colour ?? t.ink }, centred && styles.centred, style]}
       {...rest}
     />
   );
@@ -59,14 +59,7 @@ export function PixelText({
 
 // --------------------------------------------------------------------- bevels
 
-type Tone = 'panel' | 'cardinal' | 'brass' | 'ink';
-
-const TONES: Record<Tone, { fill: string; light: string; dark: string }> = {
-  panel: { fill: palette.oxblood, light: palette.wine, dark: palette.void },
-  cardinal: { fill: palette.cardinal, light: palette.rose, dark: palette.blood },
-  brass: { fill: palette.brass, light: palette.gold, dark: palette.umber },
-  ink: { fill: palette.abyss, light: palette.oxblood, dark: palette.void },
-};
+export type Tone = keyof Theme['tone'];
 
 interface BevelProps extends ViewProps {
   tone?: Tone;
@@ -79,13 +72,17 @@ interface BevelProps extends ViewProps {
 /**
  * Returned as both a view and a text style: the bevel is nothing but border
  * properties, which both accept, and a field needs the same edge a panel has.
+ *
+ * Takes the theme rather than reading it from context, so it stays usable inside
+ * a `StyleSheet` callback and in the style array of a `Pressable`.
  */
 export function bevelStyle(
+  theme: Theme,
   tone: Tone,
   depth: 'raised' | 'inset',
   hollow = false,
 ): ViewStyle & TextStyle {
-  const t = TONES[tone];
+  const t = theme.tone[tone];
   const light = depth === 'raised' ? t.light : t.dark;
   const dark = depth === 'raised' ? t.dark : t.light;
   return {
@@ -102,7 +99,28 @@ export function bevelStyle(
 }
 
 export function Bevel({ tone = 'panel', depth = 'raised', hollow, style, ...rest }: BevelProps) {
-  return <View style={[bevelStyle(tone, depth, hollow), style]} {...rest} />;
+  const t = useTheme();
+  return <View style={[bevelStyle(t, tone, depth, hollow), style]} {...rest} />;
+}
+
+/**
+ * react-native-web hands the style callback a `hovered` flag that React Native's
+ * own types do not declare. The cast lives here rather than at each call site,
+ * and it is simply absent on iOS and Android, where there is no pointer to hover
+ * with — which is the correct behaviour, not a gap.
+ */
+export type PressState = { pressed: boolean; hovered?: boolean };
+
+/**
+ * A pointer resting on a key lights it.
+ *
+ * The era this interface is drawn from had no hover, so this is a modern
+ * affordance and it is kept to the one move the grammar already owns: the fill
+ * becomes the tone's lit shade, the same colour its top-left bevel is already
+ * using. No new colour, no shadow, no transition — a lit key or an unlit one.
+ */
+export function hoverFill(theme: Theme, tone: Tone, hovered?: boolean): ViewStyle | null {
+  return hovered ? { backgroundColor: theme.tone[tone].light } : null;
 }
 
 // -------------------------------------------------------------------- buttons
@@ -116,10 +134,10 @@ interface ButtonProps extends Omit<PressableProps, 'style' | 'children'> {
 }
 
 export const PixelButton = forwardRef<View, ButtonProps>(function PixelButton(
-  { label, tone = 'cardinal', grow = true, disabled, style, ...rest },
+  { label, tone = 'brand', grow = true, disabled, style, ...rest },
   ref,
 ) {
-  const ink = tone === 'brass' ? palette.abyss : palette.bone;
+  const t = useTheme();
   return (
     <Pressable
       ref={ref}
@@ -127,15 +145,20 @@ export const PixelButton = forwardRef<View, ButtonProps>(function PixelButton(
       accessibilityLabel={label}
       accessibilityState={{ disabled: Boolean(disabled) }}
       disabled={disabled}
-      style={({ pressed }) => [
+      style={({ pressed, hovered }: PressState) => [
         styles.button,
-        bevelStyle(disabled ? 'panel' : tone, pressed ? 'inset' : 'raised'),
+        bevelStyle(t, disabled ? 'panel' : tone, pressed ? 'inset' : 'raised'),
+        disabled || pressed ? null : hoverFill(t, tone, hovered),
         grow ? styles.grow : null,
         style,
       ]}
       {...rest}
     >
-      <PixelText variant="label" colour={disabled ? palette.haze : ink} centred>
+      <PixelText
+        variant="label"
+        colour={disabled ? t.inkMuted : t.tone[tone].ink}
+        centred
+      >
         {label}
       </PixelText>
     </Pressable>
@@ -150,18 +173,20 @@ interface InputProps extends TextInputProps {
 
 /** A field is a well: the bevel runs inset, so it reads as somewhere to put something. */
 export function PixelInput({ label, style, multiline, ...rest }: InputProps) {
+  const t = useTheme();
   return (
     <View style={styles.field}>
-      <PixelText variant="micro" colour={palette.haze}>
+      <PixelText variant="micro" colour={t.inkMuted}>
         {label.toUpperCase()}
       </PixelText>
       <TextInput
         accessibilityLabel={label}
-        placeholderTextColor={palette.haze}
+        placeholderTextColor={t.inkMuted}
         multiline={multiline}
         style={[
-          bevelStyle('ink', 'inset'),
+          bevelStyle(t, 'ink', 'inset'),
           styles.input,
+          { color: t.ink },
           multiline ? styles.inputTall : null,
           style,
         ]}
@@ -187,6 +212,7 @@ export function Toggle({
   onChange: (next: boolean) => void;
   label: string;
 }) {
+  const t = useTheme();
   return (
     <Pressable
       onPress={() => onChange(!value)}
@@ -203,16 +229,59 @@ export function Toggle({
             key={side}
             style={[
               styles.toggleCell,
-              bevelStyle(active ? 'cardinal' : 'panel', active ? 'inset' : 'raised'),
+              bevelStyle(t, active ? 'brand' : 'panel', active ? 'inset' : 'raised'),
             ]}
           >
-            <PixelText variant="micro" colour={active ? palette.bone : palette.haze}>
+            <PixelText variant="micro" colour={active ? t.tone.brand.ink : t.inkMuted}>
               {side}
             </PixelText>
           </View>
         );
       })}
     </Pressable>
+  );
+}
+
+/**
+ * The same two-cell switch, widened to a row of named choices. Used where a
+ * setting has three states rather than two — theme, for one, which has to carry
+ * "follow the device" alongside the two it can be pinned to.
+ */
+export function Choice<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: readonly { value: T; label: string }[];
+  onChange: (next: T) => void;
+  label: string;
+}) {
+  const t = useTheme();
+  return (
+    <View style={styles.toggle} accessibilityRole="radiogroup" accessibilityLabel={label}>
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: active }}
+            accessibilityLabel={option.label}
+            style={[
+              styles.toggleCell,
+              bevelStyle(t, active ? 'brand' : 'panel', active ? 'inset' : 'raised'),
+            ]}
+          >
+            <PixelText variant="micro" colour={active ? t.tone.brand.ink : t.inkMuted}>
+              {option.label.toUpperCase()}
+            </PixelText>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
@@ -230,7 +299,8 @@ interface MeterProps {
  * Progress as lit cells, never a smooth bar. Sixteen colours cannot draw a
  * smooth bar, and a segmented meter reads faster at a glance anyway.
  */
-export function Meter({ value, cells = 12, colour = palette.brass, label }: MeterProps) {
+export function Meter({ value, cells = 12, colour, label }: MeterProps) {
+  const t = useTheme();
   const clamped = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
   const lit = Math.round(clamped * cells);
   return (
@@ -243,7 +313,10 @@ export function Meter({ value, cells = 12, colour = palette.brass, label }: Mete
       {Array.from({ length: cells }, (_, i) => (
         <View
           key={i}
-          style={[styles.meterCell, { backgroundColor: i < lit ? colour : palette.oxblood }]}
+          style={[
+            styles.meterCell,
+            { backgroundColor: i < lit ? (colour ?? t.earned) : t.tone.panel.dark },
+          ]}
         />
       ))}
     </View>
@@ -344,6 +417,65 @@ const ICONS = {
     '########',
     '########',
   ],
+  /** Half lit, half dark — the switch between paper and a lit screen. */
+  contrast: [
+    '..####..',
+    '.##...#.',
+    '##....##',
+    '##....##',
+    '###...##',
+    '####..##',
+    '.#####..',
+    '..####..',
+  ],
+  minus: [
+    '........',
+    '........',
+    '........',
+    '.######.',
+    '.######.',
+    '........',
+    '........',
+    '........',
+  ],
+  plus: [
+    '........',
+    '...##...',
+    '...##...',
+    '.######.',
+    '.######.',
+    '...##...',
+    '...##...',
+    '........',
+  ],
+  /** Crop marks: everything pulled inside one frame. */
+  fit: [
+    '###..###',
+    '#......#',
+    '#......#',
+    '........',
+    '........',
+    '#......#',
+    '#......#',
+    '###..###',
+  ],
+  /**
+   * Back the way it was.
+   *
+   * The head starts hard against the left edge and the shaft runs well past the
+   * middle. Centred with a short shaft — the first attempt at this — the two
+   * strokes read as a cross, not an arrow.
+   */
+  undo: [
+    '........',
+    '..#.....',
+    '.##.....',
+    '#######.',
+    '.##.....',
+    '..#.....',
+    '........',
+    '........',
+  ],
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -354,13 +486,14 @@ interface IconProps {
   colour?: string;
 }
 
-export function PixelIcon({ name, size = 16, colour = palette.bone }: IconProps) {
+export function PixelIcon({ name, size = 16, colour }: IconProps) {
+  const t = useTheme();
   return (
     <Svg width={size} height={size} viewBox="0 0 8 8">
       {ICONS[name].map((row, y) =>
         row.split('').map((cell, x) =>
           cell === '#' ? (
-            <Rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill={colour} />
+            <Rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill={colour ?? t.ink} />
           ) : null,
         ),
       )}
@@ -375,8 +508,10 @@ export function PixelIcon({ name, size = 16, colour = palette.bone }: IconProps)
  * encoding that keeps status off colour alone.
  */
 export function StatusTag({ status, compact }: { status: NodeStatus; compact?: boolean }) {
-  const s = nodeStyle[status];
-  const ink = status === 'locked' ? palette.haze : status === 'mastered' ? palette.gold : palette.bone;
+  const t = useTheme();
+  const s = t.node[status];
+  const ink =
+    status === 'locked' ? t.inkMuted : status === 'mastered' ? t.earnedText : t.ink;
   return (
     <View style={styles.status}>
       <PixelIcon name={s.glyph as IconName} size={12} colour={ink} />
@@ -402,7 +537,6 @@ const styles = StyleSheet.create({
   field: { gap: space.xs },
   input: {
     ...type.body,
-    color: palette.bone,
     minHeight: touch,
     paddingHorizontal: space.cell,
     paddingVertical: space.cell,

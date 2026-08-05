@@ -1,5 +1,5 @@
-import { CardinalApp } from '@/components/cardinal-app'
+import { InstructorApp } from '@/components/instructor-app'
 
 export default function Page() {
-  return <CardinalApp />
+  return <InstructorApp />
 }

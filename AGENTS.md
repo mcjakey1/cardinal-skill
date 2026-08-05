@@ -5,7 +5,7 @@ file: `CLAUDE.md` defers to it and only adds Claude-specific notes.
 
 ## What this is
 
-SkillQuest turns a course syllabus into a navigable skill tree. A student uploads
+Cardinal Skill turns a course syllabus into a navigable skill tree. A student uploads
 a syllabus, an AI parser converts it into a prerequisite graph of learning nodes,
 and completing coursework unlocks nodes and earns XP.
 
@@ -31,7 +31,8 @@ app/                      Expo Router routes. File path = URL path.
 src/
   features/skilltree/     Tree types, pure progression rules, queries, chart UI.
   lib/                    Clients and adapters (Supabase).
-  theme/tokens.ts         Every colour, font, and spacing value.
+  theme/tokens.ts         Every colour, font, and spacing value — student app.
+  theme/lms.ts            The same, for the instructor workspace only.
 supabase/
   migrations/             Schema and RLS policies. Forward-only.
   functions/              Deno Edge Functions. Server-only secrets live here.
@@ -67,8 +68,17 @@ something they shouldn't, fix the migration.
 
 **Student data is minimised and opt-in.** Grades, pace, and progress are personal
 records. Social visibility (leaderboards, guilds) is off by default and stored as
-an explicit `social_opt_in` flag. Instructor views return class-level aggregates,
-suppressed below five students; they never return a named student's grades.
+an explicit `social_opt_in` flag — it governs what *peers* see and is not
+consulted for the instructor read below.
+
+**An instructor reads their own students, and only reads.**
+`0005_instructor_reads.sql` lets the owner of a course select the enrolment,
+name, node and mission progress, and XP of students on that course, through
+`course_student_progress`. Every policy it adds is `for select`; writes stay at
+`user_id = auth.uid()`. Nothing reaches outside a course the caller owns, and
+each check goes through a `security definer` helper (`owns_course` and friends)
+because a policy on `enrollments` that read `courses` back would recurse.
+Aggregates keep their five-student floor for every reader who is not the owner.
 
 **AI output is untrusted input.** The syllabus parser produces a graph that can
 contain cycles, dangling references, or absurd XP values. Validate at the
@@ -88,6 +98,11 @@ label as well as colour. Interactive elements have an `accessibilityLabel` and a
   can be tested with `node --test`. `progression.ts` is the model to follow.
 - Tokens from `src/theme/tokens.ts`. A raw hex value or magic spacing number in a
   component is a bug — see `DESIGN.md`.
+- One exception, and only one: `/instructor` is a conventional LMS workspace by
+  design and takes its tokens from `src/theme/lms.ts` (brief: `frontend/DESIGN.md`)
+  with parts in `src/ui/lms.tsx`. Do not mix the two sets in one screen. The
+  authoring canvas inside that workspace is the deliberate crossing — it draws in
+  the student's tokens so an instructor sees the artifact as delivered.
 - Copy is UI text: sentence case, active voice, name the thing the student
   controls. An error says what happened and what to do next.
 - Migrations are forward-only and numbered. Never edit one that has been applied.

@@ -49,6 +49,24 @@ export const palette = {
   white: '#FFFFFF',
   /** 0F · The one cool colour. Links, information, and the keyboard focus ring. */
   periwinkle: '#7A6BE8',
+
+  // ---------------------------------------------------------------- light set
+  //
+  // Two entries added for the light theme, under the escape hatch the Sixteen
+  // Rule writes for itself: a genuine addition lands here and in DESIGN.md in
+  // the same change.
+  //
+  // Neither could be borrowed from the sixteen. Every existing light entry is
+  // cool (`bone` is pink-grey), and the ground the student asked for is warm.
+  // And `periwinkle` measures 3.6:1 on that ground — it carries "the machine is
+  // telling you something", so on light it needed a darker twin rather than a
+  // reassignment to red, which would have borrowed the colour that means
+  // "do this next".
+
+  /** 10 · The light theme's ground. Warm, so the screen reads as paper. */
+  cream: '#F5EFE3',
+  /** 11 · Periwinkle for a light ground. 6.98:1 on cream; same hue family. */
+  indigo: '#4A3FB0',
 } as const;
 
 export type PaletteColour = (typeof palette)[keyof typeof palette];
@@ -166,3 +184,176 @@ export const nodeStyle = {
 } as const;
 
 export type NodeGlyph = (typeof nodeStyle)[keyof typeof nodeStyle]['glyph'];
+
+// ---------------------------------------------------------------------- themes
+
+/**
+ * Two renditions of one grammar.
+ *
+ * The sixteen-colour world was authored on a dark ground, and for a while that
+ * *was* the design. It is now the option rather than the given: a student reading
+ * between classes in daylight gets paper, and a student reading at night gets the
+ * lit screen. Nothing else changes — same square corners, same 2dp bevels, same
+ * ordered dither, same one typeface, same three-way status encoding.
+ *
+ * What could not simply invert is worth naming, because it is where a careless
+ * light mode goes wrong:
+ *
+ *   `brass` is 1.98:1 on a light ground. Mastered is the most important earned
+ *   state in the product, so on light it moves to `umber` — brass in shadow —
+ *   and keeps the metal family through its gold bevel.
+ *
+ *   `haze` is 2.33:1 on light and cannot set text there. `slate` takes secondary
+ *   text instead, at 6.76:1. DESIGN.md's Slate-Is-Not-Ink Rule was measured on
+ *   `void`, where slate is 2.46:1 — the rule is about a ground, not about slate.
+ *
+ *   `blush` is the dark theme's focus ring at 3.09:1 on cardinal. On cream it is
+ *   nearly white, so light focus is `cardinal`.
+ */
+export type Scheme = 'light' | 'dark';
+
+export interface BevelTone {
+  fill: string;
+  light: string;
+  dark: string;
+  ink: string;
+}
+
+export interface NodeVisual {
+  fill: string;
+  edge: string;
+  light: string;
+  dark: string;
+  ink: string;
+  glyph: string;
+  label: string;
+}
+
+export interface Theme {
+  scheme: Scheme;
+  /** The screen with nothing on it. */
+  ground: string;
+  /** A raised surface: panels, window frames, nav cells. */
+  panel: string;
+  /** An inset surface: window bodies, input wells. */
+  well: string;
+  /** Primary text. */
+  ink: string;
+  /** Secondary text. Always ≥4.5:1 on `ground`, `panel` and `well`. */
+  inkMuted: string;
+  /** Hairlines, dividers, cell outlines. Never text. */
+  line: string;
+  brand: string;
+  brandInk: string;
+  /** "The machine is telling you something" — log lines and links. */
+  info: string;
+  /** Mastered: the meter, cleared cells, walked edges, earned stamps. */
+  earned: string;
+  /** Ink that sits on an `earned` surface. */
+  earnedInk: string;
+  /** Earned as *text*, on `ground` or `panel`. */
+  earnedText: string;
+  /** An error line. */
+  alarm: string;
+  /** Focus ring, and the outline on the recommended next node. */
+  focus: string;
+  /** Chart ground dither: [base, laid over]. */
+  field: readonly [string, string];
+  /** A locked cell's fill dither: [base, laid over]. */
+  lockField: readonly [string, string];
+  /** Secondary screens use a quieter field than the chart. */
+  quietField: readonly [string, string];
+  tone: Record<'panel' | 'brand' | 'earned' | 'ink', BevelTone>;
+  node: Record<'locked' | 'available' | 'mastered', NodeVisual>;
+}
+
+export const darkTheme: Theme = {
+  scheme: 'dark',
+  ground: palette.void,
+  panel: palette.oxblood,
+  well: palette.abyss,
+  ink: palette.bone,
+  inkMuted: palette.haze,
+  line: palette.slate,
+  brand: palette.cardinal,
+  brandInk: palette.bone,
+  info: palette.periwinkle,
+  earned: palette.brass,
+  earnedInk: palette.abyss,
+  earnedText: palette.gold,
+  alarm: palette.rose,
+  focus: palette.blush,
+  field: [palette.wine, palette.cardinal],
+  lockField: [palette.void, palette.wine],
+  quietField: [palette.void, palette.wine],
+  tone: {
+    panel: { fill: palette.oxblood, light: palette.wine, dark: palette.void, ink: palette.bone },
+    brand: { fill: palette.cardinal, light: palette.rose, dark: palette.blood, ink: palette.bone },
+    earned: { fill: palette.brass, light: palette.gold, dark: palette.umber, ink: palette.abyss },
+    ink: { fill: palette.abyss, light: palette.oxblood, dark: palette.void, ink: palette.bone },
+  },
+  node: nodeStyle,
+};
+
+export const lightTheme: Theme = {
+  scheme: 'light',
+  ground: palette.cream,
+  panel: palette.white,
+  well: palette.bone,
+  ink: palette.void,
+  inkMuted: palette.slate,
+  line: palette.slate,
+  brand: palette.cardinal,
+  brandInk: palette.white,
+  info: palette.indigo,
+  earned: palette.umber,
+  earnedInk: palette.gold,
+  earnedText: palette.umber,
+  alarm: palette.blood,
+  focus: palette.cardinal,
+  // The light field runs cream -> bone, so its densest band is `bone` and every
+  // mark on it is measured against that: cardinal 4.91:1, umber 11.96:1, slate
+  // 6.76:1, void labels 16.66:1. Dithering toward `haze` gave a better texture
+  // and put an available cell at 2.11:1 on its own field, which is the whole
+  // point of the chart failing.
+  field: [palette.cream, palette.bone],
+  lockField: [palette.bone, palette.haze],
+  quietField: [palette.cream, palette.bone],
+  tone: {
+    panel: { fill: palette.white, light: palette.white, dark: palette.haze, ink: palette.void },
+    brand: { fill: palette.cardinal, light: palette.rose, dark: palette.blood, ink: palette.white },
+    earned: { fill: palette.umber, light: palette.brass, dark: palette.void, ink: palette.gold },
+    ink: { fill: palette.bone, light: palette.haze, dark: palette.white, ink: palette.void },
+  },
+  node: {
+    locked: {
+      fill: palette.bone,
+      edge: palette.slate,
+      light: palette.white,
+      dark: palette.haze,
+      ink: palette.void,
+      glyph: 'lock',
+      label: 'Locked',
+    },
+    available: {
+      fill: palette.cardinal,
+      edge: palette.blood,
+      light: palette.rose,
+      dark: palette.blood,
+      ink: palette.white,
+      glyph: 'play',
+      label: 'Available',
+    },
+    mastered: {
+      fill: palette.umber,
+      edge: palette.void,
+      light: palette.brass,
+      dark: palette.void,
+      ink: palette.gold,
+      glyph: 'check',
+      label: 'Mastered',
+    },
+  },
+};
+
+export const themes: Record<Scheme, Theme> = { light: lightTheme, dark: darkTheme };

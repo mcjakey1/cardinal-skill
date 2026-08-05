@@ -1,15 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
-  type AccessibilityProps,
-  Platform,
-  ScrollView,
+  type LayoutChangeEvent,
+  PanResponder,
+  Pressable,
   StyleSheet,
+  View,
 } from 'react-native';
-import Svg, { G, Path, Polygon, Rect, Text as SvgText } from 'react-native-svg';
+import Svg, { G, Path, Polygon, Rect } from 'react-native-svg';
 
 import { DitherDefs, ditherFill } from '@/ui/Dither';
-import { font, motion, nodeStyle, palette, space } from '@/theme/tokens';
+import { ChartTools } from '@/ui/ChartTools';
+import { PixelText, type PressState } from '@/ui/pixel';
+import { bevel, motion, space, touch, type Theme } from '@/theme/tokens';
+import { useTheme } from '@/theme/useTheme';
+import type { NodePosition, PositionMap } from '@/lib/nodeLayout';
 import {
   arrowheadPoints,
   bendsOf,
@@ -18,38 +23,69 @@ import {
   orthogonalPath,
   type Routing,
 } from './edgeRouting';
+import {
+  FIT_PAD,
+  boundsOf,
+  fitTransform,
+  zoomAbout,
+  type Transform,
+} from './chartViewport';
 import { deriveStatuses, nextQuests } from './progression';
 import type { NodeStatus, SkillNode, Tree } from './types';
 
 /**
- * The chart is laid out in device pixels, not in tree units scaled to fit.
+ * The chart is an unbounded canvas you move around, not a page that scrolls.
  *
- * Fitting a whole syllabus into one viewport is what made the old chart
- * unreadable: at half scale a 12px label renders at six pixels and a node stops
- * being a touch target. So tree coordinates map to dp at a fixed scale and the
- * chart scrolls, which is what every skill tree a student has ever used does.
+ * It used to be a pair of nested ScrollViews, which meant the graph could only
+ * ever be as big as its content and a node could only ever sit where the
+ * syllabus put it. A course tree is a diagram; people expect to push it around,
+ * to spread a crowded branch out, and to see the whole thing at once. So:
  *
- * The two axes scale differently on purpose. Edges are orthogonal, so the graph
- * carries no angles worth preserving, and the vertical needs more room than the
- * horizontal because every cell has two lines of label beneath it.
+ *   * One transform — `{x, y, scale}` — applied to the layer holding everything.
+ *     Panning is deliberately unclamped, because open ground to the side is
+ *     where a node gets dragged to.
+ *   * Nodes are real `Pressable` views, not `<G>` elements. That is what makes
+ *     dragging work the same on a phone and a desktop, and it fixes a real
+ *     accessibility hole: a role'd element inside `<svg>` is rewritten by
+ *     react-native-web into a tag the browser drops, so the old chart's nodes
+ *     were announced but could not be reached by keyboard at all.
+ *   * The SVG underneath draws only what is genuinely a drawing: the edges, and
+ *     the dithered fill of a locked cell.
+ *
+ * Everything is in tree coordinates until the transform is applied, so a moved
+ * node's position means the same thing at any zoom.
+ */
+
+/**
+ * Tree units to dp, before zoom. The two axes differ because edges are
+ * orthogonal — the graph carries no angles worth preserving — and the vertical
+ * needs more room, since every cell has two lines of label beneath it.
  */
 const SCALE_X = 0.9;
 const SCALE_Y = 1.3;
-const PAD = 40;
 
 /** The cell is the touch target: 44dp, so the mark and the hit area are one. */
-const CELL = 44;
+const CELL = touch;
 const HALF = CELL / 2;
 /** Two lines of label at 16dp line height, plus the gap under the cell. */
 const LABEL_BLOCK = 44;
+const LABEL_WIDTH = 108;
 
-const CHART_ROUTING: Routing = {
-  axis: 'horizontal',
-  in: HALF + 6,
-  out: HALF + 6,
-  elbowMin: 8,
-};
+/**
+ * Open ground kept around the content on every side, in dp.
+ *
+ * This is the room a node can be dragged into. It is generous rather than
+ * infinite because the edge layer is one SVG with a real size, and an edge
+ * running outside it would be clipped — panning past this shows empty field,
+ * which is the honest end of the canvas rather than a broken line.
+ */
+const CANVAS_PAD = 900;
+
+const CHART_ROUTING: Routing = { axis: 'horizontal', in: HALF + 6, out: HALF + 6, elbowMin: 8 };
 const ARROW = 7;
+
+/** A drag that never leaves the touch target was a tap on the node. */
+const DRAG_SLOP = 4;
 
 interface Props {
   tree: Tree;
@@ -62,9 +98,20 @@ interface Props {
   reduceMotion?: boolean;
   /** Pass `usePrefs().lowBandwidth`. Flattens the dithered fills. */
   lowBandwidth?: boolean;
+  /**
+   * Which node to outline as the one to do next. Omit and the chart picks it
+   * with `nextQuests`; pass it when the screen ranks differently — the chart
+   * and the bar under it must never recommend two different nodes.
+   */
+  recommendedId?: string | null;
+  /** Where nodes have been dragged to. Absent ids sit where the syllabus put them. */
+  positions?: PositionMap;
+  onMoveNode?: (nodeId: string, at: NodePosition) => void;
+  onResetLayout?: () => void;
 }
 
 interface Placed extends SkillNode {
+  /** Position on the canvas layer, in dp, before the transform. */
   px: number;
   py: number;
 }
@@ -107,23 +154,36 @@ export function SkillTree({
   recentlyMasteredId,
   reduceMotion,
   lowBandwidth,
+  recommendedId: recommendedIdProp,
+  positions,
+  onMoveNode,
+  onResetLayout,
 }: Props) {
-  const { status, nodes, size, crossbars, recommendedId, openedIds } = useMemo(() => {
+  const theme = useTheme();
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [movable, setMovable] = useState(false);
+  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
+  /** Set only while a node is being dragged, so the commit happens once at the end. */
+  const [dragging, setDragging] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  const { status, nodes, canvas, crossbars, recommendedId, openedIds } = useMemo(() => {
     const { status } = deriveStatuses(tree, masteredIds);
 
-    const xs = tree.nodes.map((n) => n.x);
-    const ys = tree.nodes.map((n) => n.y);
-    const minX = Math.min(...xs);
-    const minY = Math.min(...ys);
+    // A dragged position replaces the authored one, in tree units, so the two
+    // are interchangeable everywhere below this line.
+    const at = (n: SkillNode) => positions?.[n.id] ?? { x: n.x, y: n.y };
+    const dp = tree.nodes.map((n) => {
+      const p = at(n);
+      return { x: p.x * SCALE_X, y: p.y * SCALE_Y };
+    });
 
-    const placed: Placed[] = tree.nodes.map((n) => ({
+    const box = boundsOf(dp, CANVAS_PAD);
+    const placed: Placed[] = tree.nodes.map((n, i) => ({
       ...n,
-      px: (n.x - minX) * SCALE_X + PAD,
-      py: (n.y - minY) * SCALE_Y + PAD,
+      px: dp[i]!.x - box.minX,
+      py: dp[i]!.y - box.minY,
     }));
 
-    // One junction per prerequisite, so a node's outgoing edges branch from a
-    // single point rather than each turning at its own offset.
     const crossbars = crossbarByPrereq(
       placed.map((n) => ({ id: n.id, x: n.px, y: n.py })),
       tree.prereqs.map((p) => ({ from: p.prereqId, to: p.nodeId })),
@@ -142,12 +202,14 @@ export function SkillTree({
     return {
       status,
       nodes: placed,
-      size: {
-        width: (Math.max(...xs) - minX) * SCALE_X + PAD * 2,
-        height: (Math.max(...ys) - minY) * SCALE_Y + PAD * 2 + LABEL_BLOCK,
-      },
+      canvas: { width: box.maxX - box.minX, height: box.maxY - box.minY },
       crossbars,
-      recommendedId: nextQuests(tree, masteredIds, 1)[0]?.id ?? null,
+      // `undefined` means the caller has no opinion; `null` means it ranked and
+      // found nothing. Only the first falls back to the chart's own pick.
+      recommendedId:
+        recommendedIdProp !== undefined
+          ? recommendedIdProp
+          : (nextQuests(tree, masteredIds, 1)[0]?.id ?? null),
       openedIds: new Set(
         before
           ? tree.nodes
@@ -156,286 +218,412 @@ export function SkillTree({
           : [],
       ),
     };
-  }, [tree, masteredIds, recentlyMasteredId]);
+  }, [tree, masteredIds, recentlyMasteredId, recommendedIdProp, positions]);
 
   const wipe = useWipe(recentlyMasteredId, !reduceMotion);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n] as const)), [nodes]);
 
+  const fit = useCallback(() => {
+    // Fit to the nodes, not to the canvas — the canvas is mostly the open ground
+    // that exists to be dragged into, and fitting to it would frame nothing.
+    const marks = nodes.map((n) => ({ x: n.px, y: n.py }));
+    setTransform(fitTransform(boundsOf(marks, CELL + LABEL_BLOCK), viewport, FIT_PAD));
+  }, [nodes, viewport]);
+
+  // Open on the whole chart rather than its top-left corner, once there is a
+  // measured viewport to fit it into.
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (fitted.current || viewport.width === 0 || nodes.length === 0) return;
+    fitted.current = true;
+    fit();
+  }, [fit, viewport.width, nodes.length]);
+
+  /**
+   * Dragging the background moves the canvas.
+   *
+   * Two refs, and both are load-bearing. `current` is the live transform, read
+   * inside handlers that were created once. `origin` is where the transform was
+   * when this gesture started — `dx`/`dy` are cumulative from that moment, so
+   * adding them to a transform that is itself being updated would compound the
+   * offset and send the canvas flying on the first drag.
+   *
+   * The responder is built once for the same reason: rebuilding it mid-gesture
+   * leaves the in-flight drag running against stale closures.
+   */
+  const current = useRef(transform);
+  current.current = transform;
+  const origin = useRef<Transform | null>(null);
+  const movableRef = useRef(movable);
+  movableRef.current = movable;
+
+  const canvasPan = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        /*
+         * With nodes locked, a drag pans the canvas wherever it starts —
+         * including on top of a node, whose `Pressable` would otherwise hold the
+         * gesture and make the chart feel stuck. Capture is what takes it back.
+         *
+         * With nodes movable this stays out of the way, so the node's own
+         * responder (deeper, and therefore later in the capture phase) wins.
+         * Either way capture only fires past the slop, so a tap still selects.
+         */
+        onMoveShouldSetPanResponderCapture: (_e, g) =>
+          !movableRef.current && (Math.abs(g.dx) > DRAG_SLOP || Math.abs(g.dy) > DRAG_SLOP),
+        // Empty ground, where nothing else wanted the gesture.
+        onMoveShouldSetPanResponder: (_e, g) =>
+          Math.abs(g.dx) > DRAG_SLOP || Math.abs(g.dy) > DRAG_SLOP,
+        onPanResponderGrant: () => {
+          origin.current = current.current;
+        },
+        onPanResponderMove: (_e, g) => {
+          const from = origin.current;
+          if (!from) return;
+          setTransform({ ...from, x: from.x + g.dx, y: from.y + g.dy });
+        },
+        onPanResponderRelease: () => {
+          origin.current = null;
+        },
+        onPanResponderTerminate: () => {
+          origin.current = null;
+        },
+      }),
+    [],
+  );
+
+  const zoom = (factor: number) =>
+    setTransform((t) =>
+      zoomAbout(t, factor, { x: viewport.width / 2, y: viewport.height / 2 }),
+    );
+
+  const onLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setViewport((v) => (v.width === width && v.height === height ? v : { width, height }));
+  };
+
   return (
-    <ScrollView
-      style={styles.chart}
-      contentContainerStyle={styles.canvas}
-      showsVerticalScrollIndicator={false}
-    >
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        <Svg width={size.width} height={size.height}>
-          <DitherDefs name="lock" colour={palette.wine} levels={[6]} />
+    <View style={styles.chart} onLayout={onLayout}>
+      <View style={styles.fill} {...canvasPan.panHandlers}>
+        <View
+          style={[
+            styles.layer,
+            {
+              width: canvas.width,
+              height: canvas.height,
+              transform: [
+                { translateX: transform.x },
+                { translateY: transform.y },
+                { scale: transform.scale },
+              ],
+              // Scaling a layer scales it about its centre, so the origin has to
+              // be pinned to the top-left or the offset means something
+              // different at every zoom.
+              transformOrigin: 'top left',
+            },
+          ]}
+          pointerEvents="box-none"
+        >
+          <Svg width={canvas.width} height={canvas.height} style={StyleSheet.absoluteFill}>
+            <DitherDefs name="lock" colour={theme.lockField[1]} levels={[6]} />
 
-          {tree.prereqs.map(({ nodeId, prereqId }) => {
-            const a = byId.get(prereqId);
-            const b = byId.get(nodeId);
-            if (!a || !b) return null;
+            {tree.prereqs.map(({ nodeId, prereqId }) => {
+              const a = byId.get(prereqId);
+              const b = byId.get(nodeId);
+              if (!a || !b) return null;
 
-            const walked = status.get(prereqId) === 'mastered';
-            const ink = walked ? palette.brass : palette.slate;
-            const points = edgeWaypoints(
-              { x: a.px, y: a.py },
-              { x: b.px, y: b.py },
-              CHART_ROUTING,
-              crossbars.get(prereqId),
-            );
-            // An edge leaving the node just completed draws itself in.
-            const drawing = prereqId === recentlyMasteredId ? wipe : 1;
+              const walked = status.get(prereqId) === 'mastered';
+              const ink = walked ? theme.earned : theme.line;
+              const from = live(a, dragging);
+              const to = live(b, dragging);
+              const points = edgeWaypoints(from, to, CHART_ROUTING, crossbars.get(prereqId));
+              // An edge leaving the node just completed draws itself in.
+              const drawing = prereqId === recentlyMasteredId ? wipe : 1;
 
-            return (
-              <G key={`${prereqId}->${nodeId}`} opacity={walked ? 1 : 0.65}>
-                <Path
-                  d={orthogonalPath(points)}
-                  fill="none"
-                  stroke={ink}
-                  strokeWidth={walked ? 3 : 2}
-                  strokeLinejoin="miter"
-                  strokeDasharray={drawing < 1 ? '4 6' : undefined}
-                  opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
-                />
-                <Polygon points={arrowheadPoints(points, ARROW)} fill={ink} />
-                {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, i) => (
-                  <Rect key={i} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
-                ))}
-              </G>
-            );
-          })}
+              return (
+                <G key={`${prereqId}->${nodeId}`} opacity={walked ? 1 : 0.65}>
+                  <Path
+                    d={orthogonalPath(points)}
+                    fill="none"
+                    stroke={ink}
+                    strokeWidth={walked ? 3 : 2}
+                    strokeLinejoin="miter"
+                    strokeDasharray={drawing < 1 ? '4 6' : undefined}
+                    opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
+                  />
+                  <Polygon points={arrowheadPoints(points, ARROW)} fill={ink} />
+                  {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, i) => (
+                    <Rect key={i} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
+                  ))}
+                </G>
+              );
+            })}
+
+            {/* A locked cell is dithered rather than tinted: half density is how
+                this screen says "not yet" without a seventeenth colour. It is
+                drawn here because the pattern is a real fill, and one set of
+                pattern ids in one SVG cannot collide with another. */}
+            {nodes
+              .filter((n) => status.get(n.id) === 'locked')
+              .map((n) => {
+                const p = live(n, dragging);
+                return (
+                  <Rect
+                    key={`lock-${n.id}`}
+                    x={p.x - HALF}
+                    y={p.y - HALF}
+                    width={CELL}
+                    height={CELL}
+                    fill={lowBandwidth ? theme.node.locked.fill : ditherFill('lock', 6)}
+                  />
+                );
+              })}
+          </Svg>
 
           {nodes.map((node) => (
             <NodeCell
               key={node.id}
               node={node}
+              at={live(node, dragging)}
               status={status.get(node.id) ?? 'locked'}
               selected={node.id === selectedId}
               recommended={node.id === recommendedId}
               wipe={openedIds.has(node.id) ? wipe : 1}
-              flat={Boolean(lowBandwidth)}
+              theme={theme}
+              movable={movable}
+              scale={transform.scale}
               onPress={() => onSelectNode(node)}
+              onDrag={(dx, dy) => setDragging({ id: node.id, x: dx, y: dy })}
+              onDrop={(dx, dy) => {
+                setDragging(null);
+                const base = positions?.[node.id] ?? { x: node.x, y: node.y };
+                onMoveNode?.(node.id, {
+                  x: base.x + dx / SCALE_X,
+                  y: base.y + dy / SCALE_Y,
+                });
+              }}
             />
           ))}
-        </Svg>
-      </ScrollView>
-    </ScrollView>
+        </View>
+      </View>
+
+      <ChartTools
+        movable={movable}
+        onToggleMovable={setMovable}
+        onZoomIn={() => zoom(1.25)}
+        onZoomOut={() => zoom(0.8)}
+        onFit={fit}
+        onReset={onResetLayout && positions && Object.keys(positions).length > 0 ? onResetLayout : undefined}
+        scale={transform.scale}
+      />
+    </View>
   );
+}
+
+/** Where a node is right now, including a drag that has not been committed. */
+function live(node: Placed, dragging: { id: string; x: number; y: number } | null) {
+  if (dragging?.id !== node.id) return { x: node.px, y: node.py };
+  return { x: node.px + dragging.x, y: node.py + dragging.y };
 }
 
 function NodeCell({
   node,
+  at,
   status,
   selected,
   recommended,
   wipe,
-  flat,
+  theme,
+  movable,
+  scale,
   onPress,
+  onDrag,
+  onDrop,
 }: {
   node: Placed;
+  at: { x: number; y: number };
   status: NodeStatus;
   selected: boolean;
   recommended: boolean;
   wipe: number;
-  flat: boolean;
+  theme: Theme;
+  movable: boolean;
+  scale: number;
   onPress: () => void;
+  onDrag: (dx: number, dy: number) => void;
+  onDrop: (dx: number, dy: number) => void;
 }) {
-  const s = nodeStyle[status];
-  const x = node.px - HALF;
-  const y = node.py - HALF;
+  const s = theme.node[status];
 
-  const label = `${node.title}. ${s.label}. Worth ${node.xpReward} XP.${
-    recommended ? ' Recommended next.' : ''
-  }`;
+  // A step generated to scaffold another node. Only an explicit `false` counts:
+  // every node written before help subtrees existed came from a syllabus.
+  const supplemental = node.graded === false;
 
-  // A tappable <G>, not a Pressable: anything react-native-web resolves to an
-  // HTML tag is emitted inside <svg>, where the browser drops the subtree.
-  //
-  // Same reason the role is native-only: react-native-web rewrites an element's
-  // tag whenever its role maps to HTML, so accessibilityRole="button" here
-  // renders a <button> in the SVG namespace and the node disappears. On web the
-  // mark is a labelled <g> — announced by name, but not reachable by keyboard.
-  // Fixing that properly means a real focusable control outside the SVG.
-  const a11y: Pick<
-    AccessibilityProps,
-    'accessibilityLabel' | 'accessibilityRole' | 'accessibilityState'
-  > =
-    Platform.OS === 'web'
-      ? { accessibilityLabel: label }
-      : {
-          accessibilityLabel: label,
-          accessibilityRole: 'button',
-          accessibilityState: { disabled: status === 'locked', selected },
-        };
+  const label = `${supplemental ? 'Extra practice. ' : ''}${node.title}. ${s.label}. Worth ${
+    node.xpReward
+  } XP.${recommended ? ' Recommended next.' : ''}`;
+
+  // Built once and fed by refs. The handlers of an in-flight gesture are the
+  // ones captured when it was granted, so a responder rebuilt on every render
+  // would leave the drag reading a stale zoom and moving the node at the wrong
+  // rate half way through.
+  const moved = useRef(false);
+  const live = useRef({ movable, scale, onDrag, onDrop, onPress });
+  live.current = { movable, scale, onDrag, onDrop, onPress };
+
+  /**
+   * The drag lives on a wrapper around the cell, not on the cell itself.
+   *
+   * `Pressable` applies its own responder handlers *after* the props it is
+   * given, so `{...panHandlers}` on a Pressable is silently discarded — the
+   * toggle appeared to do nothing because of exactly that.
+   *
+   * Capture, not bubble: the Pressable claims the gesture the moment a finger
+   * lands, so the only way to take a drag from it is to steal on movement.
+   * Below the slop the Pressable keeps it and the tap still selects the node.
+   */
+  const drag = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponderCapture: (_e, g) =>
+          live.current.movable && (Math.abs(g.dx) > DRAG_SLOP || Math.abs(g.dy) > DRAG_SLOP),
+        onPanResponderGrant: () => {
+          moved.current = false;
+        },
+        // The gesture arrives in screen pixels; the canvas is drawn in its own
+        // units, so it has to be divided by the zoom or the node outruns the
+        // finger at anything but 100%.
+        onPanResponderMove: (_e, g) => {
+          moved.current = true;
+          live.current.onDrag(g.dx / live.current.scale, g.dy / live.current.scale);
+        },
+        onPanResponderRelease: (_e, g) => {
+          if (moved.current) {
+            live.current.onDrop(g.dx / live.current.scale, g.dy / live.current.scale);
+          }
+        },
+        onPanResponderTerminate: () => live.current.onDrag(0, 0),
+      }),
+    [],
+  );
+
+  const bevelEdges = {
+    borderWidth: bevel,
+    borderTopColor: supplemental ? s.dark : s.light,
+    borderLeftColor: supplemental ? s.dark : s.light,
+    borderRightColor: supplemental ? s.light : s.dark,
+    borderBottomColor: supplemental ? s.light : s.dark,
+  };
 
   return (
-    <G
-      onPress={() => {
-        onPress();
-        if (status === 'locked') {
-          AccessibilityInfo.announceForAccessibility(
-            `${node.title} is locked. Finish its prerequisites first.`,
-          );
-        }
-      }}
-      {...a11y}
+    <View
+      style={[styles.node, { left: at.x - LABEL_WIDTH / 2, top: at.y - HALF }]}
+      pointerEvents="box-none"
     >
       {/* The recommended next node wears the only blush mark on the screen. */}
       {recommended ? (
-        <Rect
-          x={x - 6}
-          y={y - 6}
-          width={CELL + 12}
-          height={CELL + 12}
-          fill="none"
-          stroke={palette.blush}
-          strokeWidth={2}
-        />
+        <View style={[styles.halo, { borderColor: theme.focus }]} pointerEvents="none" />
       ) : null}
 
-      <G opacity={wipe < 1 ? 0.35 + wipe * 0.65 : 1}>
-        {/* A locked cell is dithered rather than tinted: half density is how
-            this screen says "not yet" without a seventeenth colour. */}
-        <Rect
-          x={x}
-          y={y}
-          width={CELL}
-          height={CELL * (wipe < 1 ? wipe : 1)}
-          fill={status === 'locked' && !flat ? ditherFill('lock', 6) : s.fill}
-        />
-        {status === 'locked' ? (
-          <Rect
-            x={x}
-            y={y}
-            width={CELL}
-            height={CELL}
-            fill="none"
-            stroke={s.edge}
-            strokeWidth={2}
-          />
-        ) : (
-          <>
-            {/* Bevel: lit along the top-left, dark along the bottom-right. */}
-            <Path
-              d={`M${x},${y + CELL} L${x},${y} L${x + CELL},${y} L${x + CELL - 3},${y + 3} L${x + 3},${y + 3} L${x + 3},${y + CELL - 3} Z`}
-              fill={s.light}
-            />
-            <Path
-              d={`M${x + CELL},${y} L${x + CELL},${y + CELL} L${x},${y + CELL} L${x + 3},${y + CELL - 3} L${x + CELL - 3},${y + CELL - 3} L${x + CELL - 3},${y + 3} Z`}
-              fill={s.dark}
-            />
-          </>
-        )}
-
-        {selected ? (
-          <Rect
-            x={x - 2}
-            y={y - 2}
-            width={CELL + 4}
-            height={CELL + 4}
-            fill="none"
-            stroke={palette.bone}
-            strokeWidth={2}
-          />
-        ) : null}
-
-        <Glyph kind={s.glyph} x={node.px} y={node.py} colour={s.ink} />
-      </G>
-
-      {wrapTitle(node.title).map((line, i) => (
-        <SvgText
-          key={i}
-          x={node.px}
-          y={y + CELL + 18 + i * 16}
-          /* Every label is bone, locked included: `haze` on the cardinal field
-             measures 3.3:1 and the floor is 4.5:1. Status is already carried by
-             the dithered cell and the lock glyph, so dimming the text bought
-             nothing and cost legibility. */
-          fill={palette.bone}
-          fontSize={13}
-          fontFamily={font.screen}
-          textAnchor="middle"
+      <View style={styles.cellWrap} {...drag.panHandlers}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          accessibilityState={{ disabled: status === 'locked', selected }}
+          accessibilityHint={movable ? 'Drag to move this node.' : undefined}
+          onPress={() => {
+            onPress();
+            if (status === 'locked') {
+              AccessibilityInfo.announceForAccessibility(
+                `${node.title} is locked. Finish its prerequisites first.`,
+              );
+            }
+          }}
+          style={({ pressed, hovered }: PressState) => [
+            styles.cell,
+            // Locked cells are transparent: the dithered fill is drawn under
+            // them in the SVG, and a solid colour here would cover it.
+            status === 'locked'
+              ? { borderWidth: bevel, borderColor: s.edge }
+              : { backgroundColor: s.fill, ...bevelEdges },
+            selected ? { borderColor: theme.ink } : null,
+            pressed || (hovered && !movable) ? { opacity: 0.85 } : null,
+            wipe < 1 ? { opacity: 0.35 + wipe * 0.65 } : null,
+          ]}
         >
-          {line}
-        </SvgText>
-      ))}
-    </G>
+          <Glyph kind={s.glyph} colour={s.ink} />
+        </Pressable>
+      </View>
+
+      <PixelText
+        variant="micro"
+        colour={theme.ink}
+        numberOfLines={2}
+        centred
+        style={styles.label}
+      >
+        {node.title}
+      </PixelText>
+    </View>
   );
 }
 
 /**
- * Status glyphs, drawn on the same 8×8 grid as the icon set, so a check on the
- * chart is the same object as a check in a list.
+ * Status glyphs on the same 8×8 grid as the icon set, so a check on the chart is
+ * the same object as a check in a list. Drawn as views rather than an SVG so a
+ * cell is one element with one hit area.
  */
-function Glyph({ kind, x, y, colour }: { kind: string; x: number; y: number; colour: string }) {
-  const u = 2.4; // one grid cell, in dp
-  const at = (gx: number, gy: number, w = 1, h = 1) => (
-    <Rect
-      key={`${gx}-${gy}-${w}-${h}`}
-      x={x + (gx - 4) * u}
-      y={y + (gy - 4) * u}
-      width={w * u}
-      height={h * u}
-      fill={colour}
-    />
-  );
+function Glyph({ kind, colour }: { kind: string; colour: string }) {
+  const u = 2.4;
+  const cells: [number, number, number, number][] =
+    kind === 'check'
+      ? [
+          [1, 4, 1, 1], [2, 5, 1, 1], [3, 6, 1, 1], [4, 5, 1, 1], [5, 4, 1, 1],
+          [6, 3, 1, 1], [7, 2, 1, 1], [2, 4, 1, 1], [3, 5, 1, 1], [4, 4, 1, 1],
+          [5, 3, 1, 1], [6, 2, 1, 1],
+        ]
+      : kind === 'play'
+        ? [[3, 1, 1, 6], [4, 2, 1, 4], [5, 3, 1, 2]]
+        : [[3, 1, 2, 1], [2, 2, 1, 2], [5, 2, 1, 2], [1, 4, 6, 3]];
 
-  if (kind === 'check') {
-    return (
-      <G>
-        {at(1, 4)}
-        {at(2, 5)}
-        {at(3, 6)}
-        {at(4, 5)}
-        {at(5, 4)}
-        {at(6, 3)}
-        {at(7, 2)}
-        {at(2, 4)}
-        {at(3, 5)}
-        {at(4, 4)}
-        {at(5, 3)}
-        {at(6, 2)}
-      </G>
-    );
-  }
-  if (kind === 'play') {
-    return (
-      <G>
-        {at(3, 1, 1, 6)}
-        {at(4, 2, 1, 4)}
-        {at(5, 3, 1, 2)}
-      </G>
-    );
-  }
   return (
-    <G>
-      {at(3, 1, 2, 1)}
-      {at(2, 2, 1, 2)}
-      {at(5, 2, 1, 2)}
-      {at(1, 4, 6, 3)}
-    </G>
+    <View style={styles.glyph} pointerEvents="none">
+      {cells.map(([gx, gy, w, h], i) => (
+        <View
+          key={i}
+          style={{
+            position: 'absolute',
+            left: (gx - 4) * u + HALF - bevel,
+            top: (gy - 4) * u + HALF - bevel,
+            width: w * u,
+            height: h * u,
+            backgroundColor: colour,
+          }}
+        />
+      ))}
+    </View>
   );
-}
-
-/** Two lines, because a chart of one-line labels is a chart of truncations. */
-function wrapTitle(title: string): string[] {
-  const lines: string[] = [];
-  let line = '';
-  for (const word of title.split(' ')) {
-    const candidate = line ? `${line} ${word}` : word;
-    if (candidate.length > 14 && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = candidate;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.length > 2 ? [lines[0]!, `${lines[1]!.slice(0, 12)}…`] : lines;
 }
 
 const styles = StyleSheet.create({
-  chart: { flex: 1 },
-  canvas: { padding: space.xs },
+  chart: { flex: 1, overflow: 'hidden' },
+  fill: { flex: 1 },
+  layer: { position: 'absolute', left: 0, top: 0 },
+  node: { position: 'absolute', width: LABEL_WIDTH, alignItems: 'center' },
+  halo: {
+    position: 'absolute',
+    left: LABEL_WIDTH / 2 - HALF - 6,
+    top: -6,
+    width: CELL + 12,
+    height: CELL + 12,
+    borderWidth: 2,
+  },
+  // Sized to the cell, not the label block: the dead space either side of a
+  // short title belongs to the canvas, so a drag there still pans.
+  cellWrap: { width: CELL, height: CELL },
+  cell: { width: CELL, height: CELL, alignItems: 'center', justifyContent: 'center' },
+  glyph: { ...StyleSheet.absoluteFillObject },
+  label: { marginTop: space.xs, width: LABEL_WIDTH },
 });

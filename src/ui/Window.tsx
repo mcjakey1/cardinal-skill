@@ -12,7 +12,8 @@
 
 import { Pressable, StyleSheet, View, type ViewProps } from 'react-native';
 
-import { palette, space, touch } from '@/theme/tokens';
+import { space, touch } from '@/theme/tokens';
+import { useTheme } from '@/theme/useTheme';
 import { Bevel, PixelIcon, PixelText, bevelStyle } from './pixel';
 
 interface Props extends ViewProps {
@@ -24,16 +25,22 @@ interface Props extends ViewProps {
 }
 
 export function Window({ title, onClose, live = true, style, children, ...rest }: Props) {
+  const t = useTheme();
   return (
     <Bevel
       tone="panel"
       depth="raised"
-      style={[styles.frame, style]}
+      style={[{ backgroundColor: t.panel }, style]}
       accessibilityLiveRegion={live ? 'polite' : 'none'}
       {...rest}
     >
-      <View style={styles.titleBar}>
-        <PixelText variant="label" colour={palette.bone} numberOfLines={1} style={styles.title}>
+      <View style={[styles.titleBar, { backgroundColor: t.brand }]}>
+        <PixelText
+          variant="label"
+          colour={t.tone.brand.ink}
+          numberOfLines={1}
+          style={styles.title}
+        >
           {title.toUpperCase()}
         </PixelText>
         {onClose ? (
@@ -44,25 +51,23 @@ export function Window({ title, onClose, live = true, style, children, ...rest }
             hitSlop={space.cell}
             style={({ pressed }) => [
               styles.close,
-              bevelStyle('cardinal', pressed ? 'inset' : 'raised'),
+              bevelStyle(t, 'brand', pressed ? 'inset' : 'raised'),
             ]}
           >
-            <PixelIcon name="close" size={12} colour={palette.bone} />
+            <PixelIcon name="close" size={12} colour={t.tone.brand.ink} />
           </Pressable>
         ) : null}
       </View>
-      <View style={styles.body}>{children}</View>
+      <View style={[styles.body, { backgroundColor: t.well }]}>{children}</View>
     </Bevel>
   );
 }
 
 const styles = StyleSheet.create({
-  frame: { backgroundColor: palette.oxblood },
   titleBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: palette.cardinal,
     paddingLeft: space.cell,
     paddingRight: space.xs,
     paddingVertical: space.xs,
@@ -76,7 +81,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   body: {
-    backgroundColor: palette.abyss,
     padding: space.md,
     gap: space.cell,
     margin: space.xs,

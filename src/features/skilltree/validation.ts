@@ -66,6 +66,32 @@ export function validateGraph(nodes: SkillNode[], prereqs: Prereq[]): GraphValid
   return { isValid: errors.length === 0, errors };
 }
 
+/** Longest an id gets. Long enough to stay readable, short enough to log. */
+const MAX_ID = 32;
+
+/**
+ * Turn a title into an id a human can still read in a URL or an error message.
+ *
+ * Ids authored by hand collide — two modules both called "Review" is the normal
+ * case, not the edge case — so a taken id takes a numeric suffix rather than
+ * silently overwriting the node that got there first.
+ */
+export function slugId(title: string, taken: Set<string>): string {
+  const base =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, MAX_ID) || 'node';
+
+  if (!taken.has(base)) return base;
+
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}_${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 /**
  * Every node standing on a prerequisite loop.
  *

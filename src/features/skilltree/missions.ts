@@ -13,7 +13,7 @@
  * in an Edge Function, and under `node --test`.
  */
 
-import { HELP_SHARE } from './subtree.ts';
+import { HELP_SHARE, fragmentXp } from './subtree.ts';
 
 export interface MissionLike {
   id: string;
@@ -65,6 +65,50 @@ export function isNodeMastered(
   if (own.length === 0) return false;
   const done = new Set(completedMissionIds);
   return own.every((m) => done.has(m.id));
+}
+
+/**
+ * What a student can do with one mission right now.
+ *
+ * `locked` is a property of the *node*, not the mission: a node whose
+ * prerequisites are unmet locks all of its work, because otherwise finishing
+ * missions would be a way to walk around the prerequisite graph.
+ */
+export type MissionState = 'done' | 'open' | 'locked';
+
+export interface MissionWithState<T extends MissionLike> {
+  mission: T;
+  state: MissionState;
+}
+
+export function missionStates<T extends MissionLike>(
+  missions: readonly T[],
+  nodeId: string,
+  completedMissionIds: Iterable<string>,
+  nodeUnlocked: boolean,
+): MissionWithState<T>[] {
+  const done = new Set(completedMissionIds);
+  return missionsForNode(missions, nodeId).map((mission) => ({
+    mission,
+    state: done.has(mission.id) ? 'done' : nodeUnlocked ? 'open' : 'locked',
+  }));
+}
+
+/**
+ * The one to do next: the first unfinished mission in the node's own order.
+ *
+ * Syllabus order is the recommendation — a node's missions were written to be
+ * done in the order they were written, and nothing here knows better.
+ */
+export function nextMission<T extends MissionLike>(
+  missions: readonly T[],
+  nodeId: string,
+  completedMissionIds: Iterable<string>,
+  nodeUnlocked: boolean,
+): T | undefined {
+  if (!nodeUnlocked) return undefined;
+  const done = new Set(completedMissionIds);
+  return missionsForNode(missions, nodeId).find((m) => !done.has(m.id));
 }
 
 export interface MissionFragments {
@@ -125,4 +169,52 @@ export function fragmentMissionXp(missionXps: readonly number[], stepCount: numb
   }
 
   return { missionRewards, stepRewards };
+}
+
+export interface FragmentationPlan {
+  /** What `skill_nodes.xp_reward` becomes on the parent. */
+  parentReward: number;
+  /** One reward per help step, in the order the steps were given. */
+  stepRewards: number[];
+  /** New mission rewards in input order, or null when the node has none. */
+  missionRewards: number[] | null;
+}
+
+/**
+ * Everything a "need extra help" request has to re-price, decided in one place.
+ *
+ * There are two XP splits in this codebase and picking the wrong one is not a
+ * rounding bug, it is an XP faucet. `fragmentXp` moves a share of the node's own
+ * `xp_reward`; `fragmentMissionXp` moves a share of what the node's missions are
+ * worth. Which is correct depends on the node, because a node made of missions
+ * pays the student through those missions — dropping its `xp_reward` alone
+ * leaves the missions still paying the full original amount while the new steps
+ * pay extra on top.
+ *
+ * So: missions present, re-price the missions; no missions, re-price the node.
+ * Either way the invariant `parent + steps === what the node was worth` holds,
+ * which is what `request_help_subtree()` re-checks in the database.
+ *
+ * The mission sum wins over `parentReward` when both exist. `xp_reward` is a
+ * cache of that sum and can lag it; conservation has to be measured against the
+ * thing the student is actually paid from.
+ */
+export function planFragmentation(
+  parentReward: number,
+  missionXps: readonly number[],
+  stepCount: number,
+): FragmentationPlan {
+  if (!missionXps || missionXps.length === 0) {
+    const { parentReward: parent, stepRewards } = fragmentXp(parentReward, stepCount);
+    return { parentReward: parent, stepRewards, missionRewards: null };
+  }
+
+  const { missionRewards, stepRewards } = fragmentMissionXp(missionXps, stepCount);
+  return {
+    // Kept equal to the missions on purpose: the column is a cache of their sum,
+    // and letting the two drift is what makes the chart and the record disagree.
+    parentReward: missionRewards.reduce((a, b) => a + b, 0),
+    stepRewards,
+    missionRewards,
+  };
 }

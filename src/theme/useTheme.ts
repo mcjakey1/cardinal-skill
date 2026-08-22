@@ -7,9 +7,13 @@
  * this twice, and a student who wants paper at midnight should be allowed it.
  */
 
-import { usePrefs } from '@/lib/prefs';
-import { themes, type Theme } from './tokens';
+import { useMemo } from 'react';
+
+import { useAppTheme } from './ThemeProvider';
+import { toLegacyTheme } from './themes';
+import type { Theme } from './tokens';
 
 export function useTheme(): Theme {
-  return themes[usePrefs().scheme];
+  const { theme } = useAppTheme();
+  return useMemo(() => toLegacyTheme(theme), [theme]);
 }

@@ -28,7 +28,8 @@ import { useLocalProgress } from '@/lib/progress';
 import { useQuestNames } from '@/lib/questNames';
 import { useSignals } from '@/lib/signals';
 import { supabase } from '@/lib/supabase';
-import { space, touch } from '@/theme/tokens';
+import { useAppTheme } from '@/theme/ThemeProvider';
+import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
@@ -52,6 +53,7 @@ const NAME_SOURCE: Record<NameSource, string> = {
 
 export default function TreeScreen() {
   const t = useTheme();
+  const { theme } = useAppTheme();
   const { courseId } = useLocalSearchParams<{ courseId: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -265,7 +267,16 @@ export default function TreeScreen() {
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
       <DitherField flat={prefs.lowBandwidth} />
 
-      <View style={[styles.marginalia, { paddingTop: insets.top + space.cell }]}>
+      <View
+        style={[
+          styles.marginalia,
+          {
+            paddingTop: insets.top + space.cell,
+            backgroundColor: theme.hudBackground,
+            borderBottomColor: theme.border,
+          },
+        ]}
+      >
         <View style={styles.courseBlock}>
           <PixelText variant="title" numberOfLines={1}>
             {title}
@@ -281,7 +292,7 @@ export default function TreeScreen() {
           </PixelText>
           <Meter
             value={levelProgress(xp)}
-            colour={t.earned}
+            colour={theme.xpBarFill}
             label={`Level ${level}, ${Math.round(levelProgress(xp) * 100)} percent to the next level`}
           />
           {streak > 0 ? (
@@ -802,6 +813,7 @@ const styles = StyleSheet.create({
     gap: space.md,
     paddingHorizontal: space.md,
     paddingBottom: space.cell,
+    borderBottomWidth: bevel,
   },
   courseBlock: { flexShrink: 1, gap: space.hair },
   readout: { alignItems: 'flex-end', gap: space.xs },

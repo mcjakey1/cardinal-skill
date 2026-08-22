@@ -27,7 +27,7 @@ Start points by task:
 | Unlock rules, XP, levelling | `src/features/skilltree/progression.ts` |
 | How the chart renders | `src/features/skilltree/SkillTree.tsx` |
 | Colour, type, spacing, motion | `src/theme/tokens.ts` + `DESIGN.md` |
-| The instructor workspace | `app/instructor.tsx` + `frontend/DESIGN.md` |
+| The instructor workspace | `app/instructor.tsx` + `DESIGN.md` |
 | Who can read what | `supabase/migrations/0001_init.sql` |
 | Syllabus → tree | `supabase/functions/parse-syllabus/index.ts` |
 
@@ -70,6 +70,6 @@ check it against `DESIGN.md` and the contrast requirements before shipping it.
 **There are two designs here, and mixing them is the mistake.** `/instructor` is
 a conventional LMS workspace on purpose, with its own tokens in
 `src/theme/lms.ts` and its own parts in `src/ui/lms.tsx`; its brief is
-`frontend/DESIGN.md`, not `DESIGN.md`. The one crossing is deliberate: the
+the instructor section of `DESIGN.md`. The one crossing is deliberate: the
 authoring canvas inside it draws in the student's tokens, because an instructor
 needs to see the artifact as it is delivered.

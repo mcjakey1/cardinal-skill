@@ -99,7 +99,7 @@ label as well as colour. Interactive elements have an `accessibilityLabel` and a
 - Tokens from `src/theme/tokens.ts`. A raw hex value or magic spacing number in a
   component is a bug — see `DESIGN.md`.
 - One exception, and only one: `/instructor` is a conventional LMS workspace by
-  design and takes its tokens from `src/theme/lms.ts` (brief: `frontend/DESIGN.md`)
+  design and takes its tokens from `src/theme/lms.ts` (brief: `DESIGN.md`)
   with parts in `src/ui/lms.tsx`. Do not mix the two sets in one screen. The
   authoring canvas inside that workspace is the deliberate crossing — it draws in
   the student's tokens so an instructor sees the artifact as delivered.

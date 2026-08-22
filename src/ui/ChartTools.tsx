@@ -13,6 +13,7 @@
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { space, touch } from '@/theme/tokens';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { useTheme } from '@/theme/useTheme';
 import {
   Bevel,
@@ -45,9 +46,10 @@ export function ChartTools({
   scale,
 }: Props) {
   const t = useTheme();
+  const { theme } = useAppTheme();
 
   return (
-    <Bevel tone="panel" style={styles.bar}>
+    <Bevel tone="panel" style={[styles.bar, { backgroundColor: theme.hudBackground }]}>
       <PixelText variant="micro" colour={t.inkMuted}>
         CHART
       </PixelText>
@@ -87,7 +89,7 @@ export function ChartTools({
         </View>
       </Pressable>
 
-      <View style={[styles.rule, { backgroundColor: t.line }]} />
+      <View style={[styles.rule, { backgroundColor: theme.border }]} />
 
       <Tool icon="minus" label="Zoom out" onPress={onZoomOut} />
       <PixelText variant="micro" colour={t.inkMuted}>

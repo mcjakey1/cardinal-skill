@@ -37,7 +37,7 @@ import {
  * The instructor workspace.
  *
  * This screen is a different design from the rest of the app, on purpose, and
- * `frontend/DESIGN.md` is its brief: a conventional LMS workspace, played
+ * `DESIGN.md` is its brief: a conventional LMS workspace, played
  * straight, for someone who already spends their week in Canvas and should not
  * have to learn a second interface to publish a syllabus. Rail, topbar,
  * breadcrumb, tables. Nothing here borrows the sixteen-colour grammar —

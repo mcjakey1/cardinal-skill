@@ -1,7 +1,7 @@
 /**
  * Tokens for the instructor surface — the deliberately conventional half.
  *
- * These are a port of `frontend/DESIGN.md`, which is the brief for this surface
+ * These implement the instructor section of `DESIGN.md`, the brief for this surface
  * and the reason it does not look like the rest of the app. Do not blend the two
  * token sets: `tokens.ts` is a sixteen-colour screen with 2dp bevels and square
  * corners, this is a warm institutional workspace with hairlines and 5px

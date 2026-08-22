@@ -5,30 +5,23 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { usePrefs, type ThemeChoice } from '@/lib/prefs';
+import { usePrefs } from '@/lib/prefs';
 import { clearLocal } from '@/lib/progress';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
-import { Bevel, Choice, PixelButton, PixelText, Toggle } from '@/ui/pixel';
-
-/**
- * Three, not two. "System" is the default and has to stay reachable, because a
- * student who pins a theme and later changes their phone's schedule should be
- * able to hand the decision back rather than keep re-setting it by hand.
- */
-const THEME_OPTIONS: readonly { value: ThemeChoice; label: string }[] = [
-  { value: 'system', label: 'Auto' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-];
+import { ThemePickerModal } from '@/ui/ThemePickerModal';
+import { Bevel, PixelButton, PixelText, Toggle } from '@/ui/pixel';
 
 export default function System() {
   const t = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
+  const { theme } = useAppTheme();
+  const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState(false);
 
@@ -57,17 +50,13 @@ export default function System() {
         <Bevel tone="panel" style={styles.group}>
           <Row
             title="Theme"
-            detail={
-              prefs.theme === 'system'
-                ? `Following your device, which is currently ${t.scheme}.`
-                : `Pinned to ${prefs.theme}, whatever your device is set to.`
-            }
+            detail={`${theme.name} controls the canvas, nodes, edges, HUD, and navigation.`}
           >
-            <Choice
-              label="Theme"
-              value={prefs.theme}
-              onChange={(next) => prefs.set('theme', next)}
-              options={THEME_OPTIONS}
+            <PixelButton
+              label="Choose"
+              tone="panel"
+              grow={false}
+              onPress={() => setThemePickerOpen(true)}
             />
           </Row>
 
@@ -165,6 +154,7 @@ export default function System() {
           </Bevel>
         ) : null}
       </ScrollView>
+      <ThemePickerModal visible={themePickerOpen} onClose={() => setThemePickerOpen(false)} />
     </View>
   );
 }

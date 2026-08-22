@@ -3,10 +3,8 @@
  *
  * THESIS: A course is a sixteen-colour screen you are clearing. Refuses the
  *   ed-tech dashboard of rounded cards, a progress ring and a Continue row.
- * OWN-WORLD: Locked sixteen-index palette led by cardinal #C4123F; every
- *   intermediate tone is a 4x4 Bayer dither of two entries, never a blend; 2dp
- *   bevels lit top-left; DotGothic16 on a cell grid; titled windows; icons
- *   authored as 8x8 bitmaps.
+ * OWN-WORLD: Curated dark presets over one semantic grid; square 2dp edges,
+ *   DotGothic16 on an 8px cell system, titled windows, and 8x8 bitmap icons.
  * STORY: The student sees what is open now, taps the lit cell, reads what it is
  *   worth, marks it complete, and watches the chart open.
  * FIRST VIEWPORT: Full-bleed dithered cardinal field carrying the chart; course
@@ -29,6 +27,7 @@ import { Platform, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { PrefsProvider } from '@/lib/prefs';
+import { ThemeProvider, useAppTheme } from '@/theme/ThemeProvider';
 import { useTheme } from '@/theme/useTheme';
 import { NavBar } from '@/ui/NavBar';
 
@@ -50,14 +49,6 @@ export default function RootLayout() {
   const [queryClient] = useState(() => new QueryClient());
   const [loaded, error] = useFonts({ DotGothic16_400Regular });
 
-  useEffect(() => {
-    // The whole interface is set in one face. Showing it in the system font
-    // first would be a different design for a few hundred milliseconds, so the
-    // splash holds until the face is ready — or until loading it has failed,
-    // because a missing font must not be a screen nobody can leave.
-    if (loaded || error) SplashScreen.hideAsync().catch(() => {});
-  }, [loaded, error]);
-
   // Native holds behind the splash screen until the face is ready, because a
   // few hundred milliseconds of system font is a different design. Web has no
   // splash: gating there renders a blank page where a prerendered document
@@ -69,27 +60,39 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <QueryClientProvider client={queryClient}>
         <PrefsProvider>
-          <Shell />
+          <ThemeProvider>
+            <Shell fontsReady={loaded || Boolean(error)} />
+          </ThemeProvider>
         </PrefsProvider>
       </QueryClientProvider>
     </SafeAreaProvider>
   );
 }
 
-function Shell() {
+function Shell({ fontsReady }: { fontsReady: boolean }) {
   const pathname = usePathname();
   const bare = BARE_ROUTES.includes(pathname);
   const t = useTheme();
+  const { theme, ready: themeReady } = useAppTheme();
+
+  useEffect(() => {
+    if (fontsReady && themeReady) SplashScreen.hideAsync().catch(() => {});
+  }, [fontsReady, themeReady]);
+
+  // Hold app content until persistence resolves so a saved palette never
+  // appears after a one-frame flash of the default.
+  if (!fontsReady || !themeReady) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.ground }}>
       {/* The status bar takes the opposite of the ground it sits on, so the
           clock stays legible in either theme rather than assuming a dark one. */}
-      <StatusBar style={t.scheme === 'dark' ? 'light' : 'dark'} />
+      <StatusBar style="light" backgroundColor={theme.hudBackground} />
       {/* The default document title. Screens override it with their own
           <Head>; on native this renders nothing. */}
       <Head>
         <title>Cardinal Skill</title>
+        <meta name="theme-color" content={theme.hudBackground} />
       </Head>
       <Stack
         screenOptions={{

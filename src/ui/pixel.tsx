@@ -34,6 +34,7 @@ import {
 import Svg, { Rect } from 'react-native-svg';
 
 import type { NodeStatus } from '@/features/skilltree/types';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch, type, type Theme } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 
@@ -300,7 +301,7 @@ interface MeterProps {
  * smooth bar, and a segmented meter reads faster at a glance anyway.
  */
 export function Meter({ value, cells = 12, colour, label }: MeterProps) {
-  const t = useTheme();
+  const { theme } = useAppTheme();
   const clamped = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
   const lit = Math.round(clamped * cells);
   return (
@@ -315,7 +316,9 @@ export function Meter({ value, cells = 12, colour, label }: MeterProps) {
           key={i}
           style={[
             styles.meterCell,
-            { backgroundColor: i < lit ? (colour ?? t.earned) : t.tone.panel.dark },
+            {
+              backgroundColor: i < lit ? (colour ?? theme.xpBarFill) : theme.xpBarBackground,
+            },
           ]}
         />
       ))}

@@ -9,11 +9,11 @@ import {
 } from 'react-native';
 import Svg, { G, Path, Polygon, Rect } from 'react-native-svg';
 
-import { DitherDefs, ditherFill } from '@/ui/Dither';
 import { ChartTools } from '@/ui/ChartTools';
 import { PixelText, type PressState } from '@/ui/pixel';
-import { bevel, motion, space, touch, type Theme } from '@/theme/tokens';
-import { useTheme } from '@/theme/useTheme';
+import { useAppTheme } from '@/theme/ThemeProvider';
+import { bevel, motion, space, touch } from '@/theme/tokens';
+import type { ThemePalette } from '@/theme/themes';
 import type { NodePosition, PositionMap } from '@/lib/nodeLayout';
 import {
   arrowheadPoints,
@@ -153,13 +153,12 @@ export function SkillTree({
   onSelectNode,
   recentlyMasteredId,
   reduceMotion,
-  lowBandwidth,
   recommendedId: recommendedIdProp,
   positions,
   onMoveNode,
   onResetLayout,
 }: Props) {
-  const theme = useTheme();
+  const { theme } = useAppTheme();
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [movable, setMovable] = useState(false);
   const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
@@ -326,15 +325,18 @@ export function SkillTree({
           pointerEvents="box-none"
         >
           <Svg width={canvas.width} height={canvas.height} style={StyleSheet.absoluteFill}>
-            <DitherDefs name="lock" colour={theme.lockField[1]} levels={[6]} />
-
             {tree.prereqs.map(({ nodeId, prereqId }) => {
               const a = byId.get(prereqId);
               const b = byId.get(nodeId);
               if (!a || !b) return null;
 
-              const walked = status.get(prereqId) === 'mastered';
-              const ink = walked ? theme.earned : theme.line;
+              const targetStatus = status.get(nodeId) ?? 'locked';
+              const ink =
+                targetStatus === 'mastered'
+                  ? theme.edgeCompleted
+                  : targetStatus === 'available'
+                    ? theme.edgeActive
+                    : theme.edgeLocked;
               const from = live(a, dragging);
               const to = live(b, dragging);
               const points = edgeWaypoints(from, to, CHART_ROUTING, crossbars.get(prereqId));
@@ -342,12 +344,12 @@ export function SkillTree({
               const drawing = prereqId === recentlyMasteredId ? wipe : 1;
 
               return (
-                <G key={`${prereqId}->${nodeId}`} opacity={walked ? 1 : 0.65}>
+                <G key={`${prereqId}->${nodeId}`} opacity={targetStatus === 'locked' ? 0.72 : 1}>
                   <Path
                     d={orthogonalPath(points)}
                     fill="none"
                     stroke={ink}
-                    strokeWidth={walked ? 3 : 2}
+                    strokeWidth={targetStatus === 'locked' ? 2 : 3}
                     strokeLinejoin="miter"
                     strokeDasharray={drawing < 1 ? '4 6' : undefined}
                     opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
@@ -360,25 +362,6 @@ export function SkillTree({
               );
             })}
 
-            {/* A locked cell is dithered rather than tinted: half density is how
-                this screen says "not yet" without a seventeenth colour. It is
-                drawn here because the pattern is a real fill, and one set of
-                pattern ids in one SVG cannot collide with another. */}
-            {nodes
-              .filter((n) => status.get(n.id) === 'locked')
-              .map((n) => {
-                const p = live(n, dragging);
-                return (
-                  <Rect
-                    key={`lock-${n.id}`}
-                    x={p.x - HALF}
-                    y={p.y - HALF}
-                    width={CELL}
-                    height={CELL}
-                    fill={lowBandwidth ? theme.node.locked.fill : ditherFill('lock', 6)}
-                  />
-                );
-              })}
           </Svg>
 
           {nodes.map((node) => (
@@ -447,20 +430,28 @@ function NodeCell({
   selected: boolean;
   recommended: boolean;
   wipe: number;
-  theme: Theme;
+  theme: ThemePalette;
   movable: boolean;
   scale: number;
   onPress: () => void;
   onDrag: (dx: number, dy: number) => void;
   onDrop: (dx: number, dy: number) => void;
 }) {
-  const s = theme.node[status];
+  const s =
+    status === 'mastered'
+      ? theme.nodeCompleted
+      : status === 'available'
+        ? theme.nodeActive
+        : theme.nodeLocked;
+  const statusLabel =
+    status === 'mastered' ? 'Mastered' : status === 'available' ? 'Available' : 'Locked';
+  const glyph = status === 'mastered' ? 'check' : status === 'available' ? 'play' : 'lock';
 
   // A step generated to scaffold another node. Only an explicit `false` counts:
   // every node written before help subtrees existed came from a syllabus.
   const supplemental = node.graded === false;
 
-  const label = `${supplemental ? 'Extra practice. ' : ''}${node.title}. ${s.label}. Worth ${
+  const label = `${supplemental ? 'Extra practice. ' : ''}${node.title}. ${statusLabel}. Worth ${
     node.xpReward
   } XP.${recommended ? ' Recommended next.' : ''}`;
 
@@ -509,14 +500,6 @@ function NodeCell({
     [],
   );
 
-  const bevelEdges = {
-    borderWidth: bevel,
-    borderTopColor: supplemental ? s.dark : s.light,
-    borderLeftColor: supplemental ? s.dark : s.light,
-    borderRightColor: supplemental ? s.light : s.dark,
-    borderBottomColor: supplemental ? s.light : s.dark,
-  };
-
   return (
     <View
       style={[styles.node, { left: at.x - LABEL_WIDTH / 2, top: at.y - HALF }]}
@@ -524,7 +507,10 @@ function NodeCell({
     >
       {/* The recommended next node wears the only blush mark on the screen. */}
       {recommended ? (
-        <View style={[styles.halo, { borderColor: theme.focus }]} pointerEvents="none" />
+        <View
+          style={[styles.halo, { borderColor: theme.nodeActive.glow ?? theme.nodeActive.border }]}
+          pointerEvents="none"
+        />
       ) : null}
 
       <View style={styles.cellWrap} {...drag.panHandlers}>
@@ -543,23 +529,24 @@ function NodeCell({
           }}
           style={({ pressed, hovered }: PressState) => [
             styles.cell,
-            // Locked cells are transparent: the dithered fill is drawn under
-            // them in the SVG, and a solid colour here would cover it.
-            status === 'locked'
-              ? { borderWidth: bevel, borderColor: s.edge }
-              : { backgroundColor: s.fill, ...bevelEdges },
-            selected ? { borderColor: theme.ink } : null,
+            {
+              backgroundColor: s.background,
+              borderWidth: bevel,
+              borderColor: s.border,
+              borderStyle: supplemental ? 'dashed' : 'solid',
+            },
+            selected ? { borderColor: theme.textPrimary } : null,
             pressed || (hovered && !movable) ? { opacity: 0.85 } : null,
             wipe < 1 ? { opacity: 0.35 + wipe * 0.65 } : null,
           ]}
         >
-          <Glyph kind={s.glyph} colour={s.ink} />
+          <Glyph kind={glyph} colour={s.icon} />
         </Pressable>
       </View>
 
       <PixelText
         variant="micro"
-        colour={theme.ink}
+        colour={theme.textPrimary}
         numberOfLines={2}
         centred
         style={styles.label}

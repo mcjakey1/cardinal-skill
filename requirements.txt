@@ -2,4 +2,4 @@
 # This file is prepared for future Python backend microservices, AI syllabus parsers,
 # or analytics processing scripts.
 #
-# Primary runtime is currently Next.js / Node.js (frontend) and Deno (Supabase Edge Functions).
+# Primary runtime is Expo / React Native and Deno (Supabase Edge Functions).

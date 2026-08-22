@@ -13,8 +13,8 @@ design language is the product's own and does not change per operating system, s
 this record is `web` rather than `adaptive` — but every decision there must
 survive a phone screen and a native build, not just a desktop browser.
 
-**The instructor workspace** (`frontend/`, Next.js) is desktop-first and
-deliberately conventional; see Brand Commitments. Until 2026-08-05 this app also
+**The instructor workspace** is an Expo route that remains desktop-oriented but
+responsive and deliberately conventional; see Brand Commitments. Until 2026-08-05 this app also
 carried a second, contradictory student experience — a cream-and-rounded
 `Welcome`, `Onboarding` and `dashboard`. Those were retired so a student meets
 one interface on every device.
@@ -69,14 +69,14 @@ supplemental "extra help" subtrees that redistribute a node's XP rather than min
 new XP; an adaptive engine that adjusts pacing, next-quest ordering, and a
 personal XP curve from observed struggle signals; instructor-authored trees.
 
-**Two applications, split by audience.** The Expo app (`app/` + `src/`) is the
-student's, on every device. The Next.js app (`frontend/`) is the instructor's:
-authoring a course tree, reading class aggregates, importing a syllabus. Neither
-one carries the other's audience.
+**One application, two role-specific surfaces.** The Expo app (`app/` + `src/`)
+ships both student and instructor routes on web, iOS, and Android. Students get
+the chart-first interface; instructors get authoring, course aggregates, and
+syllabus import through the conventional LMS workspace.
 
 The pure progression rules live once in `src/features/skilltree/` and are shared
 by both through a path alias, under a single `node --test` suite. So do the
-sixteen-colour tokens (`src/theme/tokens.ts`), the ordered dither
+semantic preset tokens (`src/theme/themes.ts`), the ordered dither
 (`src/theme/dither.ts`), and the edge router (`edgeRouting.ts`) — the instructor's
 authoring canvas draws with all four. Duplicating any of it is how a student ends
 up seeing a node unlocked on the web and locked on their phone.
@@ -144,8 +144,8 @@ student is never congratulated on trivia.
 - `CardinalSkill.pdf` — an original project document in the repository. Its text
   could not be extracted programmatically here; treat its contents as unread
   rather than assumed.
-- Six mock course datasets (`frontend/lib/cardinal-repository.ts`), including two
-  deliberately invalid graphs, for exercising layout and validation.
+- Deterministic demo tree data in `src/features/skilltree/demoTree.ts` for
+  exercising layout and validation.
 - Five deterministic simulated learner profiles (`src/features/skilltree/learners.ts`)
   used to test the adaptive engine.
 

@@ -85,8 +85,9 @@ interface FieldProps {
 }
 
 /**
- * The chart ground: a vertical gradient built entirely out of dither bands,
- * densest at the top. Absolutely positioned behind its siblings.
+ * A preset field built out of dither bands. Chart presets currently map both
+ * endpoints to their canvas background for a stable, flash-free solid field;
+ * quiet screens may retain a subtle surface texture.
  */
 export function DitherField({ variant = 'chart', from, to, bands = 9, flat = false }: FieldProps) {
   const theme = useTheme();

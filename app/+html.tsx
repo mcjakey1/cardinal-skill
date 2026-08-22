@@ -33,9 +33,8 @@ export default function Root({ children }: PropsWithChildren) {
             the one value that is true on every route. */}
         {/* Both, in order: the browser picks the one matching the device, so a
             phone in light mode paints cream and one in dark paints void. */}
-        <meta name="theme-color" content="#F5EFE3" media="(prefers-color-scheme: light)" />
-        <meta name="theme-color" content="#0A0407" media="(prefers-color-scheme: dark)" />
-        <meta name="color-scheme" content="light dark" />
+        <meta name="theme-color" content="#0B0F19" />
+        <meta name="color-scheme" content="dark" />
 
         <meta property="og:type" content="website" />
 
@@ -67,24 +66,12 @@ const BOOT_CSS = `
  * everyone and never a white flash on a dark phone.
  */
 :root {
-  --csk-ground: #F5EFE3;
-  --csk-ink: #0A0407;
-  --csk-focus: #C4123F;
-  --csk-track: #EDE7EA;
-  --csk-thumb: #A794A0;
-  --csk-thumb-hover: #5A4A55;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --csk-ground: #0A0407;
-    --csk-ink: #EDE7EA;
-    /* Blush is reserved for exactly this and the recommended-next node. */
-    --csk-focus: #FF9FB0;
-    --csk-track: #0A0407;
-    --csk-thumb: #2A0A16;
-    --csk-thumb-hover: #4A0E20;
-  }
+  --csk-ground: #0B0F19;
+  --csk-ink: #F8FAFC;
+  --csk-focus: #E0F2FE;
+  --csk-track: #111827;
+  --csk-thumb: #334155;
+  --csk-thumb-hover: #38BDF8;
 }
 
 html, body, #root {
@@ -104,7 +91,7 @@ body {
   font-smooth: never;
 }
 ::selection {
-  background-color: #C4123F;
+  background-color: #0284C7;
   color: #FFFFFF;
 }
 /* The focus ring is part of the design system, not a browser default. */

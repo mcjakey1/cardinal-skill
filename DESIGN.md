@@ -20,6 +20,66 @@ colors:
   bone: "#EDE7EA"
   white: "#FFFFFF"
   periwinkle: "#7A6BE8"
+  obsidian-ground: "#0B0F19"
+  obsidian-surface: "#111827"
+  obsidian-raised: "#1E293B"
+  obsidian-border: "#334155"
+  obsidian-sky: "#38BDF8"
+  obsidian-active: "#0284C7"
+  obsidian-active-edge: "#E0F2FE"
+  obsidian-locked-ink: "#64748B"
+  obsidian-muted: "#94A3B8"
+  obsidian-secondary: "#CBD5E1"
+  obsidian-ink: "#F8FAFC"
+  cyber-ground: "#100926"
+  cyber-surface: "#190F38"
+  cyber-raised: "#2B1055"
+  cyber-border: "#3A2B68"
+  cyber-locked: "#1E1638"
+  cyber-locked-ink: "#6C599E"
+  cyber-mint: "#00FFA3"
+  cyber-pink: "#E00070"
+  cyber-pink-edge: "#FF70BA"
+  cyber-muted: "#B9A7D8"
+  cyber-secondary: "#E9DDF7"
+  cyber-ink: "#FFF8FC"
+  emerald-ground: "#08140E"
+  emerald-surface: "#0D2117"
+  emerald-locked: "#0E2419"
+  emerald-raised: "#133824"
+  emerald-active: "#15803D"
+  emerald-border: "#1B432E"
+  emerald-completed: "#22C55E"
+  emerald-locked-ink: "#3F6E54"
+  emerald-active-edge: "#4ADE80"
+  emerald-muted: "#86B89A"
+  emerald-icon: "#86EFAC"
+  emerald-secondary: "#BBF7D0"
+  emerald-ink: "#F0FDF4"
+  solar-ground: "#1C1917"
+  solar-surface: "#292524"
+  solar-hover: "#3A302C"
+  solar-border: "#44403C"
+  solar-completed-bg: "#451A03"
+  solar-locked-ink: "#78716C"
+  solar-active: "#EA580C"
+  solar-completed: "#F59E0B"
+  solar-muted: "#A8A29E"
+  solar-secondary: "#E7E5E4"
+  solar-active-edge: "#FDBA74"
+  solar-icon: "#FDE68A"
+  solar-ink: "#FAFAF9"
+  nord-ground: "#2E3440"
+  nord-surface: "#3B4252"
+  nord-raised: "#434C5E"
+  nord-border: "#4C566A"
+  nord-active: "#5E81AC"
+  nord-locked-ink: "#616E85"
+  nord-active-edge: "#81A1C1"
+  nord-completed: "#88C0D0"
+  nord-muted: "#B8C1D1"
+  nord-secondary: "#D8DEE9"
+  nord-ink: "#ECEFF4"
 typography:
   display:
     fontFamily: "DotGothic16_400Regular"
@@ -139,12 +199,11 @@ The register is celebratory but never congratulatory. Progress is an event on
 screen — the chart wipes open, a streak counts, a stamp lands — and none of it
 praises the student for trivia or implies the work was easy.
 
-**Scope: this document is the student app.** Everything below governs the Expo
-app (`app/` + `src/`) on web, iOS and Android. The instructor workspace
-(`frontend/`) is a separate, deliberately conventional surface with its own
-system — see `frontend/DESIGN.md` and the Brand Commitments section of
-PRODUCT.md. The two share the progression rules, the sixteen-colour tokens, the
-ordered dither and the edge router; they share nothing else.
+**Scope: this document governs the single Expo app** on web, iOS and Android.
+The student routes use the sixteen-colour screen grammar below. The instructor
+route is a deliberately conventional LMS workspace with its own tokens in
+`src/theme/lms.ts`; see the Brand Commitments section of PRODUCT.md. Both
+surfaces share progression rules, chart tokens, ordered dither, and edge routing.
 
 **Deliberately not used — in the student app:** the contemporary ed-tech
 dashboard (light ground, rounded cards, a progress ring, a Continue row); its
@@ -158,10 +217,10 @@ place the student grammar crosses over is that workspace's authoring canvas,
 which draws the tree exactly as delivered so an author can see what they ship.
 
 **Key Characteristics:**
-- A locked palette. Intermediates are dithered, never blended.
-- Two themes over one grammar: paper by default, the lit screen on request.
-- Cardinal red is the dominant *surface* in the dark theme and the *signal* in
-  the light one. It is never a sparing accent in either.
+- Five curated dark palettes remap one semantic token contract.
+- Obsidian Blueprint is the default; theme choice persists per device.
+- Completed, available, and locked states keep their glyph and word when their
+  colours change.
 - One typeface for the entire interface.
 - Square corners everywhere. Radius is zero.
 - Fixed regions: marginalia, the chart, the docked window, the nav bar.
@@ -230,6 +289,21 @@ could not borrow from them. Each theme still draws about sixteen roles — what
 changed is that the ground is a role rather than a given.
 
 ## Themes
+
+The runtime contract is `ThemePalette` in `src/theme/themes.ts`. Obsidian
+Blueprint, Cyber Neon, Emerald Terminal, Solar Warmth, and Nord Frost each own
+the canvas, node states, three edge states, HUD, navigation, and XP meter. The
+System screen previews and applies them immediately, and the stored choice is
+hydrated before app content paints so launch never flashes through the default.
+
+Geometry, typography, touch targets, and non-colour status cues do not move
+between presets. Components consume semantic roles through `useAppTheme()`;
+raw palette values in a component remain a defect.
+
+### Retired two-theme model
+
+The notes below document the former Auto/Light/Dark implementation and are kept
+only as design history. They no longer describe runtime behavior.
 
 Two renditions of one grammar. **Light is the default**; dark is the option, and
 the preference is three-way — Auto follows the device, Light and Dark pin it.

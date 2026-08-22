@@ -14,6 +14,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePrefs } from '@/lib/prefs';
+import { useAppTheme } from '@/theme/ThemeProvider';
 import { space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import {
@@ -63,6 +64,7 @@ export function NavBar() {
   const insets = useSafeAreaInsets();
   const { lastCourseId, role } = usePrefs();
   const t = useTheme();
+  const { theme } = useAppTheme();
   const cells = role === 'instructor' ? INSTRUCTOR_CELLS : CELLS;
 
   const go = (cell: Cell) => {
@@ -80,7 +82,16 @@ export function NavBar() {
   };
 
   return (
-    <View style={[styles.bar, { paddingBottom: insets.bottom, backgroundColor: t.ground }]}>
+    <View
+      style={[
+        styles.bar,
+        {
+          paddingBottom: insets.bottom,
+          backgroundColor: theme.hudBackground,
+          borderTopColor: theme.border,
+        },
+      ]}
+    >
       {cells.map((cell) => {
         const active = pathname.startsWith(cell.match);
         return (
@@ -93,15 +104,16 @@ export function NavBar() {
             style={({ pressed, hovered }: PressState) => [
               styles.cell,
               bevelStyle(t, active ? 'brand' : 'panel', pressed ? 'inset' : 'raised'),
+              { backgroundColor: active ? theme.navActiveTab : theme.hudBackground },
               pressed ? null : hoverFill(t, active ? 'brand' : 'panel', hovered),
             ]}
           >
             <PixelIcon
               name={cell.icon}
               size={16}
-              colour={active ? t.tone.brand.ink : t.inkMuted}
+              colour={active ? theme.textPrimary : theme.textMuted}
             />
-            <PixelText variant="micro" colour={active ? t.tone.brand.ink : t.inkMuted}>
+            <PixelText variant="micro" colour={active ? theme.textPrimary : theme.textMuted}>
               {cell.label.toUpperCase()}
             </PixelText>
           </Pressable>
@@ -112,7 +124,7 @@ export function NavBar() {
 }
 
 const styles = StyleSheet.create({
-  bar: { flexDirection: 'row' },
+  bar: { flexDirection: 'row', borderTopWidth: 2 },
   cell: {
     flex: 1,
     minHeight: touch,

@@ -11,7 +11,10 @@ export interface EditedCourse {
 
 export const editedTreeKey = (courseId: string) => `cardinal.edited-tree.v1.${courseId}`;
 
-export function useEditedTree(courseId: string | undefined) {
+export function useEditedTree(
+  courseId: string | undefined,
+  serverNodeIds: readonly string[] | undefined,
+) {
   const [edited, setEdited] = useState<EditedCourse | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -24,7 +27,21 @@ export function useEditedTree(courseId: string | undefined) {
     }
     AsyncStorage.getItem(editedTreeKey(courseId))
       .then((raw) => {
-        if (live) setEdited(raw ? JSON.parse(raw) as EditedCourse : null);
+        if (!live) return;
+        const stored = raw ? (JSON.parse(raw) as EditedCourse) : null;
+        // A local edit shadows the server read, so a stale one hides a node the
+        // owner retired. If the server no longer knows every node this draft
+        // names, the draft is describing a chart that no longer exists.
+        if (stored && serverNodeIds) {
+          const known = new Set(serverNodeIds);
+          const orphaned = stored.tree.nodes.some((n) => !known.has(n.id) && !n.id.startsWith('local-'));
+          if (orphaned) {
+            AsyncStorage.removeItem(editedTreeKey(courseId!)).catch(() => {});
+            setEdited(null);
+            return;
+          }
+        }
+        setEdited(stored);
       })
       .catch(() => {
         if (live) setEdited(null);
@@ -33,7 +50,7 @@ export function useEditedTree(courseId: string | undefined) {
         if (live) setReady(true);
       });
     return () => { live = false; };
-  }, [courseId]);
+  }, [courseId, serverNodeIds]);
 
   const save = useCallback(async (next: EditedCourse) => {
     if (!courseId) return;

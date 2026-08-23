@@ -62,7 +62,7 @@ import { findMockCourse } from '@/features/skilltree/mockCourses';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
-import { DitherField } from '@/ui/Dither';
+import { Backdrop } from '@/ui/Backdrop';
 import { Window } from '@/ui/Window';
 import { StudyCompanionDrawer } from '@/ui/StudyCompanionDrawer';
 import { StableScrollView } from '@/ui/StableScrollView';
@@ -142,7 +142,10 @@ export default function TreeScreen() {
   });
 
   const { log, missionLog, complete, toggleMission, reset: resetLocalProgress } = useLocalProgress(courseId);
-  const { edited, save: saveEditedTree, clear: clearEditedTree } = useEditedTree(courseId);
+  const { edited, save: saveEditedTree, clear: clearEditedTree } = useEditedTree(
+    courseId,
+    data?.tree.nodes.map((n) => n.id),
+  );
   const { overrides, rename } = useQuestNames(courseId);
   const { visits, noteVisit, noteHelpRequested } = useSignals(courseId);
   const { positions, moveNode, resetLayout } = useNodeLayout(courseId);
@@ -584,7 +587,7 @@ export default function TreeScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
-      <DitherField flat={prefs.lowBandwidth} />
+      <Backdrop flat={prefs.lowBandwidth} />
 
       <View
         style={[
@@ -1339,7 +1342,7 @@ function Loading() {
   const t = useTheme();
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
-      <DitherField />
+      <Backdrop />
       <View style={styles.centred}>
         <Window title="Reading chart" live={false} style={styles.notice}>
           <PixelText variant="body" colour={t.inkMuted}>
@@ -1358,7 +1361,7 @@ function Failed({ onRetry }: { onRetry: () => void }) {
   const t = useTheme();
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
-      <DitherField />
+      <Backdrop />
       <View style={styles.centred}>
         <Window title="Chart unavailable" style={styles.notice}>
           <PixelText variant="body" colour={t.ink}>
@@ -1375,7 +1378,7 @@ function EmptyChart({ title }: { title: string }) {
   const t = useTheme();
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
-      <DitherField />
+      <Backdrop />
       <View style={styles.centred}>
         <Window title={title} style={styles.notice}>
           <PixelText variant="body" colour={t.ink}>

@@ -128,15 +128,17 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
     title: courseRes.data?.title ?? 'Untitled course',
     // Same tolerance for missions: a chart whose missions failed to load is a
     // chart with nodes worth their stored XP, not an error screen.
-    missions: (missionsRes.data ?? []).map((r) => ({
-      id: r.id,
-      skillId: r.node_id,
-      title: r.title,
-      description: r.description ?? '',
-      kind: r.kind,
-      xpReward: r.xp_reward,
-      estimatedMinutes: r.estimated_minutes ?? undefined,
-    })),
+    missions: (missionsRes.data ?? [])
+      .filter((row) => nodeIds.has(row.node_id))
+      .map((r) => ({
+        id: r.id,
+        skillId: r.node_id,
+        title: r.title,
+        description: r.description ?? '',
+        kind: r.kind,
+        xpReward: r.xp_reward,
+        estimatedMinutes: r.estimated_minutes ?? undefined,
+      })),
     completedMissionIds: (missionProgressRes.data ?? []).map((r) => r.mission_id),
   };
 }

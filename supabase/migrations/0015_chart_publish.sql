@@ -119,6 +119,19 @@ begin
   ) then
     raise exception 'a publish can only touch nodes on this course';
   end if;
+
+  -- An id in upsert_missions that already exists elsewhere would be reassigned
+  -- into this course by the `on conflict (id) do update set node_id` below,
+  -- carrying its mission_progress rows with it. node_id being valid is not
+  -- enough; the mission's current home has to be this course too.
+  if exists (
+    select 1 from jsonb_array_elements(p_changes -> 'upsert_missions') m
+    join missions old on old.id = (m ->> 'id')::uuid
+    where old.course_id is distinct from p_course_id
+  ) then
+    raise exception 'a publish can only touch missions on this course';
+  end if;
+
   -- 3. Insert. Explicit ids so edges and missions in this same batch can
   -- reference them. track_id stays null (node_has_one_parent, 0001:92), and
   -- parent_node_id travels with graded in one statement

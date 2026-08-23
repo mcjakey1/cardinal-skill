@@ -2,22 +2,35 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   type LayoutChangeEvent,
-  PanResponder,
   Pressable,
   StyleSheet,
   View,
 } from 'react-native';
-import Svg, { G, Path, Polygon, Rect } from 'react-native-svg';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  cancelAnimation,
+  Easing,
+  runOnJS,
+  type SharedValue,
+  useAnimatedStyle,
+  useSharedValue,
+  FadeInRight,
+  FadeOutRight,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
+import Svg, { Defs, G, Marker, Path, Polygon, Polyline, Rect } from 'react-native-svg';
 
 import { ChartTools } from '@/ui/ChartTools';
-import { PixelText, type PressState } from '@/ui/pixel';
+import { Bevel, PixelText, bevelStyle, type PressState } from '@/ui/pixel';
 import { useAppTheme } from '@/theme/ThemeProvider';
+import { useTheme } from '@/theme/useTheme';
 import { bevel, motion, space, touch } from '@/theme/tokens';
 import type { ThemePalette } from '@/theme/themes';
 import type { NodePosition, PositionMap } from '@/lib/nodeLayout';
 import {
-  arrowheadPoints,
   bendsOf,
+  arrowheadPoints,
   crossbarByPrereq,
   edgeWaypoints,
   orthogonalPath,
@@ -25,13 +38,24 @@ import {
 } from './edgeRouting';
 import {
   FIT_PAD,
+  MAX_SCALE,
+  MIN_SCALE,
   boundsOf,
   fitTransform,
+  toWorld,
   zoomAbout,
   type Transform,
 } from './chartViewport';
 import { deriveStatuses, nextQuests } from './progression';
-import type { NodeStatus, SkillNode, Tree } from './types';
+import type { Prereq, SkillNode, Tree } from './types';
+import { autoLayout } from './autoLayout';
+import { displayStatus, type DisplayStatus } from './nodeVisualState';
+import { miniMapGeometry, projectToMiniMap } from './minimap';
+import { CanvasGestureSurface, type WheelPoint } from './CanvasGestureSurface';
+import { useCanvasViewport } from './CanvasViewportProvider';
+import { PIXEL_ICON_BITMAPS, resolvePixelIcon } from './pixelIcons';
+import { NodePulse } from './NodePulse';
+import { BoundedCache } from '@/lib/BoundedCache';
 
 /**
  * The chart is an unbounded canvas you move around, not a page that scrolls.
@@ -82,12 +106,11 @@ const LABEL_WIDTH = 108;
 const CANVAS_PAD = 900;
 
 const CHART_ROUTING: Routing = { axis: 'horizontal', in: HALF + 6, out: HALF + 6, elbowMin: 8 };
-const ARROW = 7;
-
 /** A drag that never leaves the touch target was a tap on the node. */
 const DRAG_SLOP = 4;
 
 interface Props {
+  viewportKey: string;
   tree: Tree;
   masteredIds: string[];
   selectedId?: string | null;
@@ -108,6 +131,17 @@ interface Props {
   positions?: PositionMap;
   onMoveNode?: (nodeId: string, at: NodePosition) => void;
   onResetLayout?: () => void;
+  /** Fraction of mission XP claimed for each node. Drives IN PROGRESS. */
+  progressByNode?: Readonly<Record<string, number>>;
+  editMode?: boolean;
+  linkMode?: boolean;
+  linkSourceId?: string | null;
+  linkNotice?: string | null;
+  onToggleEditMode?: (next: boolean) => void;
+  onAddNode?: (at: NodePosition) => void;
+  onToggleLinkMode?: () => void;
+  onCancelLink?: () => void;
+  onDeleteNode?: () => void;
 }
 
 interface Placed extends SkillNode {
@@ -115,6 +149,14 @@ interface Placed extends SkillNode {
   px: number;
   py: number;
 }
+
+interface CachedGraphLayout {
+  key: string;
+  positions: PositionMap;
+}
+
+/** Retains recent graph coordinates without accumulating every course ever opened. */
+const graphLayoutCache = new BoundedCache<string, CachedGraphLayout>(12);
 
 /**
  * A five-step wipe, not an eased tween.
@@ -146,7 +188,92 @@ function useWipe(key: string | null | undefined, enabled: boolean): number {
   return step / steps;
 }
 
-export function SkillTree({
+export function SkillTree(props: Props) {
+  const layoutKey = `${props.viewportKey}:${props.tree.nodes.length}`;
+  const treeRef = useRef(props.tree);
+  treeRef.current = props.tree;
+  const needsLayout = props.tree.nodes.some(
+    (node) => !Number.isFinite(node.x) || !Number.isFinite(node.y),
+  );
+  const [cachedLayout, setCachedLayout] = useState<CachedGraphLayout | null>(
+    () => graphLayoutCache.get(layoutKey) ?? null,
+  );
+
+  useEffect(() => {
+    if (!needsLayout) return;
+    const cached = graphLayoutCache.get(layoutKey);
+    const cacheMatches = cached && treeRef.current.nodes.every((node) => cached.positions[node.id]);
+    if (cached && cacheMatches) {
+      setCachedLayout(cached);
+      return;
+    }
+    if (cached) graphLayoutCache.delete(layoutKey);
+    let live = true;
+    const task = setTimeout(() => {
+      const input = treeRef.current;
+      const laidOut = autoLayout(input.nodes, input.prereqs).nodes;
+      const next: CachedGraphLayout = {
+        key: layoutKey,
+        positions: Object.fromEntries(laidOut.map((node) => [node.id, { x: node.x, y: node.y }])),
+      };
+      graphLayoutCache.set(layoutKey, next);
+      if (live) setCachedLayout(next);
+    }, 0);
+    return () => {
+      live = false;
+      clearTimeout(task);
+    };
+  }, [layoutKey, needsLayout]);
+
+  const activeLayout = cachedLayout?.key === layoutKey
+    && props.tree.nodes.every((node) => cachedLayout.positions[node.id])
+    ? cachedLayout
+    : null;
+  const resolvedTree = useMemo<Tree>(() => {
+    if (!needsLayout || !activeLayout) return props.tree;
+    return {
+      ...props.tree,
+      nodes: props.tree.nodes.map((node) => ({
+        ...node,
+        ...(activeLayout.positions[node.id] ?? {}),
+      })),
+    };
+  }, [activeLayout, needsLayout, props.tree]);
+
+  if (needsLayout && !activeLayout) {
+    return <RetroGraphLoader reduceMotion={Boolean(props.reduceMotion)} />;
+  }
+  return <SkillTreeCanvas {...props} tree={resolvedTree} />;
+}
+
+function RetroGraphLoader({ reduceMotion }: { reduceMotion: boolean }) {
+  const { theme } = useAppTheme();
+  const spin = useSharedValue(0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    spin.value = withRepeat(withTiming(1, { duration: 800, easing: Easing.linear }), -1, false);
+    return () => cancelAnimation(spin);
+  }, [reduceMotion, spin]);
+  const spinnerStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${Math.floor(spin.value * 4) * 90}deg` }],
+  }));
+  return (
+    <View style={[styles.loading, { backgroundColor: theme.background }]} accessibilityRole="progressbar">
+      <Animated.View
+        style={[
+          styles.loadingGlyph,
+          { borderColor: theme.nodeActive.border, borderRightColor: theme.background },
+          spinnerStyle,
+        ]}
+      />
+      <PixelText variant="label" colour={theme.textPrimary}>INITIALIZING NEURAL PATHWAYS...</PixelText>
+      <PixelText variant="micro" colour={theme.textMuted}>PARSING SKILL TREE</PixelText>
+    </View>
+  );
+}
+
+function SkillTreeCanvas({
+  viewportKey,
   tree,
   masteredIds,
   selectedId,
@@ -157,43 +284,54 @@ export function SkillTree({
   positions,
   onMoveNode,
   onResetLayout,
+  progressByNode = {},
+  editMode,
+  linkMode,
+  linkSourceId,
+  linkNotice,
+  onToggleEditMode,
+  onAddNode,
+  onToggleLinkMode,
+  onCancelLink,
+  onDeleteNode,
 }: Props) {
   const { theme } = useAppTheme();
+  const t = useTheme();
+  const viewportStore = useCanvasViewport();
+  const restoredViewport = useRef(viewportStore.read(viewportKey));
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const [movable, setMovable] = useState(false);
-  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
+  const [scaleReadout, setScaleReadout] = useState(restoredViewport.current?.scale ?? 1);
+  const cameraX = useSharedValue(restoredViewport.current?.x ?? 0);
+  const cameraY = useSharedValue(restoredViewport.current?.y ?? 0);
+  const cameraScale = useSharedValue(restoredViewport.current?.scale ?? 1);
   /** Set only while a node is being dragged, so the commit happens once at the end. */
   const [dragging, setDragging] = useState<{ id: string; x: number; y: number } | null>(null);
 
-  const { status, nodes, canvas, crossbars, recommendedId, openedIds } = useMemo(() => {
-    const { status } = deriveStatuses(tree, masteredIds);
+  const laidOutTree = tree;
+
+  const { status, nodes, canvas, origin, recommendedId, openedIds } = useMemo(() => {
+    const { status } = deriveStatuses(laidOutTree, masteredIds);
 
     // A dragged position replaces the authored one, in tree units, so the two
     // are interchangeable everywhere below this line.
     const at = (n: SkillNode) => positions?.[n.id] ?? { x: n.x, y: n.y };
-    const dp = tree.nodes.map((n) => {
+    const dp = laidOutTree.nodes.map((n) => {
       const p = at(n);
       return { x: p.x * SCALE_X, y: p.y * SCALE_Y };
     });
 
     const box = boundsOf(dp, CANVAS_PAD);
-    const placed: Placed[] = tree.nodes.map((n, i) => ({
+    const placed: Placed[] = laidOutTree.nodes.map((n, i) => ({
       ...n,
       px: dp[i]!.x - box.minX,
       py: dp[i]!.y - box.minY,
     }));
 
-    const crossbars = crossbarByPrereq(
-      placed.map((n) => ({ id: n.id, x: n.px, y: n.py })),
-      tree.prereqs.map((p) => ({ from: p.prereqId, to: p.nodeId })),
-      CHART_ROUTING,
-    );
-
     // What the most recent completion opened. This is what the wipe is for, and
     // what the student is actually being told.
     const before = recentlyMasteredId
       ? deriveStatuses(
-          tree,
+          laidOutTree,
           masteredIds.filter((id) => id !== recentlyMasteredId),
         ).status
       : null;
@@ -202,165 +340,252 @@ export function SkillTree({
       status,
       nodes: placed,
       canvas: { width: box.maxX - box.minX, height: box.maxY - box.minY },
-      crossbars,
+      origin: { x: box.minX, y: box.minY },
       // `undefined` means the caller has no opinion; `null` means it ranked and
       // found nothing. Only the first falls back to the chart's own pick.
       recommendedId:
         recommendedIdProp !== undefined
           ? recommendedIdProp
-          : (nextQuests(tree, masteredIds, 1)[0]?.id ?? null),
+          : (nextQuests(laidOutTree, masteredIds, 1)[0]?.id ?? null),
       openedIds: new Set(
         before
-          ? tree.nodes
+          ? laidOutTree.nodes
               .filter((n) => status.get(n.id) === 'available' && before.get(n.id) === 'locked')
               .map((n) => n.id)
           : [],
       ),
     };
-  }, [tree, masteredIds, recentlyMasteredId, recommendedIdProp, positions]);
+  }, [laidOutTree, masteredIds, recentlyMasteredId, recommendedIdProp, positions]);
 
   const wipe = useWipe(recentlyMasteredId, !reduceMotion);
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n] as const)), [nodes]);
+  const activeCrossbars = useMemo(
+    () =>
+      crossbarByPrereq(
+        nodes.map((node) => ({ id: node.id, ...live(node, dragging) })),
+        laidOutTree.prereqs.map((p) => ({ from: p.prereqId, to: p.nodeId })),
+        CHART_ROUTING,
+      ),
+    [dragging, laidOutTree.prereqs, nodes],
+  );
+
+  const setCamera = useCallback(
+    (next: Transform, animated = true) => {
+      const duration = reduceMotion || !animated ? 0 : motion.flash;
+      cameraX.value = duration ? withTiming(next.x, { duration }) : next.x;
+      cameraY.value = duration ? withTiming(next.y, { duration }) : next.y;
+      cameraScale.value = duration ? withTiming(next.scale, { duration }) : next.scale;
+      setScaleReadout(next.scale);
+      viewportStore.write(viewportKey, next);
+    },
+    [cameraScale, cameraX, cameraY, reduceMotion, viewportKey, viewportStore],
+  );
 
   const fit = useCallback(() => {
     // Fit to the nodes, not to the canvas — the canvas is mostly the open ground
     // that exists to be dragged into, and fitting to it would frame nothing.
     const marks = nodes.map((n) => ({ x: n.px, y: n.py }));
-    setTransform(fitTransform(boundsOf(marks, CELL + LABEL_BLOCK), viewport, FIT_PAD));
-  }, [nodes, viewport]);
+    setCamera(fitTransform(boundsOf(marks, CELL + LABEL_BLOCK), viewport, FIT_PAD));
+  }, [nodes, setCamera, viewport]);
 
   // Open on the whole chart rather than its top-left corner, once there is a
   // measured viewport to fit it into.
-  const fitted = useRef(false);
+  const fitted = useRef(Boolean(restoredViewport.current));
   useEffect(() => {
     if (fitted.current || viewport.width === 0 || nodes.length === 0) return;
     fitted.current = true;
     fit();
   }, [fit, viewport.width, nodes.length]);
 
-  /**
-   * Dragging the background moves the canvas.
-   *
-   * Two refs, and both are load-bearing. `current` is the live transform, read
-   * inside handlers that were created once. `origin` is where the transform was
-   * when this gesture started — `dx`/`dy` are cumulative from that moment, so
-   * adding them to a transform that is itself being updated would compound the
-   * offset and send the canvas flying on the first drag.
-   *
-   * The responder is built once for the same reason: rebuilding it mid-gesture
-   * leaves the in-flight drag running against stale closures.
-   */
-  const current = useRef(transform);
-  current.current = transform;
-  const origin = useRef<Transform | null>(null);
-  const movableRef = useRef(movable);
-  movableRef.current = movable;
+  /** Camera coordinates stay on the UI thread; React only receives the scale readout. */
+  const panStartX = useSharedValue(0);
+  const panStartY = useSharedValue(0);
+  const pinchStartX = useSharedValue(0);
+  const pinchStartY = useSharedValue(0);
+  const pinchStartScale = useSharedValue(1);
 
-  const canvasPan = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        /*
-         * With nodes locked, a drag pans the canvas wherever it starts —
-         * including on top of a node, whose `Pressable` would otherwise hold the
-         * gesture and make the chart feel stuck. Capture is what takes it back.
-         *
-         * With nodes movable this stays out of the way, so the node's own
-         * responder (deeper, and therefore later in the capture phase) wins.
-         * Either way capture only fires past the slop, so a tap still selects.
-         */
-        onMoveShouldSetPanResponderCapture: (_e, g) =>
-          !movableRef.current && (Math.abs(g.dx) > DRAG_SLOP || Math.abs(g.dy) > DRAG_SLOP),
-        // Empty ground, where nothing else wanted the gesture.
-        onMoveShouldSetPanResponder: (_e, g) =>
-          Math.abs(g.dx) > DRAG_SLOP || Math.abs(g.dy) > DRAG_SLOP,
-        onPanResponderGrant: () => {
-          origin.current = current.current;
-        },
-        onPanResponderMove: (_e, g) => {
-          const from = origin.current;
-          if (!from) return;
-          setTransform({ ...from, x: from.x + g.dx, y: from.y + g.dy });
-        },
-        onPanResponderRelease: () => {
-          origin.current = null;
-        },
-        onPanResponderTerminate: () => {
-          origin.current = null;
-        },
-      }),
-    [],
+  const persistCamera = useCallback(
+    (x: number, y: number, scale: number) => {
+      viewportStore.write(viewportKey, { x, y, scale });
+    },
+    [viewportKey, viewportStore],
   );
 
-  const zoom = (factor: number) =>
-    setTransform((t) =>
-      zoomAbout(t, factor, { x: viewport.width / 2, y: viewport.height / 2 }),
-    );
+  const canvasGesture = useMemo(() => {
+    const pan = Gesture.Pan()
+      .enabled(!editMode)
+      .maxPointers(1)
+      .minDistance(DRAG_SLOP)
+      .onBegin(() => {
+        cancelAnimation(cameraX);
+        cancelAnimation(cameraY);
+        panStartX.value = cameraX.value;
+        panStartY.value = cameraY.value;
+      })
+      .onUpdate((event) => {
+        cameraX.value = panStartX.value + event.translationX;
+        cameraY.value = panStartY.value + event.translationY;
+      })
+      .onEnd(() => {
+        runOnJS(persistCamera)(cameraX.value, cameraY.value, cameraScale.value);
+      });
+
+    const pinch = Gesture.Pinch()
+      .onBegin(() => {
+        cancelAnimation(cameraScale);
+        pinchStartX.value = cameraX.value;
+        pinchStartY.value = cameraY.value;
+        pinchStartScale.value = cameraScale.value;
+      })
+      .onUpdate((event) => {
+        const nextScale = Math.min(
+          MAX_SCALE,
+          Math.max(MIN_SCALE, pinchStartScale.value * event.scale),
+        );
+        const ratio = nextScale / pinchStartScale.value;
+        cameraScale.value = nextScale;
+        cameraX.value = event.focalX - (event.focalX - pinchStartX.value) * ratio;
+        cameraY.value = event.focalY - (event.focalY - pinchStartY.value) * ratio;
+        runOnJS(setScaleReadout)(nextScale);
+      })
+      .onEnd(() => {
+        runOnJS(persistCamera)(cameraX.value, cameraY.value, cameraScale.value);
+      });
+
+    return Gesture.Simultaneous(pan, pinch);
+  }, [cameraScale, cameraX, cameraY, editMode, panStartX, panStartY, persistCamera, pinchStartScale, pinchStartX, pinchStartY]);
+
+  const cameraStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: cameraX.value },
+      { translateY: cameraY.value },
+      { scale: cameraScale.value },
+    ],
+  }));
+
+  const zoom = (factor: number) => {
+    const current = { x: cameraX.value, y: cameraY.value, scale: cameraScale.value };
+    setCamera(zoomAbout(current, factor, { x: viewport.width / 2, y: viewport.height / 2 }));
+  };
+
+  const wheelZoom = useCallback((factor: number, point: WheelPoint) => {
+    const current = { x: cameraX.value, y: cameraY.value, scale: cameraScale.value };
+    const nextScale = Math.min(2, Math.max(0.5, current.scale * factor));
+    const next = zoomAbout(current, nextScale / current.scale, point);
+    setCamera(next, false);
+  }, [cameraScale, cameraX, cameraY, setCamera]);
 
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     setViewport((v) => (v.width === width && v.height === height ? v : { width, height }));
   };
 
+  const edgeElements = useMemo(() => tree.prereqs.map(({ nodeId, prereqId }) => {
+    const a = byId.get(prereqId);
+    const b = byId.get(nodeId);
+    if (!a || !b) return null;
+    const targetStatus = status.get(nodeId) ?? 'locked';
+    const targetProgress = progressByNode[nodeId] ?? 0;
+    const isInProgress = targetStatus === 'available' && targetProgress > 0;
+    const ink = targetStatus === 'mastered'
+      ? theme.edgeCompleted
+      : isInProgress
+        ? theme.xpBarFill
+        : targetStatus === 'available'
+        ? theme.edgeActive
+        : theme.edgeLocked;
+    const markerName = targetStatus === 'mastered'
+      ? 'completed'
+      : isInProgress
+        ? 'in-progress'
+        : targetStatus === 'available'
+        ? 'active'
+        : 'locked';
+    const points = edgeWaypoints(
+      live(a, dragging),
+      live(b, dragging),
+      CHART_ROUTING,
+      activeCrossbars.get(prereqId),
+    );
+    const drawing = prereqId === recentlyMasteredId ? wipe : 1;
+    return (
+      <G key={`${prereqId}->${nodeId}`} opacity={targetStatus === 'locked' ? 0.72 : 1}>
+        <Path
+          d={orthogonalPath(points)}
+          fill="none"
+          stroke={ink}
+          strokeWidth={targetStatus === 'locked' ? 2 : 3}
+          strokeLinejoin="miter"
+          strokeDasharray={targetStatus === 'locked' ? '6 6' : drawing < 1 ? '4 6' : undefined}
+          opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
+          markerEnd={`url(#arrow-${markerName})`}
+        />
+        {/* SVG markers are retained for browser semantics, while this matching
+            polygon guarantees the direction cue survives react-native-svg on
+            iOS and Android. It is the same shape and colour, so supported
+            renderers simply paint the arrow twice in exactly the same place. */}
+        <Polygon
+          points={arrowheadPoints(points, targetStatus === 'locked' ? 9 : 11)}
+          fill={ink}
+          stroke={theme.background}
+          strokeWidth={1}
+          strokeLinejoin="miter"
+        />
+        {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, index) => (
+          <Rect key={index} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
+        ))}
+      </G>
+    );
+  }), [activeCrossbars, byId, dragging, progressByNode, recentlyMasteredId, status, theme, tree.prereqs, wipe]);
+
   return (
     <View style={styles.chart} onLayout={onLayout}>
-      <View style={styles.fill} {...canvasPan.panHandlers}>
-        <View
+      <CanvasGestureSurface
+        gesture={canvasGesture}
+        onWheelZoom={wheelZoom}
+        connecting={Boolean(linkMode)}
+        onCancelConnect={onCancelLink}
+      >
+      <Pressable style={styles.fill} onPress={linkMode ? onCancelLink : undefined}>
+        <Animated.View
           style={[
             styles.layer,
             {
               width: canvas.width,
               height: canvas.height,
-              transform: [
-                { translateX: transform.x },
-                { translateY: transform.y },
-                { scale: transform.scale },
-              ],
               // Scaling a layer scales it about its centre, so the origin has to
               // be pinned to the top-left or the offset means something
               // different at every zoom.
               transformOrigin: 'top left',
             },
+            cameraStyle,
           ]}
           pointerEvents="box-none"
         >
           <Svg width={canvas.width} height={canvas.height} style={StyleSheet.absoluteFill}>
-            {tree.prereqs.map(({ nodeId, prereqId }) => {
-              const a = byId.get(prereqId);
-              const b = byId.get(nodeId);
-              if (!a || !b) return null;
-
-              const targetStatus = status.get(nodeId) ?? 'locked';
-              const ink =
-                targetStatus === 'mastered'
-                  ? theme.edgeCompleted
-                  : targetStatus === 'available'
-                    ? theme.edgeActive
-                    : theme.edgeLocked;
-              const from = live(a, dragging);
-              const to = live(b, dragging);
-              const points = edgeWaypoints(from, to, CHART_ROUTING, crossbars.get(prereqId));
-              // An edge leaving the node just completed draws itself in.
-              const drawing = prereqId === recentlyMasteredId ? wipe : 1;
-
-              return (
-                <G key={`${prereqId}->${nodeId}`} opacity={targetStatus === 'locked' ? 0.72 : 1}>
-                  <Path
-                    d={orthogonalPath(points)}
-                    fill="none"
-                    stroke={ink}
-                    strokeWidth={targetStatus === 'locked' ? 2 : 3}
-                    strokeLinejoin="miter"
-                    strokeDasharray={drawing < 1 ? '4 6' : undefined}
-                    opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
-                  />
-                  <Polygon points={arrowheadPoints(points, ARROW)} fill={ink} />
-                  {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, i) => (
-                    <Rect key={i} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
-                  ))}
-                </G>
-              );
-            })}
+            <Defs>
+              {([
+                ['completed', theme.edgeCompleted],
+                ['active', theme.edgeActive],
+                ['in-progress', theme.xpBarFill],
+                ['locked', theme.edgeLocked],
+              ] as const).map(([name, colour]) => (
+                <Marker
+                  key={name}
+                  id={`arrow-${name}`}
+                  viewBox="0 0 10 10"
+                  markerWidth={name === 'locked' ? 7 : 8}
+                  markerHeight={name === 'locked' ? 7 : 8}
+                  refX={8}
+                  refY={5}
+                  orient="auto-start-reverse"
+                  markerUnits="userSpaceOnUse"
+                >
+                  <Path d="M 0 1 L 8 5 L 0 9 Z" fill={colour} stroke={theme.background} strokeWidth={0.8} />
+                </Marker>
+              ))}
+            </Defs>
+            {edgeElements}
 
           </Svg>
 
@@ -369,13 +594,17 @@ export function SkillTree({
               key={node.id}
               node={node}
               at={live(node, dragging)}
-              status={status.get(node.id) ?? 'locked'}
+              status={displayStatus(status.get(node.id) ?? 'locked', progressByNode[node.id] ?? 0)}
+              progress={progressByNode[node.id] ?? 0}
               selected={node.id === selectedId}
               recommended={node.id === recommendedId}
               wipe={openedIds.has(node.id) ? wipe : 1}
+              celebrating={node.id === recentlyMasteredId}
+              linkSource={Boolean(linkMode && node.id === linkSourceId)}
+              reduceMotion={Boolean(reduceMotion)}
               theme={theme}
-              movable={movable}
-              scale={transform.scale}
+              movable={Boolean(editMode)}
+              scale={scaleReadout}
               onPress={() => onSelectNode(node)}
               onDrag={(dx, dy) => setDragging({ id: node.id, x: dx, y: dy })}
               onDrop={(dx, dy) => {
@@ -388,19 +617,119 @@ export function SkillTree({
               }}
             />
           ))}
-        </View>
-      </View>
+        </Animated.View>
+      </Pressable>
+      </CanvasGestureSurface>
 
-      <ChartTools
-        movable={movable}
-        onToggleMovable={setMovable}
-        onZoomIn={() => zoom(1.25)}
-        onZoomOut={() => zoom(0.8)}
-        onFit={fit}
-        onReset={onResetLayout && positions && Object.keys(positions).length > 0 ? onResetLayout : undefined}
-        scale={transform.scale}
+      {linkMode && onCancelLink ? (
+        <Bevel tone="panel" style={styles.linkBanner}>
+          <PixelText variant="micro" colour={theme.textPrimary}>
+            {linkNotice ?? 'CLICK TARGET NODE TO CONNECT'}
+          </PixelText>
+          <Pressable
+            onPress={onCancelLink}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel connecting nodes"
+            style={({ pressed }: PressState) => [styles.linkCancel, bevelStyle(t, 'panel', pressed ? 'inset' : 'raised')]}
+          >
+            <PixelText variant="micro" colour={theme.nodeCompleted.border}>CANCEL</PixelText>
+          </Pressable>
+        </Bevel>
+      ) : linkNotice ? (
+        <Bevel tone="panel" style={styles.linkBanner}>
+          <PixelText variant="micro" colour={theme.textPrimary}>{linkNotice}</PixelText>
+        </Bevel>
+      ) : null}
+
+      <MiniMap
+        nodes={nodes}
+        prereqs={laidOutTree.prereqs}
+        cameraX={cameraX}
+        cameraY={cameraY}
+        cameraScale={cameraScale}
+        viewport={viewport}
+        onReset={fit}
+        theme={theme}
       />
+
+      <View style={styles.toolDock} pointerEvents="box-none">
+        {editMode && onAddNode && onToggleLinkMode ? (
+          <EditToolbar
+            linkMode={Boolean(linkMode)}
+            linkSourceId={linkSourceId}
+            selected={Boolean(selectedId)}
+            reduceMotion={Boolean(reduceMotion)}
+            onAdd={() => {
+              const world = toWorld(
+                { x: viewport.width / 2, y: viewport.height / 2 },
+                { x: cameraX.value, y: cameraY.value, scale: cameraScale.value },
+              );
+              onAddNode({ x: (world.x + origin.x) / SCALE_X, y: (world.y + origin.y) / SCALE_Y });
+            }}
+            onLink={onToggleLinkMode}
+            onDelete={onDeleteNode}
+            onReset={onResetLayout}
+            onExit={() => onToggleEditMode?.(false)}
+          />
+        ) : null}
+        <ChartTools
+          editMode={editMode}
+          onToggleEditMode={onToggleEditMode}
+          onZoomIn={() => zoom(1.25)}
+          onZoomOut={() => zoom(0.8)}
+          onFit={fit}
+          scale={scaleReadout}
+        />
+      </View>
     </View>
+  );
+}
+
+function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, onAdd, onLink, onDelete, onReset, onExit }: {
+  linkMode: boolean;
+  linkSourceId?: string | null;
+  selected: boolean;
+  reduceMotion: boolean;
+  onAdd: () => void;
+  onLink: () => void;
+  onDelete?: () => void;
+  onReset?: () => void;
+  onExit: () => void;
+}) {
+  const t = useTheme();
+  const actions = [
+    { label: '+ ADD NODE', onPress: onAdd, disabled: false },
+    { label: linkMode && linkSourceId ? 'PICK TARGET' : 'CONNECT', onPress: onLink, disabled: false },
+    { label: 'DELETE NODE', onPress: onDelete, disabled: !selected },
+    { label: 'RESET POSITIONS', onPress: onReset, disabled: !onReset },
+    { label: 'EXIT EDIT', onPress: onExit, disabled: false },
+  ];
+  return (
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInRight.duration(200)}
+      exiting={reduceMotion ? undefined : FadeOutRight.duration(200)}
+      style={styles.editToolbar}
+    >
+    <Bevel tone="panel" style={styles.editToolbarInner} accessibilityLabel="Tree edit tools">
+      {actions.map((action) => (
+        <Pressable
+          key={action.label}
+          onPress={action.onPress}
+          disabled={action.disabled}
+          accessibilityRole="button"
+          accessibilityLabel={action.label}
+          accessibilityState={{ disabled: action.disabled }}
+          style={({ pressed }: PressState) => [
+            styles.editAction,
+            bevelStyle(t, action.disabled ? 'panel' : 'brand', pressed ? 'inset' : 'raised'),
+            action.disabled ? { opacity: 0.45 } : null,
+          ]}
+        >
+          <PixelText variant="micro" colour={action.disabled ? t.inkMuted : t.brandInk}>{action.label}</PixelText>
+        </Pressable>
+      ))}
+    </Bevel>
+    </Animated.View>
   );
 }
 
@@ -410,13 +739,109 @@ function live(node: Placed, dragging: { id: string; x: number; y: number } | nul
   return { x: node.px + dragging.x, y: node.py + dragging.y };
 }
 
+function MiniMap({
+  nodes,
+  prereqs,
+  cameraX,
+  cameraY,
+  cameraScale,
+  viewport,
+  onReset,
+  theme,
+}: {
+  nodes: readonly Placed[];
+  prereqs: readonly Prereq[];
+  cameraX: SharedValue<number>;
+  cameraY: SharedValue<number>;
+  cameraScale: SharedValue<number>;
+  viewport: { width: number; height: number };
+  onReset: () => void;
+  theme: ThemePalette;
+}) {
+  const width = 128;
+  const height = 80;
+  const geometry = useMemo(
+    () => miniMapGeometry(nodes.map((node) => ({ x: node.px, y: node.py })), width, height, CELL),
+    [nodes],
+  );
+  const miniatureById = useMemo(
+    () =>
+      new Map(
+        nodes.map((node) => [node.id, projectToMiniMap({ x: node.px, y: node.py }, geometry)]),
+      ),
+    [geometry, nodes],
+  );
+  const { bounds, offsetX, offsetY, scale } = geometry;
+  const frustumStyle = useAnimatedStyle(() => {
+    const safeScale = cameraScale.value > 0 ? cameraScale.value : 1;
+    return {
+      left: offsetX + (-cameraX.value / safeScale - bounds.minX) * scale,
+      top: offsetY + (-cameraY.value / safeScale - bounds.minY) * scale,
+      width: Math.max(2, (viewport.width / safeScale) * scale),
+      height: Math.max(2, (viewport.height / safeScale) * scale),
+    };
+  }, [bounds.minX, bounds.minY, offsetX, offsetY, scale, viewport.height, viewport.width]);
+
+  return (
+    <Pressable
+      onPress={onReset}
+      accessibilityRole="button"
+      accessibilityLabel="Mini-map. Fit the whole chart on screen."
+      style={({ pressed }) => [
+        styles.miniMap,
+        {
+          backgroundColor: theme.hudBackground,
+          borderColor: theme.border,
+          opacity: pressed ? 0.78 : 1,
+        },
+      ]}
+    >
+      <Svg width={width} height={height}>
+        {prereqs.map(({ prereqId, nodeId }) => {
+          const from = miniatureById.get(prereqId);
+          const to = miniatureById.get(nodeId);
+          if (!from || !to) return null;
+          const midX = (from.x + to.x) / 2;
+          return (
+            <Polyline
+              key={`${prereqId}->${nodeId}`}
+              points={`${from.x},${from.y} ${midX},${from.y} ${midX},${to.y} ${to.x},${to.y}`}
+              fill="none"
+              stroke={theme.edgeLocked}
+              strokeWidth={1}
+            />
+          );
+        })}
+        {nodes.map((node) => (
+          <Rect
+            key={node.id}
+            x={(miniatureById.get(node.id)?.x ?? 0) - 2}
+            y={(miniatureById.get(node.id)?.y ?? 0) - 2}
+            width={4}
+            height={4}
+            fill={theme.nodeActive.border}
+          />
+        ))}
+      </Svg>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.miniMapFrustum, { borderColor: theme.textPrimary }, frustumStyle]}
+      />
+    </Pressable>
+  );
+}
+
 function NodeCell({
   node,
   at,
   status,
+  progress,
   selected,
   recommended,
   wipe,
+  celebrating,
+  linkSource,
+  reduceMotion,
   theme,
   movable,
   scale,
@@ -426,10 +851,14 @@ function NodeCell({
 }: {
   node: Placed;
   at: { x: number; y: number };
-  status: NodeStatus;
+  status: DisplayStatus;
+  progress: number;
   selected: boolean;
   recommended: boolean;
   wipe: number;
+  celebrating: boolean;
+  linkSource: boolean;
+  reduceMotion: boolean;
   theme: ThemePalette;
   movable: boolean;
   scale: number;
@@ -440,12 +869,19 @@ function NodeCell({
   const s =
     status === 'mastered'
       ? theme.nodeCompleted
-      : status === 'available'
+      : status === 'available' || status === 'in_progress'
         ? theme.nodeActive
         : theme.nodeLocked;
   const statusLabel =
-    status === 'mastered' ? 'Mastered' : status === 'available' ? 'Available' : 'Locked';
-  const glyph = status === 'mastered' ? 'check' : status === 'available' ? 'play' : 'lock';
+    status === 'mastered'
+      ? 'Mastered'
+      : status === 'in_progress'
+        ? 'In progress'
+        : status === 'available'
+          ? 'Available'
+          : 'Locked';
+  const statusGlyph = status === 'mastered' ? 'check' : status === 'locked' ? 'lock' : null;
+  const subjectIcon = resolvePixelIcon(node);
 
   // A step generated to scaffold another node. Only an explicit `false` counts:
   // every node written before help subtrees existed came from a syllabus.
@@ -455,49 +891,33 @@ function NodeCell({
     node.xpReward
   } XP.${recommended ? ' Recommended next.' : ''}`;
 
-  // Built once and fed by refs. The handlers of an in-flight gesture are the
-  // ones captured when it was granted, so a responder rebuilt on every render
-  // would leave the drag reading a stale zoom and moving the node at the wrong
-  // rate half way through.
-  const moved = useRef(false);
+  // Gesture callbacks read live handlers so connector updates never use a stale zoom.
   const live = useRef({ movable, scale, onDrag, onDrop, onPress });
   live.current = { movable, scale, onDrag, onDrop, onPress };
 
-  /**
-   * The drag lives on a wrapper around the cell, not on the cell itself.
-   *
-   * `Pressable` applies its own responder handlers *after* the props it is
-   * given, so `{...panHandlers}` on a Pressable is silently discarded — the
-   * toggle appeared to do nothing because of exactly that.
-   *
-   * Capture, not bubble: the Pressable claims the gesture the moment a finger
-   * lands, so the only way to take a drag from it is to steal on movement.
-   * Below the slop the Pressable keeps it and the tap still selects the node.
-   */
   const drag = useMemo(
     () =>
-      PanResponder.create({
-        onStartShouldSetPanResponderCapture: () => false,
-        onMoveShouldSetPanResponderCapture: (_e, g) =>
-          live.current.movable && (Math.abs(g.dx) > DRAG_SLOP || Math.abs(g.dy) > DRAG_SLOP),
-        onPanResponderGrant: () => {
-          moved.current = false;
-        },
-        // The gesture arrives in screen pixels; the canvas is drawn in its own
-        // units, so it has to be divided by the zoom or the node outruns the
-        // finger at anything but 100%.
-        onPanResponderMove: (_e, g) => {
-          moved.current = true;
-          live.current.onDrag(g.dx / live.current.scale, g.dy / live.current.scale);
-        },
-        onPanResponderRelease: (_e, g) => {
-          if (moved.current) {
-            live.current.onDrop(g.dx / live.current.scale, g.dy / live.current.scale);
-          }
-        },
-        onPanResponderTerminate: () => live.current.onDrag(0, 0),
-      }),
-    [],
+      Gesture.Pan()
+        .enabled(movable)
+        .maxPointers(1)
+        .minDistance(DRAG_SLOP)
+        .runOnJS(true)
+        .onUpdate((event) => {
+          live.current.onDrag(
+            event.translationX / live.current.scale,
+            event.translationY / live.current.scale,
+          );
+        })
+        .onEnd((event) => {
+          live.current.onDrop(
+            event.translationX / live.current.scale,
+            event.translationY / live.current.scale,
+          );
+        })
+        .onFinalize((_event, success) => {
+          if (!success) live.current.onDrag(0, 0);
+        }),
+    [movable],
   );
 
   return (
@@ -506,20 +926,36 @@ function NodeCell({
       pointerEvents="box-none"
     >
       {/* The recommended next node wears the only blush mark on the screen. */}
-      {recommended ? (
+      {status === 'available' || recommended || linkSource ? (
+        <NodePulse
+          reduceMotion={reduceMotion}
+          style={[
+            styles.halo,
+            { borderColor: theme.nodeActive.glow ?? theme.nodeActive.border },
+          ]}
+        />
+      ) : null}
+      {recommended || linkSource ? (
         <View
-          style={[styles.halo, { borderColor: theme.nodeActive.glow ?? theme.nodeActive.border }]}
+          style={[
+            styles.recommendedAura,
+            { borderColor: theme.nodeActive.glow ?? theme.nodeActive.border },
+          ]}
           pointerEvents="none"
         />
       ) : null}
 
-      <View style={styles.cellWrap} {...drag.panHandlers}>
+      {celebrating ? <Sparkles colour={theme.nodeCompleted.glow ?? theme.nodeCompleted.border} wipe={wipe} /> : null}
+
+      <GestureDetector gesture={drag}>
+      <View style={styles.cellWrap}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={label}
           accessibilityState={{ disabled: status === 'locked', selected }}
           accessibilityHint={movable ? 'Drag to move this node.' : undefined}
-          onPress={() => {
+          onPress={(event) => {
+            event.stopPropagation();
             onPress();
             if (status === 'locked') {
               AccessibilityInfo.announceForAccessibility(
@@ -530,24 +966,52 @@ function NodeCell({
           style={({ pressed, hovered }: PressState) => [
             styles.cell,
             {
-              backgroundColor: s.background,
+              backgroundColor: selected ? theme.surfaceHover : s.background,
               borderWidth: bevel,
               borderColor: s.border,
               borderStyle: supplemental ? 'dashed' : 'solid',
             },
-            selected ? { borderColor: theme.textPrimary } : null,
             pressed || (hovered && !movable) ? { opacity: 0.85 } : null,
             wipe < 1 ? { opacity: 0.35 + wipe * 0.65 } : null,
           ]}
         >
-          <Glyph kind={glyph} colour={s.icon} />
+          <Glyph kind={statusGlyph} iconKey={subjectIcon} colour={s.icon} />
         </Pressable>
+        {status === 'in_progress' ? (
+          <View style={[styles.nodeProgress, { backgroundColor: theme.xpBarBackground }]}>
+            <View
+              style={{
+                width: `${Math.max(8, Math.round(progress * 100))}%`,
+                height: '100%',
+                backgroundColor: theme.xpBarFill,
+              }}
+            />
+          </View>
+        ) : null}
       </View>
+      </GestureDetector>
+
+      {selected ? (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.selectionOuter,
+            { borderColor: theme.nodeCompleted.border, shadowColor: theme.nodeCompleted.glow ?? theme.nodeCompleted.border },
+          ]}
+        />
+      ) : null}
+      {selected ? (
+        <View
+          pointerEvents="none"
+          style={[styles.selectionInner, { borderColor: theme.nodeActive.border }]}
+        />
+      ) : null}
 
       <PixelText
         variant="micro"
         colour={theme.textPrimary}
         numberOfLines={2}
+        ellipsizeMode="tail"
         centred
         style={styles.label}
       >
@@ -562,7 +1026,15 @@ function NodeCell({
  * the same object as a check in a list. Drawn as views rather than an SVG so a
  * cell is one element with one hit area.
  */
-function Glyph({ kind, colour }: { kind: string; colour: string }) {
+function Glyph({
+  kind,
+  iconKey,
+  colour,
+}: {
+  kind: 'check' | 'lock' | null;
+  iconKey: keyof typeof PIXEL_ICON_BITMAPS;
+  colour: string;
+}) {
   const u = 2.4;
   const cells: [number, number, number, number][] =
     kind === 'check'
@@ -571,9 +1043,11 @@ function Glyph({ kind, colour }: { kind: string; colour: string }) {
           [6, 3, 1, 1], [7, 2, 1, 1], [2, 4, 1, 1], [3, 5, 1, 1], [4, 4, 1, 1],
           [5, 3, 1, 1], [6, 2, 1, 1],
         ]
-      : kind === 'play'
-        ? [[3, 1, 1, 6], [4, 2, 1, 4], [5, 3, 1, 2]]
-        : [[3, 1, 2, 1], [2, 2, 1, 2], [5, 2, 1, 2], [1, 4, 6, 3]];
+      : kind === 'lock'
+        ? [[3, 1, 2, 1], [2, 2, 1, 2], [5, 2, 1, 2], [1, 4, 6, 3]]
+        : PIXEL_ICON_BITMAPS[iconKey].flatMap((row, y) =>
+            [...row].flatMap((pixel, x) => pixel === 'X' ? [[x, y, 1, 1] as [number, number, number, number]] : []),
+          );
 
   return (
     <View style={styles.glyph} pointerEvents="none">
@@ -594,23 +1068,121 @@ function Glyph({ kind, colour }: { kind: string; colour: string }) {
   );
 }
 
+function Sparkles({ colour, wipe }: { colour: string; wipe: number }) {
+  return (
+    <View style={[styles.sparkles, { opacity: 0.35 + wipe * 0.65 }]} pointerEvents="none">
+      {[
+        { left: 0, top: 8 },
+        { right: 0, top: 2 },
+        { left: 8, bottom: 0 },
+        { right: 5, bottom: 6 },
+      ].map((at, index) => (
+        <View key={index} style={[styles.spark, at, { backgroundColor: colour }]} />
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   chart: { flex: 1, overflow: 'hidden' },
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.cell },
+  loadingGlyph: { width: 28, height: 28, borderWidth: 4 },
   fill: { flex: 1 },
   layer: { position: 'absolute', left: 0, top: 0 },
+  miniMap: {
+    position: 'absolute',
+    right: space.cell,
+    top: space.cell,
+    width: 132,
+    height: 84,
+    borderWidth: bevel,
+    padding: 0,
+    overflow: 'hidden',
+  },
+  miniMapFrustum: { position: 'absolute', borderWidth: 1 },
+  toolDock: {
+    position: 'absolute',
+    right: space.cell,
+    bottom: space.cell,
+    maxWidth: '96%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.cell,
+    overflow: 'visible',
+  },
+  editToolbar: { flexShrink: 1, overflow: 'visible' },
+  editToolbarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    padding: space.xs,
+    overflow: 'visible',
+  },
+  editAction: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
+  linkBanner: {
+    position: 'absolute',
+    top: space.cell,
+    left: '20%',
+    right: '20%',
+    minHeight: touch,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.cell,
+    paddingHorizontal: space.cell,
+  },
+  linkCancel: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
   node: { position: 'absolute', width: LABEL_WIDTH, alignItems: 'center' },
   halo: {
     position: 'absolute',
-    left: LABEL_WIDTH / 2 - HALF - 6,
-    top: -6,
-    width: CELL + 12,
-    height: CELL + 12,
+    left: LABEL_WIDTH / 2 - HALF,
+    top: 0,
+    width: CELL,
+    height: CELL,
     borderWidth: 2,
   },
+  recommendedAura: {
+    position: 'absolute',
+    left: LABEL_WIDTH / 2 - HALF - 11,
+    top: -11,
+    width: CELL + 22,
+    height: CELL + 22,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+  },
+  selectionOuter: {
+    position: 'absolute',
+    left: LABEL_WIDTH / 2 - HALF - 4,
+    top: -4,
+    width: CELL + 8,
+    height: CELL + 8,
+    borderWidth: 2,
+    shadowOpacity: 0.75,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 4,
+  },
+  selectionInner: {
+    position: 'absolute',
+    left: LABEL_WIDTH / 2 - HALF + 3,
+    top: 3,
+    width: CELL - 6,
+    height: CELL - 6,
+    borderWidth: 2,
+  },
+  sparkles: {
+    position: 'absolute',
+    left: LABEL_WIDTH / 2 - HALF - 10,
+    top: -10,
+    width: CELL + 20,
+    height: CELL + 20,
+  },
+  spark: { position: 'absolute', width: 4, height: 4 },
   // Sized to the cell, not the label block: the dead space either side of a
   // short title belongs to the canvas, so a drag there still pans.
   cellWrap: { width: CELL, height: CELL },
   cell: { width: CELL, height: CELL, alignItems: 'center', justifyContent: 'center' },
+  nodeProgress: { position: 'absolute', left: 0, right: 0, bottom: -6, height: 4 },
   glyph: { ...StyleSheet.absoluteFillObject },
-  label: { marginTop: space.xs, width: LABEL_WIDTH },
+  label: { marginTop: space.md, width: LABEL_WIDTH, maxWidth: LABEL_WIDTH },
 });

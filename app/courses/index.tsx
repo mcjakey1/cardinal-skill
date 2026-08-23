@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
+import { usePixelTransition } from '@/ui/PixelTransition';
 import Head from 'expo-router/head';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
-import { supabase } from '@/lib/supabase';
+import { fetchCourseOptions } from '@/features/skilltree/courseQueries';
 import { usePrefs } from '@/lib/prefs';
 import { space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -13,32 +14,21 @@ import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
 import { PixelButton, PixelIcon, PixelText, bevelStyle } from '@/ui/pixel';
 
-interface CourseRow {
-  id: string;
-  title: string;
-  term: string | null;
-}
-
 export default function Courses() {
   const t = useTheme();
   const router = useRouter();
+  const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const { lowBandwidth } = usePrefs();
 
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['courses'],
-    queryFn: async (): Promise<CourseRow[]> => {
-      const { data, error } = await supabase
-        .from('courses')
-        .select('id, title, term')
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      return data ?? [];
-    },
+    queryFn: fetchCourseOptions,
   });
 
   const open = (id: string) =>
-    router.navigate({ pathname: '/tree/[courseId]', params: { courseId: id } });
+    transition(() => router.navigate({ pathname: '/tree/[courseId]', params: { courseId: id } }));
+  const realCourses = data?.filter((course) => course.id !== DEMO_COURSE_ID);
 
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
@@ -73,7 +63,7 @@ export default function Courses() {
         </Notice>
       ) : (
         <FlatList
-          data={data}
+          data={realCourses}
           keyExtractor={(c) => c.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
@@ -81,7 +71,7 @@ export default function Courses() {
               <PixelText variant="body" colour={t.ink}>
                 Upload a syllabus and one gets drawn for you.
               </PixelText>
-              <PixelButton label="Upload a syllabus" onPress={() => router.navigate('/upload')} />
+              <PixelButton label="Upload a syllabus" onPress={() => transition(() => router.navigate('/upload'))} />
               <PixelButton
                 label="See an example chart"
                 tone="panel"
@@ -100,7 +90,7 @@ export default function Courses() {
           /* The empty state already offers both of these; a footer would print
              them twice on the one screen where they matter most. */
           ListFooterComponent={
-            data && data.length > 0 ? (
+            realCourses && realCourses.length > 0 ? (
               <View style={styles.footer}>
                 <CourseCell
                   index={0}
@@ -108,7 +98,7 @@ export default function Courses() {
                   term="Example chart"
                   onPress={() => open(DEMO_COURSE_ID)}
                 />
-                <PixelButton label="Upload a syllabus" onPress={() => router.navigate('/upload')} />
+                <PixelButton label="Upload a syllabus" onPress={() => transition(() => router.navigate('/upload'))} />
               </View>
             ) : null
           }

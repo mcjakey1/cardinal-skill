@@ -74,6 +74,8 @@ export interface Theme {
   earned: string;
   earnedInk: string;
   earnedText: string;
+  success: string;
+  warning: string;
   alarm: string;
   focus: string;
   field: readonly [string, string];

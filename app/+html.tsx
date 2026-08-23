@@ -70,8 +70,11 @@ const BOOT_CSS = `
   --csk-ink: #F8FAFC;
   --csk-focus: #E0F2FE;
   --csk-track: #111827;
-  --csk-thumb: #334155;
-  --csk-thumb-hover: #38BDF8;
+  --csk-track-edge: #334155;
+  --csk-thumb: #38BDF8;
+  --csk-thumb-hover: #0284C7;
+  --csk-selection: #0284C7;
+  --csk-selection-ink: #FFFFFF;
 }
 
 html, body, #root {
@@ -91,26 +94,43 @@ body {
   font-smooth: never;
 }
 ::selection {
-  background-color: #0284C7;
-  color: #FFFFFF;
+  background-color: var(--csk-selection);
+  color: var(--csk-selection-ink);
 }
 /* The focus ring is part of the design system, not a browser default. */
 :focus-visible {
   outline: 2px solid var(--csk-focus);
   outline-offset: 2px;
 }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--csk-thumb) var(--csk-track);
+}
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: var(--csk-track);
+  border-left: 2px solid var(--csk-track-edge);
 }
 ::-webkit-scrollbar-thumb {
   background: var(--csk-thumb);
-  border: 2px solid var(--csk-track);
+  border: 2px solid var(--csk-ground);
+  border-radius: 0;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--csk-thumb-hover);
+}
+@keyframes cardinal-node-pulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 0.3; }
+}
+.cardinal-node-pulse {
+  animation: cardinal-node-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: opacity;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cardinal-node-pulse { animation: none; opacity: 1; }
 }
 `;

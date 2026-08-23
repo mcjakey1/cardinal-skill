@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { createStore } from './store';
+import { nodeLayoutStorageKey } from './nodeLayoutKey';
 
 export interface NodePosition {
   x: number;
@@ -32,7 +33,7 @@ export function useNodeLayout(courseId: string | undefined) {
   const store = useMemo(
     () =>
       courseId
-        ? createStore<PositionMap>(AsyncStorage, `cardinal.layout.v1.${courseId}`, 1, EMPTY)
+        ? createStore<PositionMap>(AsyncStorage, nodeLayoutStorageKey(courseId), 1, EMPTY)
         : null,
     [courseId],
   );

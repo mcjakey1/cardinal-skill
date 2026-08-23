@@ -11,6 +11,7 @@ import {
   getSkillEligibility,
   levelForXp,
   levelProgress,
+  progressRatio,
   nextQuests,
   totalXp,
 } from './progression.ts';
@@ -124,7 +125,7 @@ test('next quests are unlocked, unfinished, and syllabus-ordered', () => {
   );
 });
 
-test('the demo chart shows all three node states and no dangling prerequisites', () => {
+test('the demo chart starts clean with available roots and no dangling prerequisites', () => {
   const ids = new Set(demoTree.nodes.map((n) => n.id));
   for (const { nodeId, prereqId } of demoTree.prereqs) {
     assert.ok(ids.has(nodeId) && ids.has(prereqId), `dangling edge ${prereqId} -> ${nodeId}`);
@@ -134,14 +135,15 @@ test('the demo chart shows all three node states and no dangling prerequisites',
   assert.deepEqual(cyclicNodeIds, []);
   assert.deepEqual(
     new Set([...status.values()]),
-    new Set(['mastered', 'available', 'locked']),
-    'the demo exists to show every state at once',
+    new Set(['available', 'locked']),
+    'nothing is mastered before a mission is completed',
   );
 
   const earned = demoTree.nodes
     .filter((n) => demoMasteredIds.includes(n.id))
     .reduce((sum, n) => sum + n.xpReward, 0);
   assert.equal(demoXp, earned, 'the meter would lie otherwise');
+  assert.equal(demoXp, 0);
   assert.ok(demoXp < totalXp(demoTree.nodes), 'a full meter is a boring demo');
 });
 
@@ -153,4 +155,12 @@ test('levels follow the quadratic XP curve', () => {
   assert.equal(levelForXp(-5), 1, 'negative XP is not a valid state, but must not crash');
   assert.equal(levelProgress(100), 0);
   assert.ok(levelProgress(250) > 0.4 && levelProgress(250) < 0.6);
+});
+
+test('course XP ratio normalizes against the displayed maximum', () => {
+  assert.equal(progressRatio(560, 690), 560 / 690);
+  assert.equal(Math.round(progressRatio(560, 690) * 10), 8);
+  assert.equal(progressRatio(-10, 690), 0);
+  assert.equal(progressRatio(900, 690), 1);
+  assert.equal(progressRatio(10, 0), 0);
 });

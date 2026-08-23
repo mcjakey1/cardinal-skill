@@ -16,6 +16,7 @@ import { space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
+import { usePixelTransition } from '@/ui/PixelTransition';
 import { PixelButton, PixelIcon, PixelText, bevelStyle } from '@/ui/pixel';
 
 /**
@@ -36,6 +37,7 @@ interface Row {
 }
 
 export default function Missions() {
+  const { transition } = usePixelTransition();
   const t = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -82,7 +84,7 @@ export default function Missions() {
           <PixelText variant="body" colour={t.ink}>
             Open a chart and its work shows up here.
           </PixelText>
-          <PixelButton label="Open my charts" onPress={() => router.navigate('/courses')} />
+          <PixelButton label="Open my charts" onPress={() => transition(() => router.navigate('/courses'))} />
         </Window>
       </Shell>
     );

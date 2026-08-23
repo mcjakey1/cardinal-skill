@@ -21,7 +21,7 @@ import { Bevel, PixelButton, PixelInput, PixelText } from '@/ui/pixel';
  *
  * There is no model behind this screen. Wiring a real one is out of scope for
  * this package, and the API key could not live here even if it were in scope —
- * `ANTHROPIC_API_KEY` never reaches the client (see AGENTS.md → Secrets never
+ * `BAI_API_KEY` never reaches the client (see AGENTS.md → Secrets never
  * reach the client). Every reply is picked from a fixed set, so the one thing
  * this screen cannot afford to get wrong is pretending otherwise: the prototype
  * banner is not a footnote, and no reply below claims to know anything about the

@@ -18,18 +18,23 @@
 
 import { DotGothic16_400Regular, useFonts } from '@expo-google-fonts/dotgothic16';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Stack, usePathname } from 'expo-router';
+import { Stack, usePathname, useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import { Platform, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { PrefsProvider } from '@/lib/prefs';
 import { ThemeProvider, useAppTheme } from '@/theme/ThemeProvider';
 import { useTheme } from '@/theme/useTheme';
 import { NavBar } from '@/ui/NavBar';
+import { PixelTransitionProvider } from '@/ui/PixelTransition';
+import { CanvasViewportProvider } from '@/features/skilltree/CanvasViewportProvider';
+import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
 
 SplashScreen.preventAutoHideAsync().catch(() => {
   // Already hidden, or the module is unavailable on this platform. Neither is
@@ -46,7 +51,14 @@ SplashScreen.preventAutoHideAsync().catch(() => {
 const BARE_ROUTES = ['/', '/upload', '/author', '/instructor'];
 
 export default function RootLayout() {
-  const [queryClient] = useState(() => new QueryClient());
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: {
+      // Mounted routes stay warm through their active observers. Once a route
+      // is genuinely evicted, release its records instead of retaining every
+      // course visited for the lifetime of the browser tab.
+      queries: { gcTime: 10 * 60 * 1000 },
+    },
+  }));
   const [loaded, error] = useFonts({ DotGothic16_400Regular });
 
   // Native holds behind the splash screen until the face is ready, because a
@@ -57,21 +69,31 @@ export default function RootLayout() {
   if (!loaded && !error && Platform.OS !== 'web') return null;
 
   return (
-    <SafeAreaProvider>
-      <QueryClientProvider client={queryClient}>
-        <PrefsProvider>
-          <ThemeProvider>
-            <Shell fontsReady={loaded || Boolean(error)} />
-          </ThemeProvider>
-        </PrefsProvider>
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider>
+            <PrefsProvider>
+              <ThemeProvider>
+                <CanvasViewportProvider>
+                  <PixelTransitionProvider>
+                    <Shell fontsReady={loaded || Boolean(error)} />
+                  </PixelTransitionProvider>
+                </CanvasViewportProvider>
+              </ThemeProvider>
+            </PrefsProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
 function Shell({ fontsReady }: { fontsReady: boolean }) {
   const pathname = usePathname();
-  const bare = BARE_ROUTES.includes(pathname);
+  const router = useRouter();
+  const { ready: authReady, session } = useAuth();
+  const bare = !session || BARE_ROUTES.includes(pathname);
   const t = useTheme();
   const { theme, ready: themeReady } = useAppTheme();
 
@@ -79,9 +101,21 @@ function Shell({ fontsReady }: { fontsReady: boolean }) {
     if (fontsReady && themeReady) SplashScreen.hideAsync().catch(() => {});
   }, [fontsReady, themeReady]);
 
+  useEffect(() => {
+    if (!authReady) return;
+    if (!session && pathname !== '/') {
+      router.replace('/');
+    } else if (session && pathname === '/') {
+      router.replace(session.role === 'instructor'
+        ? '/instructor'
+        : { pathname: '/tree/[courseId]', params: { courseId: DEMO_COURSE_ID } });
+    }
+  }, [authReady, pathname, router, session]);
+
   // Hold app content until persistence resolves so a saved palette never
   // appears after a one-frame flash of the default.
-  if (!fontsReady || !themeReady) return null;
+  if (!fontsReady || !themeReady || !authReady) return null;
+  if ((!session && pathname !== '/') || (session && pathname === '/')) return null;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.ground }}>
@@ -98,7 +132,10 @@ function Shell({ fontsReady }: { fontsReady: boolean }) {
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: t.ground },
-          animation: 'fade',
+          animation: 'none',
+          // Stack routes remain mounted by default; freezing the inactive tree
+          // preserves its graph, camera, and SVG DOM without background renders.
+          freezeOnBlur: true,
         }}
       />
       {bare ? null : <NavBar />}

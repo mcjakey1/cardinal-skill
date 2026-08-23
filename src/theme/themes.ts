@@ -10,6 +10,9 @@ export interface ThemePalette {
   textPrimary: string;
   textSecondary: string;
   textMuted: string;
+  success: string;
+  warning: string;
+  danger: string;
   nodeCompleted: {
     background: string;
     border: string;
@@ -56,6 +59,9 @@ export const THEME_PRESETS = {
     textPrimary: '#F8FAFC',
     textSecondary: '#CBD5E1',
     textMuted: '#94A3B8',
+    success: '#86EFAC',
+    warning: '#FDE68A',
+    danger: '#FDA4AF',
     nodeCompleted: {
       background: '#1E293B', border: '#38BDF8', icon: '#38BDF8', glow: '#38BDF8',
     },
@@ -81,6 +87,9 @@ export const THEME_PRESETS = {
     textPrimary: '#FFF8FC',
     textSecondary: '#E9DDF7',
     textMuted: '#B9A7D8',
+    success: '#00FFA3',
+    warning: '#FFD166',
+    danger: '#FF8FC8',
     nodeCompleted: {
       background: '#2B1055', border: '#00FFA3', icon: '#00FFA3', glow: '#00FFA3',
     },
@@ -106,6 +115,9 @@ export const THEME_PRESETS = {
     textPrimary: '#F0FDF4',
     textSecondary: '#BBF7D0',
     textMuted: '#86B89A',
+    success: '#86EFAC',
+    warning: '#FDE68A',
+    danger: '#FDA4AF',
     nodeCompleted: {
       background: '#133824', border: '#22C55E', icon: '#86EFAC', glow: '#22C55E',
     },
@@ -131,6 +143,9 @@ export const THEME_PRESETS = {
     textPrimary: '#FAFAF9',
     textSecondary: '#E7E5E4',
     textMuted: '#A8A29E',
+    success: '#86EFAC',
+    warning: '#FDE68A',
+    danger: '#FDA4AF',
     nodeCompleted: {
       background: '#451A03', border: '#F59E0B', icon: '#FDE68A', glow: '#F59E0B',
     },
@@ -156,6 +171,9 @@ export const THEME_PRESETS = {
     textPrimary: '#ECEFF4',
     textSecondary: '#D8DEE9',
     textMuted: '#B8C1D1',
+    success: '#A3BE8C',
+    warning: '#EBCB8B',
+    danger: '#F2A5AD',
     nodeCompleted: {
       background: '#434C5E', border: '#88C0D0', icon: '#ECEFF4', glow: '#88C0D0',
     },
@@ -199,7 +217,9 @@ export function toLegacyTheme(preset: ThemePalette): Theme {
     earned: preset.xpBarFill,
     earnedInk: preset.background,
     earnedText: preset.nodeCompleted.icon,
-    alarm: preset.nodeActive.border,
+    success: preset.success,
+    warning: preset.warning,
+    alarm: preset.danger,
     focus: preset.nodeActive.border,
     field: [preset.background, preset.background],
     lockField: [preset.nodeLocked.background, preset.nodeLocked.border],

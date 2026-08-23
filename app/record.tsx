@@ -17,6 +17,7 @@ import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
+import { usePixelTransition } from '@/ui/PixelTransition';
 import { Bevel, Meter, PixelButton, PixelIcon, PixelText } from '@/ui/pixel';
 
 /**
@@ -28,6 +29,7 @@ import { Bevel, Meter, PixelButton, PixelIcon, PixelText } from '@/ui/pixel';
  * up worth the same amount.
  */
 export default function Record() {
+  const { transition } = usePixelTransition();
   const t = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -48,7 +50,7 @@ export default function Record() {
           <PixelText variant="body" colour={t.ink}>
             Open a chart and clear a node. What you finish is recorded here.
           </PixelText>
-          <PixelButton label="Open my charts" onPress={() => router.navigate('/courses')} />
+          <PixelButton label="Open my charts" onPress={() => transition(() => router.navigate('/courses'))} />
         </Window>
       </Shell>
     );

@@ -11,6 +11,7 @@
 
 import { usePathname, useRouter } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePrefs } from '@/lib/prefs';
@@ -21,10 +22,11 @@ import {
   PixelIcon,
   PixelText,
   bevelStyle,
-  hoverFill,
   type IconName,
   type PressState,
 } from './pixel';
+import { usePixelTransition, usePixelTransitionState } from './PixelTransition';
+import { useAuth } from '@/auth/AuthContext';
 
 interface Cell {
   key: string;
@@ -63,11 +65,15 @@ export function NavBar() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const { lastCourseId, role } = usePrefs();
-  const t = useTheme();
+  const { session } = useAuth();
   const { theme } = useAppTheme();
-  const cells = role === 'instructor' ? INSTRUCTOR_CELLS : CELLS;
+  const { transition } = usePixelTransition();
+  const isTransitioning = usePixelTransitionState();
+  const cells = (session?.role ?? role) === 'instructor' ? INSTRUCTOR_CELLS : CELLS;
 
   const go = (cell: Cell) => {
+    if (pathname.startsWith(cell.match)) return;
+    transition(() => {
     if (cell.key === 'chart') {
       if (lastCourseId) {
         router.navigate({ pathname: '/tree/[courseId]', params: { courseId: lastCourseId } });
@@ -79,6 +85,7 @@ export function NavBar() {
     router.navigate(
       cell.match as '/missions' | '/courses' | '/record' | '/system' | '/instructor',
     );
+    });
   };
 
   return (
@@ -95,31 +102,58 @@ export function NavBar() {
       {cells.map((cell) => {
         const active = pathname.startsWith(cell.match);
         return (
-          <Pressable
+          <NavCell
             key={cell.key}
+            cell={cell}
+            active={active}
+            disabled={isTransitioning}
             onPress={() => go(cell)}
-            accessibilityRole="tab"
-            accessibilityLabel={cell.label}
-            accessibilityState={{ selected: active }}
-            style={({ pressed, hovered }: PressState) => [
-              styles.cell,
-              bevelStyle(t, active ? 'brand' : 'panel', pressed ? 'inset' : 'raised'),
-              { backgroundColor: active ? theme.navActiveTab : theme.hudBackground },
-              pressed ? null : hoverFill(t, active ? 'brand' : 'panel', hovered),
-            ]}
-          >
-            <PixelIcon
-              name={cell.icon}
-              size={16}
-              colour={active ? theme.textPrimary : theme.textMuted}
-            />
-            <PixelText variant="micro" colour={active ? theme.textPrimary : theme.textMuted}>
-              {cell.label.toUpperCase()}
-            </PixelText>
-          </Pressable>
+          />
         );
       })}
     </View>
+  );
+}
+
+function NavCell({ cell, active, disabled, onPress }: {
+  cell: Cell;
+  active: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const t = useTheme();
+  const { theme } = useAppTheme();
+  const [hovered, setHovered] = useState(false);
+  const ink = active
+    ? theme.background
+    : hovered
+      ? theme.nodeCompleted.border
+      : theme.textMuted;
+  const fill = active
+    ? hovered ? theme.nodeActive.border : theme.navActiveTab
+    : hovered ? theme.surfaceHover : theme.surface;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      accessibilityRole="tab"
+      accessibilityLabel={cell.label}
+      accessibilityState={{ selected: active, disabled }}
+      style={({ pressed }: PressState) => [
+        styles.cell,
+        bevelStyle(t, active ? 'brand' : 'panel', pressed ? 'inset' : 'raised'),
+        { backgroundColor: fill },
+        disabled ? { opacity: 0.72 } : null,
+      ]}
+    >
+      <PixelIcon name={cell.icon} size={16} colour={ink} />
+      <PixelText variant="micro" colour={ink}>{cell.label.toUpperCase()}</PixelText>
+    </Pressable>
   );
 }
 

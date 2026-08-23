@@ -17,7 +17,7 @@
  * reference in this file is how one control ends up dark in a light app.
  */
 
-import { forwardRef } from 'react';
+import { forwardRef, useState } from 'react';
 import {
   Pressable,
   type PressableProps,
@@ -33,7 +33,7 @@ import {
 } from 'react-native';
 import Svg, { Rect } from 'react-native-svg';
 
-import type { NodeStatus } from '@/features/skilltree/types';
+import type { DisplayStatus } from '@/features/skilltree/nodeVisualState';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch, type, type Theme } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -173,26 +173,41 @@ interface InputProps extends TextInputProps {
 }
 
 /** A field is a well: the bevel runs inset, so it reads as somewhere to put something. */
-export function PixelInput({ label, style, multiline, ...rest }: InputProps) {
+export function PixelInput({ label, style, multiline, onFocus, onBlur, ...rest }: InputProps) {
   const t = useTheme();
+  const [focused, setFocused] = useState(false);
   return (
     <View style={styles.field}>
       <PixelText variant="micro" colour={t.inkMuted}>
         {label.toUpperCase()}
       </PixelText>
-      <TextInput
-        accessibilityLabel={label}
-        placeholderTextColor={t.inkMuted}
-        multiline={multiline}
+      <View
         style={[
-          bevelStyle(t, 'ink', 'inset'),
-          styles.input,
-          { color: t.ink },
-          multiline ? styles.inputTall : null,
-          style,
+          styles.inputFrame,
+          { backgroundColor: t.well, borderColor: focused ? t.focus : t.line },
         ]}
-        {...rest}
-      />
+      >
+        <TextInput
+          accessibilityLabel={label}
+          placeholderTextColor={t.inkMuted}
+          multiline={multiline}
+          onFocus={(event) => {
+            setFocused(true);
+            onFocus?.(event);
+          }}
+          onBlur={(event) => {
+            setFocused(false);
+            onBlur?.(event);
+          }}
+          style={[
+            styles.input,
+            { color: t.ink },
+            multiline ? styles.inputTall : null,
+            style,
+          ]}
+          {...rest}
+        />
+      </View>
     </View>
   );
 }
@@ -479,6 +494,36 @@ const ICONS = {
     '........',
     '........',
   ],
+  edit: [
+    '......##',
+    '.....###',
+    '....###.',
+    '...###..',
+    '..###...',
+    '.###....',
+    '##......',
+    '........',
+  ],
+  link: [
+    '.###....',
+    '##.##...',
+    '...##...',
+    '..####..',
+    '...##...',
+    '...##.##',
+    '....###.',
+    '........',
+  ],
+  trash: [
+    '..####..',
+    '.######.',
+    '..####..',
+    '..#..#..',
+    '..#..#..',
+    '..#..#..',
+    '..####..',
+    '........',
+  ],
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -510,17 +555,18 @@ export function PixelIcon({ name, size = 16, colour }: IconProps) {
  * Status as a glyph plus its word. Both, always — this is the second and third
  * encoding that keeps status off colour alone.
  */
-export function StatusTag({ status, compact }: { status: NodeStatus; compact?: boolean }) {
+export function StatusTag({ status, compact }: { status: DisplayStatus; compact?: boolean }) {
   const t = useTheme();
-  const s = t.node[status];
+  const visualStatus = status === 'in_progress' ? 'available' : status;
+  const s = t.node[visualStatus];
   const ink =
-    status === 'locked' ? t.inkMuted : status === 'mastered' ? t.earnedText : t.ink;
+    visualStatus === 'locked' ? t.inkMuted : visualStatus === 'mastered' ? t.earnedText : t.ink;
   return (
     <View style={styles.status}>
       <PixelIcon name={s.glyph as IconName} size={12} colour={ink} />
       {compact ? null : (
         <PixelText variant="micro" colour={ink}>
-          {s.label.toUpperCase()}
+          {status === 'in_progress' ? 'IN PROGRESS' : s.label.toUpperCase()}
         </PixelText>
       )}
     </View>
@@ -538,6 +584,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   field: { gap: space.xs },
+  inputFrame: { borderWidth: bevel, overflow: 'hidden' },
   input: {
     ...type.body,
     minHeight: touch,

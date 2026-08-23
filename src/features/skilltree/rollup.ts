@@ -48,7 +48,6 @@ export function rollUpProgress(input: RollUpInput): RollUp {
 
     if (own.length > 0) {
       if (isNodeMastered(input.missions, node.id, done)) mastered.push(node.id);
-      else if (server.has(node.id)) mastered.push(node.id);
       // Only count XP the server has not already banked.
       if (!server.has(node.id)) localXp += nodeXpEarned(input.missions, node.id, done);
       continue;

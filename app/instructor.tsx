@@ -12,6 +12,8 @@ import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
 import type { SkillNode } from '@/features/skilltree/types';
 import { usePrefs } from '@/lib/prefs';
+import { useAuth } from '@/auth/AuthContext';
+import { usePixelTransition } from '@/ui/PixelTransition';
 import { supabase } from '@/lib/supabase';
 import { lms } from '@/theme/lms';
 import { DitherField } from '@/ui/Dither';
@@ -252,6 +254,8 @@ const SAMPLE_READOUT: Extract<CohortReadout, { kind: 'ready' }> = {
 
 export default function Instructor() {
   const router = useRouter();
+  const { logout } = useAuth();
+  const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const { lastCourseId, lowBandwidth, motionOff, set } = usePrefs();
@@ -296,16 +300,20 @@ export default function Instructor() {
     go('tree');
   };
 
+  const signOut = () => {
+    transition(() => {
+      set('role', null);
+      void logout();
+    });
+  };
+
   const rail = (
     <Rail
       section={section}
       onGo={go}
       onClose={() => setDrawer(false)}
       closable={!wide}
-      onSignOut={() => {
-        set('role', null);
-        router.replace('/');
-      }}
+      onSignOut={signOut}
     />
   );
 
@@ -391,10 +399,7 @@ export default function Instructor() {
             {section === 'import' && <ImportSyllabus onDrawn={open} />}
             {section === 'settings' && (
               <Settings
-                onSignOut={() => {
-                  set('role', null);
-                  router.replace('/');
-                }}
+                onSignOut={signOut}
               />
             )}
           </ScrollView>
@@ -704,7 +709,8 @@ function TreeSection({
                 this surface would stop it answering the only question it is
                 here for: what does this look like when it is handed over. */}
             <DitherField variant="chart" flat={flat} />
-            <SkillTree
+          <SkillTree
+            viewportKey={`instructor:${course.id}`}
               tree={data.tree}
               masteredIds={data.masteredIds}
               selectedId={selected?.id ?? null}

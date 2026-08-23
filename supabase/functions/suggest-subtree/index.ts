@@ -2,20 +2,25 @@
  * suggest-subtree — builds the supplemental steps under a node a student is
  * stuck on.
  *
- * Server-side for the same reason as parse-syllabus: ANTHROPIC_API_KEY must
+ * Server-side for the same reason as parse-syllabus: BAI_API_KEY must
  * never reach a client bundle. The caller's own JWT does the reading, so RLS
  * decides which node they may ask about, and the write goes through
  * `request_help_subtree()` so the insert is atomic and can only ever produce
  * ungraded steps under a node the caller can already see.
  *
  * Deploy:  supabase functions deploy suggest-subtree
- * Secrets: supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+ * Secrets: supabase secrets set BAI_API_KEY=...
  */
 
-import Anthropic from 'npm:@anthropic-ai/sdk@^0.68.0';
 import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
+import { BAIError, requestStructuredCompletion } from '../_shared/bai.ts';
 
-const MODEL = 'claude-opus-5';
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
 
 const MIN_STEPS = 2;
 const MAX_STEPS = 5;
@@ -163,6 +168,7 @@ Rules:
 - Write each description to the student, in one or two sentences, saying what they will be able to do once the step is done.`;
 
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
   if (req.method !== 'POST') {
     return json({ error: 'Use POST.' }, 405);
   }
@@ -243,29 +249,28 @@ Deno.serve(async (req) => {
     prereqs = data ?? [];
   }
 
-  const anthropic = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY')! });
+  const apiKey = Deno.env.get('BAI_API_KEY');
+  if (!apiKey) return json({ error: 'Extra help is not configured yet.' }, 503);
 
-  const stream = anthropic.messages.stream({
-    model: MODEL,
-    max_tokens: 16000,
-    system: SYSTEM,
-    output_config: {
-      effort: 'high',
-      format: { type: 'json_schema', schema: STEPS_SCHEMA },
-    },
-    messages: [{ role: 'user', content: prompt(node, prereqs, reason) }],
-  });
-
-  const message = await stream.finalMessage();
-
-  // Check stop_reason before reading content — a refusal returns HTTP 200 with
-  // empty or partial content.
-  if (message.stop_reason === 'refusal') {
-    return json({ error: 'Extra help could not be generated for that node.' }, 422);
+  let text: string;
+  try {
+    text = await requestStructuredCompletion({
+      apiKey,
+      system: SYSTEM,
+      prompt: prompt(node, prereqs, reason),
+      schemaName: 'supplemental_steps',
+      schema: STEPS_SCHEMA,
+      maxTokens: 8000,
+      temperature: 0.2,
+      operation: 'suggest-subtree',
+    });
+  } catch (cause) {
+    const error = cause instanceof BAIError ? cause : null;
+    return json(
+      { error: error?.message ?? 'Extra help could not be generated.' },
+      error?.status === 422 ? 422 : 502,
+    );
   }
-
-  const text = message.content.find((b) => b.type === 'text')?.text;
-  if (!text) return json({ error: 'The extra help came back empty. Try again.' }, 502);
 
   let parsed: { steps?: unknown };
   try {
@@ -458,6 +463,6 @@ Return the supplemental steps that get them from those prerequisites to this nod
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
 }

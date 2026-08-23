@@ -16,9 +16,13 @@ export interface SkillNode {
   kind: NodeKind;
   xpReward: number;
   learningObjective?: string;
+  learningObjectives?: string[];
+  universalSkill?: string;
   estimatedMinutes?: number;
   moduleName?: string;
   difficultyLabel?: 'Foundational' | 'Intermediate' | 'Advanced';
+  /** Parser-selected subject glyph; keyword resolution supplies a safe fallback. */
+  iconKey?: import('./pixelIcons').PixelIconKey | null;
   /** Chart coordinates in tree space, assigned at generation time. */
   x: number;
   y: number;

@@ -1,8 +1,22 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  AccessibilityInfo,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import Animated, {
+  Easing,
+  SlideInRight,
+  SlideOutRight,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SkillTree } from '@/features/skilltree/SkillTree';
@@ -14,25 +28,47 @@ import { learnerSignals, nodeSignal } from '@/features/skilltree/observed';
 import {
   evaluateSkillUnlockState,
   levelForXp,
-  levelProgress,
+  progressRatio,
   totalXp,
 } from '@/features/skilltree/progression';
 import { HELP_SHARE } from '@/features/skilltree/subtree';
 import { fetchTree } from '@/features/skilltree/queries';
+import {
+  fetchCourseOptions,
+  updateCourseMetadata,
+  type CourseMetadata,
+} from '@/features/skilltree/courseQueries';
 import { nodeProgress, rollUpProgress } from '@/features/skilltree/rollup';
-import type { SkillNode, Tree } from '@/features/skilltree/types';
+import {
+  finalizeMissionDrafts,
+  missionDraftTotal,
+  toMissionDrafts,
+  type MissionDraft,
+} from '@/features/skilltree/missionEditing';
+import { displayStatus } from '@/features/skilltree/nodeVisualState';
+import { PIXEL_ICON_KEYS, resolvePixelIcon, type PixelIconKey } from '@/features/skilltree/pixelIcons';
+import type { Mission, SkillNode, Tree } from '@/features/skilltree/types';
+import { validateGraph } from '@/features/skilltree/validation';
 import { DOCK_WIDTH, useWide } from '@/lib/layout';
-import { useNodeLayout } from '@/lib/nodeLayout';
+import { useNodeLayout, type NodePosition } from '@/lib/nodeLayout';
+import { purgeCourseCache, useEditedTree } from '@/lib/editedTree';
+import { removeCachedCourse } from '@/lib/courseCache';
 import { usePrefs } from '@/lib/prefs';
-import { useLocalProgress } from '@/lib/progress';
+import { clearLocal, useLocalProgress } from '@/lib/progress';
 import { useQuestNames } from '@/lib/questNames';
 import { useSignals } from '@/lib/signals';
 import { supabase } from '@/lib/supabase';
+import { findMockCourse } from '@/features/skilltree/mockCourses';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
+import { StudyCompanionDrawer } from '@/ui/StudyCompanionDrawer';
+import { StableScrollView } from '@/ui/StableScrollView';
+import { SubjectPixelIcon } from '@/ui/SubjectPixelIcon';
+import { usePixelTransition } from '@/ui/PixelTransition';
+import { CourseSelector } from '@/ui/CourseSelector';
 import {
   Bevel,
   Meter,
@@ -41,6 +77,7 @@ import {
   PixelInput,
   PixelText,
   StatusTag,
+  Toggle,
   bevelStyle,
 } from '@/ui/pixel';
 
@@ -56,6 +93,8 @@ export default function TreeScreen() {
   const { theme } = useAppTheme();
   const { courseId } = useLocalSearchParams<{ courseId: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
   const wide = useWide();
@@ -66,14 +105,44 @@ export default function TreeScreen() {
   const [confirmingHelp, setConfirmingHelp] = useState(false);
   const [helpBusy, setHelpBusy] = useState(false);
   const [helpNote, setHelpNote] = useState<string | null>(null);
+  const [courseMenuOpen, setCourseMenuOpen] = useState(false);
+  const [companionOpen, setCompanionOpen] = useState(false);
+  const [claimedMissionId, setClaimedMissionId] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [linkMode, setLinkMode] = useState(false);
+  const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+  const [editingProperties, setEditingProperties] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editXp, setEditXp] = useState('50');
+  const [editIcon, setEditIcon] = useState<PixelIconKey>('pixel_spellbook');
+  const [editUniversal, setEditUniversal] = useState(false);
+  const [editMissions, setEditMissions] = useState<MissionDraft[]>([]);
+  const [editUsesMissionRewards, setEditUsesMissionRewards] = useState(false);
+  const claimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const linkNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (claimTimer.current) clearTimeout(claimTimer.current);
+      if (linkNoticeTimer.current) clearTimeout(linkNoticeTimer.current);
+    },
+    [],
+  );
 
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['tree', courseId],
     queryFn: () => fetchTree(courseId),
     enabled: Boolean(courseId),
   });
+  const { data: courseOptions = [] } = useQuery({
+    queryKey: ['courses'],
+    queryFn: fetchCourseOptions,
+  });
 
-  const { log, missionLog, complete, toggleMission } = useLocalProgress(courseId);
+  const { log, missionLog, complete, toggleMission, reset: resetLocalProgress } = useLocalProgress(courseId);
+  const { edited, save: saveEditedTree, clear: clearEditedTree } = useEditedTree(courseId);
   const { overrides, rename } = useQuestNames(courseId);
   const { visits, noteVisit, noteHelpRequested } = useSignals(courseId);
   const { positions, moveNode, resetLayout } = useNodeLayout(courseId);
@@ -111,11 +180,17 @@ export default function TreeScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId]);
 
+  const sourceTree = edited?.tree ?? data?.tree;
+  const sourceMissions = useMemo(
+    () => edited?.missions ?? data?.missions ?? [],
+    [data?.missions, edited?.missions],
+  );
+
   const merged = useMemo(() => {
-    if (!data) return null;
+    if (!data || !sourceTree) return null;
     return rollUpProgress({
-      tree: data.tree,
-      missions: data.missions,
+      tree: sourceTree,
+      missions: sourceMissions,
       // The server's record and this device's record are both true; a student
       // on a metered connection completes work offline and syncs later.
       completedMissionIds: [...data.completedMissionIds, ...Object.keys(missionLog)],
@@ -123,16 +198,16 @@ export default function TreeScreen() {
       serverMasteredIds: data.masteredIds,
       serverXp: data.xp,
     });
-  }, [data, log, missionLog]);
+  }, [data, log, missionLog, sourceMissions, sourceTree]);
 
   // One name per node, resolved once. The chart, the detail window, the REQUIRES
   // list and the "what next" bar all read from here, because two surfaces
   // calling the same node different things reads as two different nodes.
   const named = useMemo<SkillNode[]>(
     () =>
-      data?.tree.nodes.map((n) => ({ ...n, title: resolveQuestName(n, overrides[n.id]).text })) ??
+      sourceTree?.nodes.map((n) => ({ ...n, title: resolveQuestName(n, overrides[n.id]).text })) ??
       [],
-    [data, overrides],
+    [overrides, sourceTree],
   );
 
   const selected = useMemo<SkillNode | null>(
@@ -144,20 +219,37 @@ export default function TreeScreen() {
   // resolved name, so editing against it would treat a generated name as
   // something a person had typed.
   const original = useMemo<SkillNode | null>(
-    () => data?.tree.nodes.find((n) => n.id === selectedId) ?? null,
-    [data, selectedId],
+    () => sourceTree?.nodes.find((n) => n.id === selectedId) ?? null,
+    [selectedId, sourceTree],
+  );
+  const tree = useMemo<Tree>(
+    () => ({ nodes: named, prereqs: sourceTree?.prereqs ?? [] }),
+    [named, sourceTree?.prereqs],
   );
 
   if (isPending) return <Loading />;
   if (error || !data || !merged) return <Failed onRetry={() => refetch()} />;
 
-  const { title, missions } = data;
-  const tree: Tree = { nodes: named, prereqs: data.tree.prereqs };
+  const { title } = data;
+  const missions = sourceMissions;
   const { masteredIds, xp, completedMissionIds } = merged;
+  const selectableCourses = courseOptions.some((course) => course.id === courseId)
+    ? courseOptions
+    : [{
+        id: courseId,
+        courseCode: null,
+        title,
+        term: null,
+        canEdit: false,
+        canDelete: false,
+        canRemove: false,
+      }, ...courseOptions];
 
   if (tree.nodes.length === 0) return <EmptyChart title={title} />;
 
   const level = levelForXp(xp);
+  const courseXpMax = totalXp(tree.nodes);
+  const courseXpProgress = progressRatio(xp, courseXpMax);
   // A day counts if any work landed on it, whether a whole node or one mission.
   const streak = streakDays([...Object.values(log), ...Object.values(missionLog)]);
   const eligibility = selected
@@ -242,6 +334,19 @@ export default function TreeScreen() {
   // two missions on one node are rarely worth the same.
   const nodeXpTotal = selected ? nodeXpFromMissions(missions, selected.id) : 0;
   const nodeXpDone = selected ? nodeXpEarned(missions, selected.id, completedMissionIds) : 0;
+  const detailStatus = displayStatus(
+    status,
+    selected ? nodeProgress(selected, missions, completedMissionIds, isMastered) : 0,
+  );
+  const previewNodeTheme = detailStatus === 'mastered'
+    ? theme.nodeCompleted
+    : detailStatus === 'locked'
+      ? theme.nodeLocked
+      : theme.nodeActive;
+  const editMissionTotal = missionDraftTotal(editMissions);
+  const editNodeTotal = editUsesMissionRewards
+    ? editMissionTotal
+    : Math.max(0, Number.parseInt(editXp, 10) || 0);
 
   // Every prerequisite, not just the unmet ones. Seeing "2 of 3 mastered" while
   // still locked tells a student how close they are; a list that only appears
@@ -253,6 +358,25 @@ export default function TreeScreen() {
         .filter((n): n is SkillNode => Boolean(n))
     : [];
   const prereqsMastered = prereqNodes.filter((p) => masteredIds.includes(p.id)).length;
+  const progressByNode = Object.fromEntries(
+    tree.nodes.map((node) => [
+      node.id,
+      nodeProgress(node, missions, completedMissionIds, masteredIds.includes(node.id)),
+    ]),
+  );
+
+  const claimMission = async (missionId: string, title: string, xpReward: number, done: boolean) => {
+    await toggleMission(missionId, !done);
+    if (done) return;
+    AccessibilityInfo.announceForAccessibility(`${title} complete. ${xpReward} XP claimed.`);
+    if (prefs.motionOff) return;
+    setClaimedMissionId(missionId);
+    if (claimTimer.current) clearTimeout(claimTimer.current);
+    claimTimer.current = setTimeout(
+      () => setClaimedMissionId((active) => (active === missionId ? null : active)),
+      700,
+    );
+  };
 
   const onComplete = async (node: SkillNode) => {
     await complete(node.id);
@@ -261,6 +385,201 @@ export default function TreeScreen() {
     AccessibilityInfo.announceForAccessibility(
       `${node.title} marked complete. ${node.xpReward} XP recorded.`,
     );
+  };
+
+  const persistEdit = async (nextTree: Tree, nextMissions: Mission[] = missions) => {
+    await saveEditedTree({ tree: nextTree, missions: nextMissions });
+  };
+
+  const selectNode = async (node: SkillNode) => {
+    if (editMode && linkMode) {
+      if (!linkSourceId) return;
+      if (linkSourceId === node.id) {
+        showLinkNotice('Cannot link a node to itself');
+        return;
+      }
+      const edge = { prereqId: linkSourceId, nodeId: node.id };
+      const prereqs = [...tree.prereqs.filter((item) => !(item.prereqId === edge.prereqId && item.nodeId === edge.nodeId)), edge];
+      const check = validateGraph(sourceTree?.nodes ?? [], prereqs);
+      if (!check.isValid) {
+        showLinkNotice(check.errors[0]?.message ?? 'That link would make the chart invalid.');
+        return;
+      }
+      await persistEdit({ nodes: sourceTree?.nodes ?? [], prereqs });
+      AccessibilityInfo.announceForAccessibility(`Connected ${sourceTree?.nodes.find((item) => item.id === linkSourceId)?.title ?? 'source'} to ${node.title}.`);
+      setLinkNotice('Nodes connected');
+      cancelLink();
+      setSelectedId(node.id);
+      return;
+    }
+    setSelectedId(node.id);
+    setRenaming(false);
+    setConfirmingHelp(false);
+    setHelpNote(null);
+  };
+
+  const showLinkNotice = (message: string) => {
+    setLinkNotice(message);
+    AccessibilityInfo.announceForAccessibility(message);
+    if (linkNoticeTimer.current) clearTimeout(linkNoticeTimer.current);
+    linkNoticeTimer.current = setTimeout(() => setLinkNotice(null), 1800);
+  };
+
+  const cancelLink = () => {
+    setLinkMode(false);
+    setLinkSourceId(null);
+  };
+
+  const startLink = () => {
+    if (linkMode) {
+      cancelLink();
+      return;
+    }
+    if (!selectedId) {
+      showLinkNotice('Select a source node first');
+      return;
+    }
+    setLinkSourceId(selectedId);
+    setLinkMode(true);
+    setLinkNotice(null);
+  };
+
+  const addNode = async (at: NodePosition) => {
+    if (!sourceTree) return;
+    const id = `local-${Date.now()}`;
+    const node: SkillNode = {
+      id, courseId, trackId: null, title: 'New skill', description: 'Describe this skill.',
+      kind: 'topic', iconKey: 'pixel_spellbook', xpReward: 50,
+      x: at.x, y: at.y, sortOrder: sourceTree.nodes.length,
+    };
+    await persistEdit({ ...sourceTree, nodes: [...sourceTree.nodes, node] });
+    setSelectedId(id);
+    setEditingProperties(true);
+    setEditTitle(node.title);
+    setEditDescription(node.description);
+    setEditXp(String(node.xpReward));
+    setEditIcon(resolvePixelIcon(node));
+    setEditUniversal(false);
+    setEditMissions([]);
+    setEditUsesMissionRewards(false);
+  };
+
+  const deleteSelectedNode = async () => {
+    if (!sourceTree || !selectedId) return;
+    await persistEdit(
+      {
+        nodes: sourceTree.nodes.filter((node) => node.id !== selectedId),
+        prereqs: sourceTree.prereqs.filter((edge) => edge.nodeId !== selectedId && edge.prereqId !== selectedId),
+      },
+      missions.filter((mission) => mission.skillId !== selectedId),
+    );
+    setSelectedId(null);
+  };
+
+  const beginPropertyEdit = () => {
+    if (!original) return;
+    setEditTitle(original.title);
+    setEditDescription(original.description);
+    setEditXp(String(original.xpReward));
+    setEditIcon(resolvePixelIcon(original));
+    setEditUniversal(Boolean(original.trackId));
+    const ownMissions = missions.filter((mission) => mission.skillId === original.id);
+    setEditMissions(toMissionDrafts(ownMissions));
+    setEditUsesMissionRewards(ownMissions.length > 0);
+    setEditingProperties(true);
+  };
+
+  const saveProperties = async () => {
+    if (!sourceTree || !original) return;
+    const nextOwnMissions = finalizeMissionDrafts(editMissions);
+    const missionTotal = nextOwnMissions.reduce((total, mission) => total + mission.xpReward, 0);
+    const xpReward = editUsesMissionRewards
+      ? missionTotal
+      : Math.max(0, Math.min(10000, Number.parseInt(editXp, 10) || 0));
+    const nextNodes = sourceTree.nodes.map((node) => node.id === original.id
+      ? {
+          ...node,
+          title: editTitle.trim() || 'Untitled skill',
+          titleOverride: editTitle.trim() || 'Untitled skill',
+          description: editDescription.trim(),
+          xpReward,
+          iconKey: editIcon,
+          trackId: editUniversal ? (node.trackId ?? `local-universal-${node.id}`) : null,
+          courseId: editUniversal ? null : courseId,
+        }
+      : node);
+    const nextMissions = [
+      ...missions.filter((mission) => mission.skillId !== original.id),
+      ...nextOwnMissions,
+    ];
+    await persistEdit({ ...sourceTree, nodes: nextNodes }, nextMissions);
+    setEditingProperties(false);
+  };
+
+  const addMission = () => {
+    if (!original) return;
+    const mission: MissionDraft = {
+      id: `local-mission-${Date.now()}-${editMissions.length}`,
+      skillId: original.id,
+      title: 'New mission',
+      description: '',
+      kind: original.kind,
+      xpReward: '0',
+      estimatedMinutes: 30,
+    };
+    setEditUsesMissionRewards(true);
+    setEditMissions((current) => [...current, mission]);
+  };
+
+  const removeMission = (missionId: string) => {
+    setEditMissions((current) => current.filter((mission) => mission.id !== missionId));
+  };
+
+  const resetProgress = async (targetCourseId: string) => {
+    try {
+      if (!findMockCourse(targetCourseId) && targetCourseId !== 'demo') {
+        const { error: resetError } = await supabase.rpc('reset_own_course_progress', { p_course_id: targetCourseId });
+        if (resetError) throw resetError;
+      }
+      if (targetCourseId === courseId) {
+        await resetLocalProgress();
+        await refetch();
+      } else {
+        await clearLocal(targetCourseId);
+      }
+      AccessibilityInfo.announceForAccessibility('Course progress reset to zero.');
+    } catch {
+      AccessibilityInfo.announceForAccessibility('Progress could not be reset. Check your connection and try again.');
+      throw new Error('Progress could not be reset. Check your connection and try again.');
+    }
+  };
+
+  const saveCourseMetadata = async (targetCourseId: string, metadata: CourseMetadata) => {
+    try {
+      await updateCourseMetadata(targetCourseId, metadata);
+      await queryClient.invalidateQueries({ queryKey: ['courses'] });
+      await queryClient.invalidateQueries({ queryKey: ['tree', targetCourseId] });
+      AccessibilityInfo.announceForAccessibility('Course details saved.');
+    } catch {
+      AccessibilityInfo.announceForAccessibility('Course details could not be saved. Check your connection and try again.');
+      throw new Error('Course details could not be saved. Check your connection and try again.');
+    }
+  };
+
+  const deleteTree = async (targetCourseId: string) => {
+    if (findMockCourse(targetCourseId) || targetCourseId === 'demo') return;
+    try {
+      const { error: deleteError } = await supabase.from('courses').delete().eq('id', targetCourseId);
+      if (deleteError) throw deleteError;
+      await purgeCourseCache(targetCourseId);
+      await removeCachedCourse(targetCourseId);
+      if (targetCourseId === courseId) await clearEditedTree();
+      await queryClient.invalidateQueries({ queryKey: ['courses'] });
+      if (targetCourseId === courseId) transition(() => router.replace('/courses'));
+    } catch {
+      AccessibilityInfo.announceForAccessibility('This tree could not be deleted. Only its owner can delete it.');
+      throw new Error('This tree could not be deleted. Only its owner can delete it.');
+    }
   };
 
   return (
@@ -278,9 +597,37 @@ export default function TreeScreen() {
         ]}
       >
         <View style={styles.courseBlock}>
-          <PixelText variant="title" numberOfLines={1}>
-            {title}
-          </PixelText>
+          <View style={styles.courseActions}>
+          <CourseSelector
+            open={courseMenuOpen}
+            currentCourseId={courseId}
+            currentTitle={title}
+            courses={selectableCourses}
+            reduceMotion={prefs.motionOff}
+            onToggle={() => setCourseMenuOpen((open) => !open)}
+            onUpdate={saveCourseMetadata}
+            onReset={resetProgress}
+            onDelete={deleteTree}
+            onSelect={(nextCourseId) => {
+              setCourseMenuOpen(false);
+              if (nextCourseId !== courseId) {
+                transition(() => router.replace({ pathname: '/tree/[courseId]', params: { courseId: nextCourseId } }));
+              }
+            }}
+          />
+          <Pressable
+            onPress={() => transition(() => router.navigate('/upload'))}
+            accessibilityRole="button"
+            accessibilityLabel="Upload a syllabus"
+            style={({ pressed }) => [
+              styles.uploadButton,
+              bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+            ]}
+          >
+            <PixelIcon name="plus" size={12} colour={t.info} />
+            <PixelText variant="micro" colour={t.ink}>UPLOAD</PixelText>
+          </Pressable>
+          </View>
           <PixelText variant="micro" colour={t.ink}>
             {masteredIds.length} of {tree.nodes.length} cleared
           </PixelText>
@@ -288,12 +635,13 @@ export default function TreeScreen() {
 
         <View style={styles.readout}>
           <PixelText variant="micro" colour={t.ink}>
-            LV {level} · {xp}/{totalXp(tree.nodes)} XP
+            LV {level} · {xp}/{courseXpMax} XP
           </PixelText>
           <Meter
-            value={levelProgress(xp)}
+            value={courseXpProgress}
+            cells={10}
             colour={theme.xpBarFill}
-            label={`Level ${level}, ${Math.round(levelProgress(xp) * 100)} percent to the next level`}
+            label={`${Math.round(courseXpProgress * 100)} percent of course XP earned`}
           />
           {streak > 0 ? (
             <View style={styles.streak}>
@@ -320,15 +668,27 @@ export default function TreeScreen() {
       <View style={wide ? styles.wideBody : styles.fill}>
         <View style={styles.fill}>
       <SkillTree
+        key={courseId}
+        viewportKey={courseId}
         tree={tree}
         masteredIds={masteredIds}
         selectedId={selectedId}
-        onSelectNode={(n) => {
-          setSelectedId(n.id);
-          setRenaming(false);
-          setConfirmingHelp(false);
-          setHelpNote(null);
+        onSelectNode={selectNode}
+        editMode={editMode}
+        linkMode={linkMode}
+        linkSourceId={linkSourceId}
+        linkNotice={linkNotice}
+        onToggleEditMode={(next) => {
+          setEditMode(next);
+          if (!next) {
+            setLinkMode(false);
+            setLinkSourceId(null);
+          }
         }}
+        onAddNode={addNode}
+        onToggleLinkMode={startLink}
+        onCancelLink={cancelLink}
+        onDeleteNode={deleteSelectedNode}
         recommendedId={next?.id ?? null}
         recentlyMasteredId={justCompleted}
         reduceMotion={prefs.motionOff}
@@ -336,25 +696,138 @@ export default function TreeScreen() {
         positions={positions}
         onMoveNode={moveNode}
         onResetLayout={resetLayout}
+        progressByNode={progressByNode}
       />
         </View>
 
       {selected && eligibility ? (
+        <>
+        <Animated.View
+          key={selected.id}
+          entering={prefs.motionOff ? undefined : SlideInRight.duration(240).easing(Easing.out(Easing.cubic))}
+          exiting={prefs.motionOff ? undefined : SlideOutRight.duration(200).easing(Easing.in(Easing.cubic))}
+          style={wide ? styles.dockWide : styles.dock}
+        >
         <Window
           title={selected.title}
           onClose={() => setSelectedId(null)}
-          style={wide ? styles.dockWide : styles.dock}
+          style={styles.detailWindow}
         >
           <View style={styles.rowBetween}>
-            <StatusTag status={status} />
-            <PixelText variant="micro" colour={t.earnedText}>
-              {selected.xpReward} XP
+            <View style={styles.headerTags}>
+              <PixelText variant="micro" colour={t.info}>
+                {selected.trackId ? 'UNIVERSAL SKILL' : 'COURSE SKILL'}
+              </PixelText>
+              <StatusTag status={detailStatus} />
+            </View>
+            <PixelText variant="label" colour={t.earnedText}>
+              {selected.xpReward} XP TOTAL
             </PixelText>
           </View>
 
           {/* Capped on a phone so the window cannot swallow the chart; on a wide
               screen it has its own column and can use the height it has. */}
-          <ScrollView style={wide ? styles.sheetScrollWide : styles.sheetScroll}>
+          <StableScrollView style={wide ? styles.sheetScrollWide : styles.sheetScroll}>
+            {editMode ? (
+              <View style={styles.editProperties}>
+                {editingProperties ? (
+                  <Animated.View
+                    entering={prefs.motionOff ? undefined : SlideInRight.duration(240).easing(Easing.out(Easing.cubic))}
+                    exiting={prefs.motionOff ? undefined : SlideOutRight.duration(200).easing(Easing.in(Easing.cubic))}
+                    style={styles.editForm}
+                  >
+                    <PixelInput label="Node title" value={editTitle} onChangeText={setEditTitle} />
+                    <PixelInput label="Topic / description" value={editDescription} onChangeText={setEditDescription} multiline />
+                    {editUsesMissionRewards ? (
+                      <Field label="NODE TOTAL XP" value={`${editNodeTotal} XP`} detail="SUM OF MISSION REWARDS" />
+                    ) : (
+                      <PixelInput label="Node total XP" value={editXp} onChangeText={setEditXp} keyboardType="number-pad" />
+                    )}
+                    <Toggle value={editUniversal} onChange={setEditUniversal} label="Universal skill" />
+                    <PixelText variant="micro" colour={t.info}>PIXEL ICON</PixelText>
+                    <ScrollView horizontal contentContainerStyle={styles.iconChoices} showsHorizontalScrollIndicator={false}>
+                      {PIXEL_ICON_KEYS.map((icon) => (
+                        <Pressable
+                          key={icon}
+                          onPress={() => setEditIcon(icon)}
+                          accessibilityRole="radio"
+                          accessibilityLabel={icon.replaceAll('_', ' ')}
+                          accessibilityState={{ checked: editIcon === icon }}
+                          style={({ pressed }) => [
+                            styles.iconChoice,
+                            bevelStyle(t, editIcon === icon ? 'brand' : 'panel', pressed || editIcon === icon ? 'inset' : 'raised'),
+                          ]}
+                        >
+                          <SubjectPixelIcon icon={icon} size={20} colour={editIcon === icon ? t.brandInk : t.inkMuted} />
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                    <View style={[styles.livePreview, { backgroundColor: theme.surface, borderColor: previewNodeTheme.border }]}>
+                      <PixelText variant="micro" colour={theme.nodeCompleted.border}>LIVE PREVIEW</PixelText>
+                      <View style={styles.previewNodeRow}>
+                        <View style={[styles.previewNode, { backgroundColor: previewNodeTheme.background, borderColor: previewNodeTheme.border }]}>
+                          <SubjectPixelIcon icon={editIcon} colour={previewNodeTheme.icon} />
+                        </View>
+                        <View style={styles.grow}>
+                          <PixelText variant="label" colour={theme.textPrimary} numberOfLines={2}>{editTitle.trim() || 'Untitled skill'}</PixelText>
+                          <PixelText variant="micro" colour={theme.textMuted} numberOfLines={2}>{editDescription.trim() || 'No topic description yet.'}</PixelText>
+                        </View>
+                      </View>
+                      <View style={styles.previewMeta}>
+                        <StatusTag status={detailStatus} />
+                        <PixelText variant="micro" colour={theme.textSecondary}>{editUniversal ? 'UNIVERSAL SKILL' : 'COURSE SKILL'}</PixelText>
+                        <PixelText variant="micro" colour={theme.nodeCompleted.icon}>{editNodeTotal} XP</PixelText>
+                      </View>
+                    </View>
+                    <View style={styles.localMissionTools}>
+                      <View style={styles.rowBetween}>
+                        <PixelText variant="micro" colour={t.info}>MISSIONS &amp; REWARDS</PixelText>
+                        <PixelText variant="micro" colour={t.earnedText}>{editMissionTotal} XP</PixelText>
+                      </View>
+                      {editMissions.map((mission) => (
+                        <View key={mission.id} style={[styles.missionEditRow, { borderColor: theme.border }]}>
+                          <View style={styles.missionTitleEdit}>
+                            <PixelInput
+                              label="Mission title"
+                              value={mission.title}
+                              onChangeText={(title) => setEditMissions((current) => current.map((item) => (
+                                item.id === mission.id ? { ...item, title } : item
+                              )))}
+                            />
+                          </View>
+                          <View style={styles.missionXpEdit}>
+                            <PixelInput
+                              label="XP"
+                              value={mission.xpReward}
+                              keyboardType="number-pad"
+                              onChangeText={(xpReward) => setEditMissions((current) => current.map((item) => (
+                                item.id === mission.id ? { ...item, xpReward } : item
+                              )))}
+                            />
+                          </View>
+                          <Pressable
+                            onPress={() => removeMission(mission.id)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Delete ${mission.title}`}
+                            style={({ pressed }) => [
+                              styles.missionDelete,
+                              bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+                            ]}
+                          >
+                            <PixelIcon name="close" size={12} colour={t.alarm} />
+                          </Pressable>
+                        </View>
+                      ))}
+                      <PixelButton tone="panel" label="+ Add mission" onPress={addMission} />
+                    </View>
+                    <PixelButton label="Save properties" onPress={saveProperties} />
+                    <PixelButton tone="panel" label="Cancel editing" onPress={() => setEditingProperties(false)} />
+                  </Animated.View>
+                ) : (
+                  <PixelButton tone="panel" label="Rename / edit properties" onPress={beginPropertyEdit} />
+                )}
+              </View>
+            ) : null}
             {original ? (
               <View style={styles.naming}>
                 <View style={styles.rowBetween}>
@@ -432,9 +905,11 @@ export default function TreeScreen() {
               />
             ) : null}
 
-            <PixelText variant="body" colour={t.ink}>
-              {selected.description}
-            </PixelText>
+            <CollapsibleSection title="Description">
+              <PixelText variant="body" colour={t.ink} style={styles.detailContent}>
+                {selected.description || 'No description has been added yet.'}
+              </PixelText>
+            </CollapsibleSection>
 
             {selected.moduleName || selected.difficultyLabel || selected.estimatedMinutes ? (
               <PixelText variant="micro" colour={t.inkMuted}>
@@ -450,26 +925,24 @@ export default function TreeScreen() {
             ) : null}
 
             {selected.learningObjective ? (
-              <View style={styles.objective}>
-                <PixelText variant="micro" colour={t.inkMuted}>
-                  WHAT YOU WILL LEARN
-                </PixelText>
-                <PixelText variant="body" colour={t.ink}>
+              <CollapsibleSection title="Learning objectives">
+                <PixelText variant="body" colour={t.ink} style={styles.detailContent}>
                   {selected.learningObjective}
                 </PixelText>
-              </View>
-            ) : null}
+              </CollapsibleSection>
+            ) : (
+              <CollapsibleSection title="Learning objectives">
+                <PixelText variant="body" colour={t.inkMuted} style={styles.detailContent}>
+                  No learning objectives have been added yet.
+                </PixelText>
+              </CollapsibleSection>
+            )}
 
             {selectedMissions.length > 0 ? (
-              <View style={styles.missions}>
-                <View style={styles.rowBetween}>
-                  <PixelText variant="micro" colour={t.inkMuted}>
-                    MISSIONS
-                  </PixelText>
-                  <PixelText variant="micro" colour={isMastered ? t.earnedText : t.inkMuted}>
-                    {nodeXpDone} OF {nodeXpTotal} XP
-                  </PixelText>
-                </View>
+              <CollapsibleSection
+                title="Active missions"
+                meta={`${nodeXpDone} OF ${nodeXpTotal} XP`}
+              >
 
                 <Meter
                   value={nodeProgress(selected, missions, completedMissionIds, isMastered)}
@@ -490,7 +963,7 @@ export default function TreeScreen() {
                   <Pressable
                     key={mission.id}
                     disabled={state === 'locked'}
-                    onPress={() => toggleMission(mission.id, state !== 'done')}
+                    onPress={() => claimMission(mission.id, mission.title, mission.xpReward, state === 'done')}
                     accessibilityRole="checkbox"
                     accessibilityState={{ checked: state === 'done', disabled: state === 'locked' }}
                     accessibilityLabel={`${mission.title}, ${mission.xpReward} XP`}
@@ -512,6 +985,8 @@ export default function TreeScreen() {
                           variant="body"
                           colour={state === 'locked' ? t.inkMuted : t.ink}
                           style={styles.grow}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
                         >
                           {mission.title}
                         </PixelText>
@@ -523,11 +998,9 @@ export default function TreeScreen() {
                         </PixelText>
                       </View>
 
-                      {mission.description ? (
-                        <PixelText variant="micro" colour={t.inkMuted}>
-                          {mission.description}
-                        </PixelText>
-                      ) : null}
+                      <PixelText variant="micro" colour={t.inkMuted} numberOfLines={1}>
+                        {mission.description || ' '}
+                      </PixelText>
 
                       <PixelText variant="micro" colour={t.inkMuted}>
                         {[mission.kind, mission.estimatedMinutes ? `${mission.estimatedMinutes} MIN` : null]
@@ -536,18 +1009,31 @@ export default function TreeScreen() {
                           .toUpperCase()}
                       </PixelText>
 
-                      {/* The row is the checkbox, so this is a readout of its
-                          state rather than a second control competing with it. */}
-                      {state === 'done' ? (
-                        <PixelText variant="micro" colour={t.earnedText}>
-                          ✓ MARKED COMPLETE · TAP TO UNDO
-                        </PixelText>
-                      ) : null}
+                      <PixelText
+                        variant="micro"
+                        colour={state === 'done' ? t.earnedText : t.inkMuted}
+                        numberOfLines={1}
+                      >
+                        {state === 'done'
+                          ? 'MARKED COMPLETE · TAP TO UNDO'
+                          : state === 'locked'
+                            ? 'LOCKED · CLEAR PREREQUISITES'
+                            : 'READY · TAP TO CLAIM XP'}
+                      </PixelText>
                     </View>
+                    {claimedMissionId === mission.id ? (
+                      <XpClaim xp={mission.xpReward} />
+                    ) : null}
                   </Pressable>
                 ))}
-              </View>
-            ) : null}
+              </CollapsibleSection>
+            ) : (
+              <CollapsibleSection title="Active missions" meta="0 OF 0 XP">
+                <PixelText variant="body" colour={t.inkMuted} style={styles.detailContent}>
+                  This node has no attached missions. Use the completion control below.
+                </PixelText>
+              </CollapsibleSection>
+            )}
 
             {helpOffer?.offer || confirmingHelp || helpNote ? (
               <Bevel tone="panel" depth="inset" style={styles.help}>
@@ -608,20 +1094,13 @@ export default function TreeScreen() {
               </Bevel>
             ) : null}
 
-            {/* The companion is built to be opened *about* something. Reaching it
-                from Settings with no node is the degraded path, so the one place
-                the context exists offers it too. Labelled here as well as there,
-                because a student should know what it is before they tap. */}
+            {/* Context is assembled here, where the selected syllabus node,
+                missions and prerequisites are already in scope. */}
             {status === 'locked' ? null : (
               <Pressable
-                onPress={() =>
-                  router.navigate({
-                    pathname: '/companion',
-                    params: { courseId, nodeId: selected.id },
-                  })
-                }
+                onPress={() => setCompanionOpen(true)}
                 accessibilityRole="button"
-                accessibilityLabel={`Ask the companion about ${selected.title}. Prototype: its replies are canned.`}
+                accessibilityLabel={`Ask the AI study companion about ${selected.title}.`}
                 style={({ pressed }) => [
                   styles.companionRow,
                   bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
@@ -629,24 +1108,19 @@ export default function TreeScreen() {
               >
                 <PixelIcon name="play" size={12} colour={t.info} />
                 <PixelText variant="body" colour={t.ink} style={styles.requireLabel}>
-                  Ask about this
+                  Ask AI about this
                 </PixelText>
                 <PixelText variant="micro" colour={t.inkMuted}>
-                  PROTOTYPE
+                  NODE CONTEXT
                 </PixelText>
               </Pressable>
             )}
 
             {prereqNodes.length > 0 ? (
-              <View style={styles.requires}>
-                <View style={styles.rowBetween}>
-                  <PixelText variant="micro" colour={t.inkMuted}>
-                    PREREQUISITES
-                  </PixelText>
-                  <PixelText variant="micro" colour={t.inkMuted}>
-                    {prereqsMastered} OF {prereqNodes.length} MASTERED
-                  </PixelText>
-                </View>
+              <CollapsibleSection
+                title="Prerequisites"
+                meta={`${prereqsMastered} OF ${prereqNodes.length} MASTERED`}
+              >
 
                 {prereqNodes.map((p) => {
                   const done = masteredIds.includes(p.id);
@@ -675,9 +1149,15 @@ export default function TreeScreen() {
                     </Pressable>
                   );
                 })}
-              </View>
-            ) : null}
-          </ScrollView>
+              </CollapsibleSection>
+            ) : (
+              <CollapsibleSection title="Prerequisites" meta="STARTING NODE">
+                <PixelText variant="body" colour={t.inkMuted}>
+                  This node has no prerequisites.
+                </PixelText>
+              </CollapsibleSection>
+            )}
+          </StableScrollView>
 
           {/* A node made of missions is finished by doing them, so it gets no
               button of its own — ticking the last mission is what completes it.
@@ -697,6 +1177,18 @@ export default function TreeScreen() {
             </PixelText>
           )}
         </Window>
+        </Animated.View>
+        <StudyCompanionDrawer
+          visible={companionOpen}
+          onClose={() => setCompanionOpen(false)}
+          courseId={courseId}
+          courseTitle={title}
+          node={selected}
+          missions={selectedMissions.map(({ mission }) => mission)}
+          prerequisites={prereqNodes}
+          reduceMotion={prefs.motionOff}
+        />
+        </>
       ) : next ? (
         <Pressable
           onPress={() => setSelectedId(next.id)}
@@ -746,6 +1238,100 @@ function Field({ label, value, detail }: { label: string; value: string; detail?
         </PixelText>
       ) : null}
     </View>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  meta,
+  children,
+}: {
+  title: string;
+  meta?: string;
+  children: React.ReactNode;
+}) {
+  const t = useTheme();
+  const { motionOff } = usePrefs();
+  const [open, setOpen] = useState(true);
+  return (
+    <View style={styles.section}>
+      <Pressable
+        onPress={() => setOpen((value) => !value)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${title}. ${open ? 'Collapse' : 'Expand'}.`}
+        style={({ pressed }) => [
+          styles.sectionHeader,
+          bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+        ]}
+      >
+        <PixelText variant="micro" colour={t.info} style={styles.sectionHeadingText}>
+          {title.toUpperCase()}
+        </PixelText>
+        <View style={styles.sectionMeta}>
+          {meta ? <PixelText variant="micro" colour={t.inkMuted} style={styles.detailMetaText}>{meta}</PixelText> : null}
+          <PixelText variant="micro" colour={t.info}>{open ? '−' : '+'}</PixelText>
+        </View>
+      </Pressable>
+      <SmoothCollapse open={open} reduceMotion={motionOff}>
+        <View style={styles.sectionBody}>{children}</View>
+      </SmoothCollapse>
+    </View>
+  );
+}
+
+function SmoothCollapse({ open, reduceMotion, children }: {
+  open: boolean;
+  reduceMotion: boolean;
+  children: React.ReactNode;
+}) {
+  const measuredHeight = useSharedValue(0);
+  const progress = useSharedValue(open ? 1 : 0);
+
+  useEffect(() => {
+    progress.value = withTiming(open ? 1 : 0, {
+      duration: reduceMotion ? 0 : 250,
+      easing: Easing.inOut(Easing.cubic),
+    });
+  }, [open, progress, reduceMotion]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    height: measuredHeight.value * progress.value,
+    opacity: progress.value,
+  }));
+
+  return (
+    <Animated.View
+      pointerEvents={open ? 'auto' : 'none'}
+      accessibilityElementsHidden={!open}
+      importantForAccessibility={open ? 'auto' : 'no-hide-descendants'}
+      style={[styles.collapseClip, animatedStyle]}
+    >
+      <View onLayout={(event) => { measuredHeight.value = event.nativeEvent.layout.height; }}>
+        {children}
+      </View>
+    </Animated.View>
+  );
+}
+
+function XpClaim({ xp }: { xp: number }) {
+  const t = useTheme();
+  const rise = useSharedValue(0);
+  useEffect(() => {
+    rise.value = withTiming(1, { duration: 600 });
+  }, [rise]);
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: 1 - rise.value,
+    transform: [{ translateY: -16 * rise.value }],
+  }));
+  return (
+    <Animated.View
+      style={[styles.xpClaim, animatedStyle]}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <PixelText variant="label" colour={t.earnedText}>+{xp} XP CLAIMED</PixelText>
+    </Animated.View>
   );
 }
 
@@ -807,7 +1393,9 @@ const styles = StyleSheet.create({
   notice: { width: '100%', maxWidth: 420 },
 
   marginalia: {
+    zIndex: 30,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: space.md,
@@ -815,7 +1403,15 @@ const styles = StyleSheet.create({
     paddingBottom: space.cell,
     borderBottomWidth: bevel,
   },
-  courseBlock: { flexShrink: 1, gap: space.hair },
+  courseBlock: { flexShrink: 1, gap: space.hair, zIndex: 20 },
+  courseActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
+  uploadButton: {
+    minHeight: touch,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    paddingHorizontal: space.cell,
+  },
   readout: { alignItems: 'flex-end', gap: space.xs },
   streak: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
 
@@ -825,17 +1421,52 @@ const styles = StyleSheet.create({
   // chart to zero height and rendered an empty canvas.
   wideBody: { flex: 1, flexDirection: 'row' },
   dock: { margin: space.cell },
+  detailWindow: { width: '100%' },
   // The panel sits in its own column but must not be stretched to the row's
   // height by the `stretch` default above.
-  dockWide: { width: DOCK_WIDTH, margin: space.cell, maxHeight: '100%', alignSelf: 'flex-start' },
+  dockWide: { width: 420, margin: space.cell, maxHeight: '100%', alignSelf: 'flex-start' },
   nextBarWide: { width: DOCK_WIDTH, alignSelf: 'flex-end' },
   sheetScroll: { maxHeight: 260 },
   sheetScrollWide: { maxHeight: 460 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTags: { gap: space.xs },
   naming: { gap: space.xs, marginBottom: space.cell },
+  editProperties: { gap: space.cell, marginBottom: space.md },
+  editForm: { gap: space.cell },
+  localMissionTools: { gap: space.xs },
+  missionEditRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: space.xs,
+    borderWidth: bevel,
+    padding: space.xs,
+  },
+  missionTitleEdit: { minWidth: 0, flex: 1 },
+  missionXpEdit: { width: 88 },
+  missionDelete: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
+  iconChoices: { gap: space.xs, paddingVertical: space.xs },
+  iconChoice: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
+  livePreview: { borderWidth: bevel, padding: space.cell, gap: space.cell },
+  previewNodeRow: { flexDirection: 'row', alignItems: 'center', gap: space.cell },
+  previewNode: { width: touch, height: touch, borderWidth: bevel, alignItems: 'center', justifyContent: 'center' },
+  previewMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
   renameToggle: { minHeight: touch, justifyContent: 'center', paddingLeft: space.md },
   renameForm: { gap: space.cell, marginTop: space.xs },
   objective: { marginTop: space.cell, gap: space.hair },
+  section: { marginTop: space.cell },
+  sectionHeader: {
+    minHeight: touch,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.cell,
+  },
+  sectionMeta: { flexDirection: 'row', alignItems: 'center', gap: space.cell },
+  sectionBody: { gap: space.xs, paddingTop: space.cell },
+  collapseClip: { overflow: 'hidden' },
+  sectionHeadingText: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  detailContent: { fontSize: 12, lineHeight: 17 },
+  detailMetaText: { fontSize: 10, lineHeight: 14, textTransform: 'uppercase' },
   field: { gap: space.hair },
   grow: { flex: 1 },
   missions: { marginTop: space.md, gap: space.xs },
@@ -844,8 +1475,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.cell,
-    minHeight: touch,
+    height: 112,
     paddingHorizontal: space.cell,
+    position: 'relative',
   },
   missionBox: {
     width: 20,
@@ -854,6 +1486,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   missionBody: { flex: 1, gap: space.hair },
+  xpClaim: { position: 'absolute', right: space.cell, top: space.cell, zIndex: 2 },
   requires: { marginTop: space.md, gap: space.xs },
   requireRow: {
     flexDirection: 'row',

@@ -15,7 +15,7 @@
     "test": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \"src/**/*.test.ts\"",
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
-    "fn:serve": "supabase functions serve parse-syllabus --env-file .env"
+    "fn:serve": "supabase functions serve --env-file .env"
   },
   "dependencies": {
     "@expo-google-fonts/dotgothic16": "^0.4.1",
@@ -32,6 +32,7 @@
     "expo-secure-store": "~15.0.0",
     "expo-splash-screen": "~31.0.0",
     "expo-status-bar": "~3.0.0",
+    "pdfjs-dist": "^6.2.108",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.4",
@@ -49,6 +50,6 @@
     "typescript": "~5.9.2"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   }
 }

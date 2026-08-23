@@ -1,6 +1,6 @@
 ---
 name: Cardinal Skill
-description: A course syllabus, drawn as a screen you are clearing — on paper by default, lit on request.
+description: A course syllabus, drawn as a theme-bound pixel field that a student clears.
 colors:
   cream: "#F5EFE3"
   indigo: "#4A3FB0"
@@ -179,14 +179,14 @@ components:
 
 ## Overview
 
-**Creative North Star: "The Sixteen-Colour Field"**
+**Creative North Star: "The Theme-Bound Pixel Field"**
 
 The interface is a Japanese personal-computer screen from the era when a machine
-had sixteen colours in hardware and one font in ROM, and the people working on it
+had a small hardware palette and one font in ROM, and the people working on it
 treated those limits as the material rather than the obstacle. Regions are fixed
-and never move. Depth is an edge, not a shadow. Any tone that is not one of the
-sixteen is made by interleaving two of them at the pixel level, which is why the
-ground has texture instead of a gradient.
+and never move. Depth is an edge, not a shadow. Each curated theme provides a
+small semantic palette; intermediate texture is made by interleaving its colours
+at the pixel level rather than introducing gradients.
 
 That grammar was chosen because it does the product's job. A student between
 classes needs to know what is open to them right now, and a screen built out of
@@ -206,10 +206,9 @@ route is a deliberately conventional LMS workspace with its own tokens in
 surfaces share progression rules, chart tokens, ordered dither, and edge routing.
 
 **Deliberately not used — in the student app:** the contemporary ed-tech
-dashboard (light ground, rounded cards, a progress ring, a Continue row); its
-austere opposite (near-black with one neon accent); cream paper with a serif
-display face; smooth gradients of any kind; drop shadows; emoji or icon-font
-glyphs.
+dashboard (light ground, rounded cards, a progress ring, a Continue row); cream
+paper with a serif display face; smooth gradients of any kind; drop shadows;
+emoji or icon-font glyphs.
 
 That refusal is scoped, not universal. The instructor workspace ships the
 ed-tech dashboard on purpose, because its reader arrives fluent in one. The one
@@ -228,8 +227,16 @@ which draws the tree exactly as delivered so an author can see what they ship.
 
 ## Colors
 
-A single saturated red family carried at page scale, with one metal for what has
-been earned and one cool for information.
+Colour is semantic rather than screen-specific. Every preset supplies canvas,
+surface, border, text, node-state, edge-state, HUD, navigation, and XP roles.
+Components consume those roles through `useAppTheme()` and never choose a raw
+palette colour based on the active preset ID.
+
+### Legacy Cardinal palette
+
+The Cardinal family below remains the visual ancestry of the product and is used
+where a semantic preset maps to those values. It no longer defines every runtime
+screen by itself.
 
 ### Primary
 - **Cardinal** (`#C4123F`): the dominant colour of the product. It fills the
@@ -281,12 +288,10 @@ Sixteen Rule asks of a genuine addition.
 
 ### Named Rules
 
-**The Sixteen Rule.** A screen that needs another colour needs a dither pair
-instead, and genuinely adding one requires an entry here and in
-`src/theme/tokens.ts` in the same change. The table now holds eighteen: sixteen
-authored for the dark screen, plus `cream` and `indigo`, which the light theme
-could not borrow from them. Each theme still draws about sixteen roles — what
-changed is that the ground is a role rather than a given.
+**The Palette Budget Rule.** A screen that needs an intermediate colour uses a
+dither pair from its active preset. Genuinely adding a semantic role requires an
+entry in `ThemePalette`, every preset, and the relevant contrast tests in the same
+change. Components do not expand the palette locally.
 
 ## Themes
 
@@ -388,16 +393,14 @@ An 8px cell with a 4px half-cell. Every gap is one of `2 / 4 / 8 / 16 / 24 / 32 
 
 Regions are fixed and do not reorder between screens: marginalia at the top, the
 work in the middle, a docked window or summary bar above the bottom edge, and the
-four-cell navigation bar at the edge itself. Reading surfaces cap at 560px and
+five-cell navigation bar at the edge itself. Reading surfaces cap at 560px and
 centre; the chart does not cap, because it is a map.
 
-The chart is laid out in device pixels at a fixed scale (0.9 horizontal, 1.3
-vertical) and scrolls in both directions rather than scaling to fit. Fitting a
-whole syllabus into one viewport is what made the previous chart unreadable: at
-half scale a label renders at six pixels and a node stops being a touch target.
-The vertical scale is the larger of the two because every node carries two lines
-of label beneath it, and the graph's edges are orthogonal, so no angle is lost by
-scaling the axes differently.
+The chart uses a Dagre-generated prerequisite layout with orthogonal, stepped
+connectors. It supports mouse-wheel and pinch zoom from 50% to 200%, pointer-
+centred zoom, direct pan without drag-end snapping, and minimap reset. Viewport
+state is stored above tab content so leaving Chart never recentres the graph or
+recomputes layout merely because navigation changed.
 
 Touch targets are at least 44×44dp everywhere, chart nodes included — the node
 cell *is* 44dp, so the mark and the hit area are one object.
@@ -412,11 +415,13 @@ Pressing a control swaps its bevel from raised to inset with no transition, and
 that is the whole press animation. A bevel that eases is a bevel lying about being
 a physical key.
 
-Motion elsewhere is one authored moment: when a node is completed, the edges
-leaving it draw in and the cells it opened wipe down from their top edge, in five
-discrete steps over 400ms. Stepping rather than easing is the point — a per-cell
-wipe is what this hardware could do. Every animation is skipped under
-reduce-motion, and the end state is correct without any of them.
+Motion is short and structural. Primary navigation uses a single-canvas pixel
+wipe: cover, switch at full coverage, then uncover in 400–500ms above the bottom
+navigation bar. Drawers animate both entry and exit while remaining mounted until
+their close transition finishes. Available and recommended nodes pulse through a
+layout-neutral outer ring, using CSS keyframes on web rather than accumulating
+JavaScript animation loops. Every animation is skipped under reduce-motion, and
+the end state is correct without any of them.
 
 ### Named Rules
 
@@ -459,11 +464,13 @@ colour. There is no icon font and no emoji.
 - **Placeholder:** `haze`.
 
 ### Navigation
-Four equal cells fixed to the bottom edge, each an 8×8 icon over a 12px uppercase
-label. The active cell is `cardinal` filled with `bone` ink; the rest are
-`oxblood` with `haze`. Cells never reorder and never collapse into a menu. The bar
-is hidden only on the boot screen and the syllabus check-in, which are not part of
-the four-cell world.
+Five equal cells—Chart, Missions, Courses, Record, and System—are fixed to the
+bottom edge, each with a pixel icon over a 12px uppercase label. The active cell
+uses `navActiveTab`; the bar and inactive cells use theme HUD/surface roles. Cells
+never reorder and never collapse into a menu. The bar is hidden on authentication
+and syllabus check-in screens. All tab changes go through the global pixel-wipe
+interceptor, while primary views remain mounted and inactive views use
+`display: none` so the chart keeps its camera without compositor overhead.
 
 ### Window (signature component)
 A titled panel: a `cardinal` title bar in uppercase label type, a close box on the
@@ -473,12 +480,13 @@ are not reproduced as decoration. It carries `accessibilityLiveRegion="polite"`,
 because on the chart it is how the app answers a tap.
 
 ### Node cell (chart)
-A 44dp square: `cardinal` with a play glyph when available, `brass` with a check
-when mastered, and a half-density dithered `oxblood` square outlined in `slate`
-with a lock glyph when locked. Two lines of 13px `bone` label sit beneath it —
-including when locked, because `haze` on the cardinal field measures 3.3:1 and the
-floor is 4.5:1. The recommended next node wears a `blush` outline, the only one on
-the screen.
+A minimum 44dp pixel-bordered target. Locked nodes use a lock glyph and dashed
+connector; available nodes use an active topic glyph and pulsing outer ring;
+in-progress nodes include mission XP progress; mastered nodes use a checkmark and
+completed pathway colour; AI-recommended nodes add a distinct aura without
+changing geometry. Contextual 8×8 SVG icons are selected from syllabus keywords
+or the parser's `icon_key`. Every state keeps a text label and shape cue in
+addition to colour.
 
 ### Meter
 Progress is lit cells, never a bar: 8×10dp blocks with a 2dp gap, `brass` for

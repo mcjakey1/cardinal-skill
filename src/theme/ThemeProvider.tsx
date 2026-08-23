@@ -9,6 +9,7 @@ import {
   type ThemePalette,
   type ThemePresetId,
 } from './themes';
+import { ThemeWebStyle } from './ThemeWebStyle';
 
 const STORAGE_KEY = 'cardinal.theme-preset.v1';
 
@@ -67,7 +68,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     [currentThemeId, ready, setThemeId],
   );
 
-  return <AppThemeContext.Provider value={value}>{children}</AppThemeContext.Provider>;
+  return (
+    <AppThemeContext.Provider value={value}>
+      <ThemeWebStyle theme={value.theme} />
+      {children}
+    </AppThemeContext.Provider>
+  );
 }
 
 export function useAppTheme(): AppThemeContextValue {

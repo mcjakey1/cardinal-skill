@@ -109,10 +109,10 @@ export const demoTree: Tree = {
   ],
 };
 
-/** Two nodes done: enough to show mastered, available, and locked at once. */
-export const demoMasteredIds = ['describing', 'reading-1'];
+/** A first launch starts clean; roots are available and every mission is untouched. */
+export const demoMasteredIds: string[] = [];
 
-export const demoXp = 80;
+export const demoXp = 0;
 
 function n(
   id: string,

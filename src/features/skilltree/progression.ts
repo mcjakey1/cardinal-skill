@@ -52,6 +52,12 @@ export function levelProgress(xp: number, xpPerLevel: number = XP_PER_LEVEL): nu
   return (xp - floor) / (ceiling - floor);
 }
 
+/** A normalized part/whole ratio for course and mission meters. */
+export function progressRatio(currentXp: number, maxXp: number): number {
+  if (!Number.isFinite(currentXp) || !Number.isFinite(maxXp) || maxXp <= 0) return 0;
+  return Math.min(Math.max(currentXp / maxXp, 0), 1);
+}
+
 export interface StatusResult {
   status: Map<string, NodeStatus>;
   /**

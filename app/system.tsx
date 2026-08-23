@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useState } from 'react';
@@ -13,17 +14,23 @@ import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
 import { Window } from '@/ui/Window';
 import { ThemePickerModal } from '@/ui/ThemePickerModal';
+import { usePixelTransition } from '@/ui/PixelTransition';
 import { Bevel, PixelButton, PixelText, Toggle } from '@/ui/pixel';
+import { useAuth } from '@/auth/AuthContext';
 
 export default function System() {
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const { session, logout } = useAuth();
+  const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
   const { theme } = useAppTheme();
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState(false);
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
 
   const wipe = async () => {
     if (!prefs.lastCourseId) return;
@@ -34,6 +41,18 @@ export default function System() {
     await clearLocal(prefs.lastCourseId);
     setConfirming(false);
     setCleared(true);
+  };
+
+  const signOut = () => {
+    if (!confirmingLogout) {
+      setConfirmingLogout(true);
+      return;
+    }
+    transition(() => {
+      queryClient.clear();
+      prefs.set('role', null);
+      void logout();
+    });
   };
 
   return (
@@ -93,7 +112,7 @@ export default function System() {
               label="Open"
               tone="panel"
               grow={false}
-              onPress={() => router.navigate('/profile')}
+              onPress={() => transition(() => router.navigate('/profile'))}
             />
           </Row>
 
@@ -105,32 +124,53 @@ export default function System() {
               label="Open"
               tone="panel"
               grow={false}
-              onPress={() => router.navigate('/instructor')}
+              onPress={() => transition(() => router.navigate('/instructor'))}
             />
           </Row>
 
           <Row
             title="Study companion"
-            detail="A marked prototype. Its answers are canned, and it isn't connected to anything."
+            detail={session?.source === 'supabase'
+              ? 'Connected to the live b.ai study model through Supabase.'
+              : 'Demo responses are local. Sign in with Supabase to use the live study model.'}
           >
             <PixelButton
               label="Open"
               tone="panel"
               grow={false}
-              onPress={() => router.navigate('/companion')}
+              onPress={() => transition(() => router.navigate('/companion'))}
             />
           </Row>
         </Bevel>
 
         <Window title="This build" live={false}>
           <PixelText variant="body" colour={t.ink}>
-            Completions are stored on this device. No account is signed in, so nothing has been
-            sent anywhere.
+            {session
+              ? session.source === 'supabase'
+                ? `${session.name} is signed in as ${session.role} with Supabase.`
+                : `${session.name} is using the local ${session.role} demo.`
+              : 'No session is active.'}
           </PixelText>
           <PixelText variant="body" colour={t.inkMuted}>
             Version {Constants.expoConfig?.version ?? '0.1.0'}
           </PixelText>
         </Window>
+
+        <Bevel tone="panel" style={styles.group}>
+          <Row
+            title="Sign out"
+            detail={confirmingLogout
+              ? 'This clears the app session and any Supabase authentication tokens on this device.'
+              : `End the ${session?.role ?? 'current'} session and return to authentication.`}
+          >
+            <PixelButton
+              label={confirmingLogout ? 'Confirm sign out' : 'Sign out'}
+              tone={confirmingLogout ? 'brand' : 'panel'}
+              grow={false}
+              onPress={signOut}
+            />
+          </Row>
+        </Bevel>
 
         {prefs.lastCourseId ? (
           <Bevel tone="panel" style={styles.group}>

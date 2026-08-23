@@ -7,6 +7,8 @@ import {
   demoXp,
 } from './demoTree';
 import { demoMissions } from './demoMissions';
+import { findMockCourse } from './mockCourses';
+import { loadCachedTree } from '@/lib/courseCache';
 import type { Mission, Prereq, SkillNode, Tree } from './types';
 
 export interface TreeSnapshot {
@@ -29,6 +31,17 @@ export interface TreeSnapshot {
  * filter would look like the security control and isn't.
  */
 export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
+  const mock = findMockCourse(courseId);
+  if (mock) {
+    return {
+      tree: mock.tree,
+      missions: mock.missions,
+      masteredIds: [],
+      completedMissionIds: [],
+      xp: 0,
+      title: mock.title,
+    };
+  }
   // ponytail: `/tree/demo` reads a fixture so the chart is viewable with no
   // Supabase project. Remove with `demoTree.ts` once seeding is routine.
   if (courseId === DEMO_COURSE_ID) {
@@ -47,7 +60,7 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
       supabase
         .from('skill_nodes')
         .select(
-          'id, course_id, track_id, title, description, kind, xp_reward, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded',
+          'id, course_id, track_id, title, description, kind, icon_key, xp_reward, syllabus_topic, universal_skill, learning_objectives, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded',
         )
         .eq('course_id', courseId)
         .order('sort_order'),
@@ -66,7 +79,11 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
     ]);
 
   const firstError = nodesRes.error ?? prereqsRes.error ?? progressRes.error ?? xpRes.error;
-  if (firstError) throw firstError;
+  if (firstError) {
+    const cached = await loadCachedTree(courseId);
+    if (cached) return cached;
+    throw firstError;
+  }
 
   const nodes: SkillNode[] = (nodesRes.data ?? []).map((r) => ({
     id: r.id,
@@ -75,7 +92,12 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
     title: r.title,
     description: r.description ?? '',
     kind: r.kind,
+    iconKey: r.icon_key,
     xpReward: r.xp_reward,
+    moduleName: r.syllabus_topic ?? undefined,
+    universalSkill: r.universal_skill ?? undefined,
+    learningObjectives: r.learning_objectives ?? undefined,
+    learningObjective: r.learning_objectives?.[0] ?? undefined,
     x: r.x,
     y: r.y,
     sortOrder: r.sort_order,

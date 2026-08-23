@@ -466,6 +466,23 @@ begin
   ) then
     raise exception 'a publish can only touch nodes on this course';
   end if;
+
+  -- An id in upsert_missions that already exists elsewhere would be reassigned
+  -- into this course by the `on conflict (id) do update set node_id` in step 9,
+  -- carrying its mission_progress rows with it. A valid node_id is not enough:
+  -- the mission's current home has to be this course too. `read missions of
+  -- readable nodes` (0003:68) is not owner-scoped, so the caller can see ids
+  -- they must not be able to move.
+  --
+  -- `is distinct from`, not `<>`: a missions row whose course_id is null must
+  -- be rejected, and a null comparison would pass it silently.
+  if exists (
+    select 1 from jsonb_array_elements(p_changes -> 'upsert_missions') m
+    join missions old on old.id = (m ->> 'id')::uuid
+    where old.course_id is distinct from p_course_id
+  ) then
+    raise exception 'a publish can only touch missions on this course';
+  end if;
 ```
 
 - [ ] **Step 3: Write the node writes — steps 3, 4, 5 of the required order**

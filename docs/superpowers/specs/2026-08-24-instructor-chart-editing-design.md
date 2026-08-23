@@ -298,6 +298,16 @@ Following the repo's convention, authorization is the third step, not the first:
 validate argument shape, resolve and prove scope, then authorize, then domain
 invariants, then writes (`0004:56` → `:64` → `:71` → `:78` → `:158`).
 
+The scope proof covers **two** id spaces, and missing either one turns the
+function into a cross-course write primitive. Node ids — updates, archives,
+restores, both edge endpoints, mission parents — must already sit on this
+course or arrive in the insert batch. Mission ids need their own check: the
+upsert is `on conflict (id) do update set node_id = excluded.node_id`, so an id
+belonging to another course would be reassigned into this one, dragging its
+`mission_progress` rows along. A valid `node_id` does not make the mission's
+current home valid, and `read missions of readable nodes` (`0003:68`) is not
+owner-scoped, so the caller can see ids they must not be able to move.
+
 ### Statement order
 
 Order is forced by the triggers, the foreign keys, and the primary key on

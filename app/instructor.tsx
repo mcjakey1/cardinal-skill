@@ -80,6 +80,8 @@ interface CourseRow {
   id: string;
   title: string;
   term: string | null;
+  /** True only for the signed-in owner. Publishing is owner-gated in RLS too. */
+  canEdit: boolean;
 }
 
 // --------------------------------------------------------------- cohort query
@@ -268,12 +270,20 @@ export default function Instructor() {
   const courses = useQuery({
     queryKey: ['instructor-courses'],
     queryFn: async (): Promise<CourseRow[]> => {
-      const { data, error } = await supabase
-        .from('courses')
-        .select('id, title, term')
-        .order('created_at', { ascending: false });
+      const [{ data, error }, { data: auth }] = await Promise.all([
+        supabase
+          .from('courses')
+          .select('id, title, term, owner_id')
+          .order('created_at', { ascending: false }),
+        supabase.auth.getUser(),
+      ]);
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []).map(({ id, title, term, owner_id }) => ({
+        id,
+        title,
+        term,
+        canEdit: Boolean(auth.user?.id) && owner_id === auth.user?.id,
+      }));
     },
   });
 
@@ -282,7 +292,7 @@ export default function Instructor() {
   // empty on a laptop is a workspace nobody can look at.
   const rows: CourseRow[] = [
     ...(courses.data ?? []),
-    { id: DEMO_COURSE_ID, title: DEMO_COURSE_TITLE, term: 'Example chart' },
+    { id: DEMO_COURSE_ID, title: DEMO_COURSE_TITLE, term: 'Example chart', canEdit: false },
   ];
   const courseId = chosen ?? lastCourseId ?? DEMO_COURSE_ID;
   const course = rows.find((r) => r.id === courseId) ?? rows[rows.length - 1]!;
@@ -373,6 +383,7 @@ export default function Instructor() {
         {section === 'tree' ? (
           <TreeSection
             course={course}
+            canEdit={course.canEdit}
             wide={wide}
             flat={lowBandwidth}
             motionOff={motionOff}
@@ -606,6 +617,7 @@ function Courses({
 
 function TreeSection({
   course,
+  canEdit,
   wide,
   flat,
   motionOff,
@@ -614,6 +626,7 @@ function TreeSection({
   onStudentView,
 }: {
   course: CourseRow;
+  canEdit: boolean;
   wide: boolean;
   flat: boolean;
   motionOff: boolean;

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
 
 import type { Mission, Tree } from '@/features/skilltree/types';
+import { chartDraftStorageKey } from './chartDraftKey';
 
 export interface EditedCourse {
   tree: Tree;
@@ -58,5 +59,6 @@ export async function purgeCourseCache(courseId: string): Promise<void> {
     `@cardinal_nodes_${courseId}`,
     `@cardinal_layout_${courseId}`,
     editedTreeKey(courseId),
+    chartDraftStorageKey(courseId),
   ]);
 }

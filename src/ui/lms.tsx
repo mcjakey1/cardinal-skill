@@ -13,6 +13,7 @@
 
 import { Feather } from '@expo/vector-icons';
 import {
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -130,14 +131,15 @@ export function LButton({
 }: {
   label: string;
   icon?: IconName;
-  variant?: 'default' | 'primary' | 'quiet';
+  variant?: 'default' | 'primary' | 'quiet' | 'danger';
   size?: 'sm' | 'md';
   /** Icon-only. The label still reaches a screen reader through the role. */
   hideLabel?: boolean;
   style?: StyleProp<ViewStyle>;
 } & Omit<PressableProps, 'style' | 'children'>) {
   const primary = variant === 'primary';
-  const tone = disabled ? 'muted' : primary ? 'onBrand' : 'ink';
+  const danger = variant === 'danger';
+  const tone = disabled ? 'muted' : primary || danger ? 'onBrand' : 'ink';
   return (
     <Pressable
       accessibilityRole="button"
@@ -149,7 +151,8 @@ export function LButton({
         size === 'sm' ? styles.buttonSm : null,
         variant === 'quiet' ? styles.buttonQuiet : styles.buttonBordered,
         primary ? { backgroundColor: hovered ? c.brandHover : c.brand, borderColor: c.brand } : null,
-        !primary && hovered ? { backgroundColor: c.surfaceHover } : null,
+        danger ? styles.buttonDanger : null,
+        !primary && !danger && hovered ? { backgroundColor: c.surfaceHover } : null,
         // Disabled drops its lift and goes to half, as the brief asks.
         disabled ? styles.buttonDisabled : variant === 'quiet' ? null : lms.lift,
         style,
@@ -158,7 +161,11 @@ export function LButton({
     >
       {icon ? <Icon name={icon} size={15} tone={tone} /> : null}
       {hideLabel ? null : (
-        <LText variant="small" tone={tone} style={styles.buttonLabel}>
+        <LText
+          variant="small"
+          tone={tone}
+          style={[styles.buttonLabel, danger ? styles.buttonDangerLabel : null]}
+        >
           {label}
         </LText>
       )}
@@ -267,9 +274,10 @@ export function Field({
   label,
   hint,
   tall,
+  error,
   style,
   ...rest
-}: { label: string; hint?: string; tall?: boolean } & TextInputProps) {
+}: { label: string; hint?: string; tall?: boolean; error?: string } & TextInputProps) {
   return (
     <View style={styles.field}>
       <LText variant="small" style={styles.fieldLabel}>
@@ -279,10 +287,14 @@ export function Field({
         accessibilityLabel={label}
         placeholderTextColor={c.inkMuted}
         multiline={tall}
-        style={[styles.input, tall ? styles.inputTall : null, style]}
+        style={[styles.input, tall ? styles.inputTall : null, error ? styles.inputError : null, style]}
         {...rest}
       />
-      {hint ? (
+      {error ? (
+        <LText variant="small" tone="attention">
+          {error}
+        </LText>
+      ) : hint ? (
         <LText variant="small" tone="muted">
           {hint}
         </LText>
@@ -322,6 +334,43 @@ export function Segmented<T extends string>({
         );
       })}
     </View>
+  );
+}
+
+// --------------------------------------------------------------------- dialog
+
+/**
+ * The kit had no dialog. `CourseSelector.tsx:210` is the structure this copies —
+ * backdrop, `accessibilityViewIsModal`, heading, right-aligned actions — but
+ * every token here is an LMS token. That file draws in the student's pixel
+ * grammar, and mixing the two is the one thing `CLAUDE.md` asks us not to do.
+ */
+export function LModal({
+  visible,
+  title,
+  children,
+  onRequestClose,
+}: {
+  visible: boolean;
+  title: string;
+  children: React.ReactNode;
+  onRequestClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onRequestClose}>
+      <View style={styles.modalBackdrop}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          accessibilityLabel="Close"
+          accessibilityRole="button"
+          onPress={onRequestClose}
+        />
+        <View style={styles.modalCard} accessibilityViewIsModal accessibilityRole="alert">
+          <LText variant="section">{title}</LText>
+          {children}
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -466,6 +515,8 @@ const styles = StyleSheet.create({
   buttonSm: { minHeight: 30, paddingHorizontal: 10 },
   buttonBordered: { borderWidth: 1, borderColor: c.lineStrong },
   buttonQuiet: { backgroundColor: 'transparent' },
+  buttonDanger: { backgroundColor: c.attention, borderColor: c.attention },
+  buttonDangerLabel: { color: c.surface },
   buttonDisabled: { opacity: 0.5 },
   buttonLabel: { fontWeight: '600' },
 
@@ -516,6 +567,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   inputTall: { minHeight: 132, textAlignVertical: 'top' },
+  inputError: { borderColor: c.attention },
 
   segmented: {
     flexDirection: 'row',
@@ -532,6 +584,29 @@ const styles = StyleSheet.create({
     borderRadius: lms.radius.sm,
   },
   segmentActive: { backgroundColor: c.surface },
+
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(37,31,32,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: lms.space.lg,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 540,
+    gap: lms.space.md,
+    padding: lms.space.lg,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.line,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
 
   caption: { paddingHorizontal: lms.space.lg, paddingVertical: 9 },
   tableScroll: { flexGrow: 1 },

@@ -31,7 +31,9 @@ const EDITABLE = [
 const edgeKey = (p: Prereq) => `${p.nodeId}<-${p.prereqId}`;
 
 function fieldsDiffer(live: SkillNode, draft: SkillNode): boolean {
-  return EDITABLE.some((k) => (live as Record<string, unknown>)[k] !== (draft as Record<string, unknown>)[k]);
+  return EDITABLE.some(
+    (k) => (live as unknown as Record<string, unknown>)[k] !== (draft as unknown as Record<string, unknown>)[k],
+  );
 }
 
 function missionsDiffer(live: Mission, draft: Mission): boolean {

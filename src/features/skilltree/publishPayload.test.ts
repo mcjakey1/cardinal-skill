@@ -24,7 +24,7 @@ test('every section is present as an array even when nothing changed', () => {
     'insert_nodes', 'update_nodes', 'archive_nodes', 'restore_nodes',
     'delete_prereqs', 'insert_prereqs', 'upsert_missions', 'delete_missions',
   ]) {
-    assert.ok(Array.isArray((payload as Record<string, unknown>)[key]), `${key} is an array`);
+    assert.ok(Array.isArray((payload as unknown as Record<string, unknown>)[key]), `${key} is an array`);
   }
 });
 

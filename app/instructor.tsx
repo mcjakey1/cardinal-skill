@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -10,7 +10,9 @@ import { MIN_COHORT, STALE_DAYS, activityFlag } from '@/features/skilltree/cohor
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
 import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
-import type { SkillNode } from '@/features/skilltree/types';
+import type { NodeKind, SkillNode } from '@/features/skilltree/types';
+import type { NodePatch } from '@/features/skilltree/chartDraft';
+import { useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
@@ -635,51 +637,91 @@ function TreeSection({
   onStudentView: () => void;
 }) {
   const [selected, setSelected] = useState<SkillNode | null>(null);
+  const [editing, setEditing] = useState(false);
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['instructor-tree', course.id],
     queryFn: () => fetchTree(course.id),
   });
 
+  const { edit } = useChartDraft(canEdit ? course.id : undefined);
+
+  // `selected` is a snapshot from the moment of the click. Everything below
+  // reads the live row so an edit is never applied to a pre-publish copy.
+  const live = data?.tree.nodes.find((n) => n.id === selected?.id) ?? null;
+
+  // A different node means a fresh form, never the previous node's half-typed one.
+  useEffect(() => {
+    setEditing(false);
+  }, [selected?.id]);
+
   const inspector = (
     <View style={[styles.inspector, wide ? styles.inspectorWide : null]}>
-      {selected ? (
-        <>
-          <View style={styles.inspectorSection}>
-            <LText variant="section">{selected.title}</LText>
-            <View style={styles.rowWrap}>
-              <Badge label={selected.kind} tone="brand" />
-              {selected.graded === false ? <Badge label="Ungraded practice" tone="gold" /> : null}
-            </View>
-          </View>
-
-          <View style={styles.inspectorSection}>
-            <Figure label="XP" value={String(selected.xpReward)} />
-            <Figure
-              label="Prerequisites"
-              value={String(
-                data?.tree.prereqs.filter((p) => p.nodeId === selected.id).length ?? 0,
-              )}
+      <ScrollView contentContainerStyle={styles.inspectorScroll}>
+        {live ? (
+          editing ? (
+            <NodeEditor
+              node={live}
+              onCancel={() => setEditing(false)}
+              onSave={(patch) => {
+                edit({
+                  t: 'field',
+                  nodeId: live.id,
+                  before: {
+                    titleOverride: live.titleOverride ?? null,
+                    description: live.description,
+                    kind: live.kind,
+                    xpReward: live.xpReward,
+                  },
+                  after: patch,
+                });
+                setEditing(false);
+              }}
             />
-          </View>
+          ) : (
+            <>
+              <View style={styles.inspectorSection}>
+                <LText variant="section">{live.title}</LText>
+                <View style={styles.rowWrap}>
+                  <Badge label={live.kind} tone="brand" />
+                  {live.graded === false ? <Badge label="Ungraded practice" tone="gold" /> : null}
+                  {live.archived ? <Badge label="Retired" tone="attention" /> : null}
+                </View>
+              </View>
 
-          {selected.description ? (
-            <View style={styles.inspectorSection}>
-              <LText variant="micro" tone="muted">
-                What it covers
-              </LText>
-              <LText variant="small">{selected.description}</LText>
-            </View>
-          ) : null}
-        </>
-      ) : (
-        <View style={styles.inspectorSection}>
-          <LText variant="section">No cell selected</LText>
-          <LText variant="small" tone="muted">
-            Pick a cell on the chart to see what it is worth and what it opens after. The chart is
-            drawn exactly as a student receives it.
-          </LText>
-        </View>
-      )}
+              <View style={styles.inspectorSection}>
+                <Figure label="XP" value={String(live.xpReward)} />
+                <Figure
+                  label="Prerequisites"
+                  value={String(
+                    data?.tree.prereqs.filter((p) => p.nodeId === live.id).length ?? 0,
+                  )}
+                />
+              </View>
+
+              {live.description ? (
+                <View style={styles.inspectorSection}>
+                  <LText variant="micro" tone="muted">
+                    What it covers
+                  </LText>
+                  <LText variant="small">{live.description}</LText>
+                </View>
+              ) : null}
+
+              {canEdit ? (
+                <LButton label="Edit this node" icon="edit-3" onPress={() => setEditing(true)} />
+              ) : null}
+            </>
+          )
+        ) : (
+          <View style={styles.inspectorSection}>
+            <LText variant="section">No cell selected</LText>
+            <LText variant="small" tone="muted">
+              Pick a cell on the chart to see what it is worth and what it opens after. The chart is
+              drawn exactly as a student receives it.
+            </LText>
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 
@@ -1198,6 +1240,102 @@ function PageHead({
   );
 }
 
+const KINDS: { value: NodeKind; label: string }[] = [
+  { value: 'topic', label: 'Topic' },
+  { value: 'reading', label: 'Reading' },
+  { value: 'assignment', label: 'Assignment' },
+  { value: 'assessment', label: 'Assessment' },
+  { value: 'project', label: 'Project' },
+];
+
+/** XP the database accepts is 0–10000; this is the range a node is worth reading. */
+const XP_MIN = 1;
+const XP_MAX = 2000;
+
+function NodeEditor({
+  node,
+  onSave,
+  onCancel,
+}: {
+  node: SkillNode;
+  onSave: (patch: NodePatch) => void;
+  onCancel: () => void;
+}) {
+  const resolved = resolveName({
+    override: node.titleOverride,
+    generated: node.questTitle,
+    syllabus: node.title,
+  });
+
+  const [name, setName] = useState(resolved.text);
+  const [description, setDescription] = useState(node.description);
+  const [kind, setKind] = useState<NodeKind>(node.kind);
+  const [xp, setXp] = useState(String(node.xpReward));
+
+  const xpValue = Number.parseInt(xp, 10);
+  const xpError = Number.isNaN(xpValue) || xpValue < XP_MIN || xpValue > XP_MAX
+    ? `A node is worth between ${XP_MIN} and ${XP_MAX} XP.`
+    : undefined;
+  const nameError = name.trim() === '' ? 'A node needs a name.' : undefined;
+
+  return (
+    <View style={styles.inspectorSection}>
+      <Field
+        label="Name"
+        value={name}
+        onChangeText={setName}
+        error={nameError}
+        hint={
+          resolved.source === 'override'
+            ? 'Typed by hand. Quest naming leaves it alone.'
+            : resolved.source === 'generated'
+              ? 'Generated. Editing it pins the name against the next run.'
+              : 'From the syllabus.'
+        }
+      />
+
+      <Field label="What it covers" value={description} onChangeText={setDescription} tall />
+
+      <Field
+        label="XP"
+        value={xp}
+        onChangeText={setXp}
+        keyboardType="number-pad"
+        error={xpError}
+      />
+
+      <Segmented label="Kind" options={KINDS} value={kind} onChange={setKind} />
+
+      <View style={styles.rowWrap}>
+        <LButton
+          label="Save"
+          variant="primary"
+          disabled={Boolean(nameError || xpError)}
+          onPress={() =>
+            onSave({
+              // The name is written as an override, never over the syllabus
+              // title. That is the column `name-quest` checks before it
+              // renames anything (0002:45).
+              titleOverride: name.trim() === node.title.trim() ? null : name.trim(),
+              description,
+              kind,
+              xpReward: xpValue,
+            })
+          }
+        />
+        <LButton label="Cancel" variant="quiet" onPress={onCancel} />
+        {resolved.source === 'override' ? (
+          <LButton
+            label="Reset to generated name"
+            variant="quiet"
+            onPress={() => onSave({ titleOverride: null })}
+          />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function Figure({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.figure}>
@@ -1347,11 +1485,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: c.line,
     backgroundColor: c.surface,
-    padding: lms.space.lg,
-    gap: lms.space.lg,
+    flex: 1,
   },
+  inspectorScroll: { padding: lms.space.lg, gap: lms.space.lg },
   inspectorWide: {
-    width: 300,
+    width: 340,
+    flex: 0,
+    // `flex: 0` does not clear the `flex-basis: 0%` that `flex: 1` above sets,
+    // so on web the rail collapses to its border and `width` never applies.
+    flexBasis: 'auto',
     borderTopWidth: 0,
     borderLeftWidth: 1,
     borderLeftColor: c.line,

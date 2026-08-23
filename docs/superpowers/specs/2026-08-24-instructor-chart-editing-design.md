@@ -175,6 +175,74 @@ are ownership predicates orthogonal to archived state. Adding the filter to
 `owns_node_course` would make its scalar subquery return null, collapsing to
 `false`, and revoke the owner's access to the very rows they need to restore.
 
+### `chart_archive_impact` — exact counts for the confirm dialog
+
+The existing aggregate functions suppress below five students:
+`course_progress_summary` and `course_mission_summary` both end in
+`having count(*) >= 5` (`0001:204`, `0003:112`), so a node fewer than five
+students have cleared returns no row at all. Those functions and their floors
+stay exactly as they are — Class insights is built on them and states the rule
+in its own copy.
+
+The confirm dialog is a different question. It is a pre-flight check on a
+destructive action, run by the person who owns the course, about their own
+enrolled students. It gets its own function with no floor:
+
+```sql
+create or replace function public.chart_archive_impact(
+  p_course_id uuid,
+  p_node_ids  uuid[]
+)
+returns table (
+  node_id             uuid,
+  students_completed  integer,
+  missions_hidden     integer,
+  mission_completions integer,
+  help_descendants    integer
+)
+language sql stable security definer set search_path = public as $$
+  select
+    n.id,
+    (select count(*)::integer from node_progress np
+      where np.node_id = n.id and np.status = 'mastered'),
+    (select count(*)::integer from missions m
+      where m.node_id = n.id),
+    (select count(*)::integer from mission_progress mp
+       join missions m on m.id = mp.mission_id
+      where m.node_id = n.id),
+    (select count(*)::integer from skill_nodes h
+      where h.parent_node_id = n.id and not h.archived)
+  from skill_nodes n
+  where n.id = any(p_node_ids)
+    and n.course_id = p_course_id
+    and owns_course(p_course_id);
+$$;
+
+revoke all on function public.chart_archive_impact(uuid, uuid[]) from public, anon;
+grant execute on function public.chart_archive_impact(uuid, uuid[]) to authenticated;
+```
+
+Three guards carry the security here, since `security definer` bypasses RLS:
+`owns_course(p_course_id)` gates the caller, `n.course_id = p_course_id` stops a
+caller passing node ids from a course they do not own, and the function returns
+**counts only** — never a `user_id`, a name, or a row identifying who completed
+what.
+
+**What this changes in practice.** Per-node counts combined with the per-student
+totals the roster already shows (`course_student_progress`, `0005:114`, which
+returns `display_name`, `mastered`, and `progress` per student) let an
+instructor in a small cohort deduce which individual completed which node. In a
+three-student class that inference is often exact. The database stops short of
+handing over the mapping; arithmetic closes the gap. This is an accepted product
+decision, recorded here so the next reader knows it was chosen rather than
+overlooked, and so nobody "restores" the floor thinking it was a mistake.
+
+The narrower boundary that remains intact: no query in the application returns a
+named student together with a specific node. `0002`'s rule — an instructor never
+reads a named student's record — still holds literally, and
+`course_progress_summary` still suppresses below five wherever figures are
+*displayed* as class statistics.
+
 ### Archiving walks the subtree
 
 `archived` does not cascade. A syllabus node's help steps
@@ -353,24 +421,14 @@ id and emits the payload sections the RPC expects. Pure, no storage, no network.
 
 ### `chartImpact.ts`
 
-Takes the change set and the counts already available from
-`course_progress_summary` and `course_mission_summary`, and reports what each
-archive will hide: students affected, missions hidden, edges left dangling, help
-descendants carried along. Pure.
+Takes the change set and the per-node counts from `chart_archive_impact`, and
+reports what each archive will hide: students affected, missions hidden, mission
+completions hidden, help descendants carried along, edges left dangling. Pure —
+the counts arrive as an argument.
 
-**The counts inherit a privacy floor.** Both functions end in
-`having count(*) >= 5` (`0001:204`, `0003:112`) — a node fewer than five
-students have cleared returns no row at all. The impact panel therefore cannot
-say "3 students completed this". It says **"fewer than 5 students"** for any
-node absent from the summary, and an exact figure only above the floor. This is
-the same boundary `Insights` already lives behind (*"Averages stay hidden below
-5 students, because a figure over two people is not an average"*), and it is not
-worked around: a definer function returning exact small counts to an instructor
-would reopen precisely what `0002` closed.
-
-Consequence for the confirm dialog: below the floor it reports structure exactly
-— missions hidden, edges dangling, help descendants — and student impact only as
-a bound.
+The dialog shows **exact** figures at every cohort size. That is a deliberate
+departure from the aggregate functions, and it is why the counts come from a
+dedicated function rather than the existing ones. See below.
 
 ### `publishChart.ts`
 
@@ -578,3 +636,11 @@ locked with no visible cause.
 **`xp_reward` as a cache of the mission sum is enforced in only one direction.**
 `request_help_subtree` asserts it (`0004:137`), but nothing stops a future writer
 from drifting the two. Step 10 of the publish order is the whole defence.
+
+**`chart_archive_impact` is the first function in this schema that reports
+per-node student counts with no suppression floor.** It is scoped to the course
+owner and returns no identifiers, but it narrows the gap between "class
+statistics" and "who did what" in small cohorts. If the project later adopts a
+privacy policy that forbids that inference, this function is the single place to
+change — which is why the counts live here rather than in a relaxed
+`course_progress_summary`.

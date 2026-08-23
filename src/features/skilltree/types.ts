@@ -42,6 +42,12 @@ export interface SkillNode {
    * a grade filters on it rather than guessing from `parentNodeId`.
    */
   graded?: boolean;
+  /**
+   * Retired by the course owner. Archived nodes are hidden from students by
+   * RLS; the owner still reads them so they can be restored. Never delete a
+   * node — `node_progress` and `mission_progress` cascade away with it.
+   */
+  archived?: boolean;
   /** Quest name written by `name-quest`. Null until the course has been named. */
   questTitle?: string | null;
   /** One line of flavour under the quest name. */

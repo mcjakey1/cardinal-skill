@@ -669,10 +669,13 @@ function TreeSection({
     if (!canEdit || !data || !ready) return;
     if (seeded.current === course.id) return;
     seeded.current = course.id;
-    if (draft.ops.length === 0) {
+    // `reset` is `emptyDraft`, which clears `published`. A draft that has just
+    // published has no ops either, so reseeding it here would drop the undo
+    // baseline every time this section remounts.
+    if (draft.ops.length === 0 && !draft.published) {
       reset({ nodes: data.tree.nodes, prereqs: data.tree.prereqs, missions: data.missions });
     }
-  }, [canEdit, course.id, data, draft.ops.length, ready, reset]);
+  }, [canEdit, course.id, data, draft.ops.length, draft.published, ready, reset]);
 
   // `selected` is a snapshot from the moment of the click. Everything below
   // reads the live row so an edit is never applied to a pre-publish copy.
@@ -787,9 +790,22 @@ function TreeSection({
 
   const openConfirm = async () => {
     setPublishError(null);
-    const rows = await fetchArchiveImpact(course.id, changes.archiveNodes).catch(() => []);
-    setImpact(summariseImpact(changes, liveState, rows));
+    setImpact([]);
+    // Open first. Waiting on the round trip before showing anything makes
+    // Publish look dead; the counts fill into the dialog once they land.
     setConfirming(true);
+    try {
+      const rows = await fetchArchiveImpact(course.id, changes.archiveNodes);
+      setImpact(summariseImpact(changes, liveState, rows));
+    } catch (err) {
+      // Leave `impact` empty rather than summarising against no rows: that
+      // would print a confident "0 students cleared it" we cannot stand behind.
+      setPublishError(
+        `The impact counts could not be read${
+          err instanceof Error ? `: ${err.message}` : '.'
+        } Retiring still works, but this dialog cannot say what it costs.`,
+      );
+    }
   };
 
   const doPublish = async () => {
@@ -832,12 +848,15 @@ function TreeSection({
   };
 
   /**
-   * A publish is reversible because nothing it does is destructive: archiving is
-   * a flag, node uuids are stable, and edges are re-insertable. The inverse of a
-   * change set is the diff taken the other way round.
+   * A publish is reversible because almost nothing it does is destructive:
+   * archiving is a flag, node uuids are stable, and edges are re-insertable. The
+   * inverse of a change set is the diff taken the other way round.
    *
-   * A node the publish *added* comes back as an archive, not a removal, because
-   * publish never deletes a node. Everything else inverts exactly.
+   * Two honest limits. `diffCharts` only walks the target's nodes, so a node the
+   * publish *added* is simply not mentioned by the inverse — it stays live and
+   * unarchived rather than being retired, and the undo lands on the previous
+   * chart plus that node. And missions are the one thing publish can genuinely
+   * destroy, so an inverse that deletes any is refused below rather than run.
    */
   const undoPublish = async () => {
     if (!draft.published) return;
@@ -851,6 +870,17 @@ function TreeSection({
         missions: current.missions,
       };
       const inverse = diffCharts(before, draft.published);
+      // `mission_progress.mission_id` cascades, so this would take every
+      // student's record of finishing them — and unlike the publish path there
+      // is no confirm step in front of this button. Refuse and say why.
+      if (inverse.deleteMissions.length > 0) {
+        setPublishError(
+          `Undoing this would delete ${inverse.deleteMissions.length} mission${
+            inverse.deleteMissions.length === 1 ? '' : 's'
+          } and every student's record of completing them. Undo cannot do that. Retire the node instead, which keeps the records.`,
+        );
+        return;
+      }
       await publishChart(course.id, inverse);
       await purgeCourseCache(course.id);
       const after = await fetchTree(course.id);
@@ -924,9 +954,10 @@ function TreeSection({
               half-made new draft would publish both at once. */}
           {canEdit && draft.published && countChanges(changes) === 0 ? (
             <LButton
-              label="Undo publish"
+              label={publishing ? 'Undoing…' : 'Undo publish'}
               icon="rotate-ccw"
               size="sm"
+              disabled={publishing}
               onPress={undoPublish}
             />
           ) : null}
@@ -938,6 +969,20 @@ function TreeSection({
             onPress={onStudentView}
           />
         </View>
+
+        {/* The confirm dialog owns this error while it is open. Undo publish
+            runs straight from the toolbar with no dialog, so without this strip
+            a failed undo looks like a button that did nothing. */}
+        {publishError && !confirming ? (
+          <View style={styles.canvasMessage}>
+            <Notice tone="error" title="Not published">
+              {publishError}
+            </Notice>
+            <View style={styles.rowWrap}>
+              <LButton label="Dismiss" onPress={() => setPublishError(null)} />
+            </View>
+          </View>
+        ) : null}
 
         {error ? (
           <View style={styles.canvasMessage}>

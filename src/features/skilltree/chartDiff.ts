@@ -61,6 +61,12 @@ export function diffCharts(live: ChartState, draft: ChartState): ChartChangeSet 
     const before = liveNodes.get(node.id);
     if (!before) {
       set.insertNodes.push(node);
+      // Add then retire before publishing is two clicks, and the insert carries
+      // no `archived` — the RPC defaults it false — so without this the node
+      // ships live to students. Archive it in the same transaction rather than
+      // suppressing the insert: an edge naming the node still has to resolve
+      // against a row that exists, and the RPC's step 5 runs after step 3.
+      if (node.archived) set.archiveNodes.push(node.id);
       continue;
     }
     if (Boolean(before.archived) !== Boolean(node.archived)) {

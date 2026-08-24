@@ -652,6 +652,13 @@ function TreeSection({
 }) {
   const [selected, setSelected] = useState<SkillNode | null>(null);
   const [editing, setEditing] = useState(false);
+
+  // `modalCard` has no maxHeight and the backdrop centres it, so a card taller
+  // than the viewport hangs off both ends with nothing to scroll. On a landscape
+  // phone that puts Save out of reach — the exact failure the sheet exists to
+  // avoid. Bound it here rather than in `lms.tsx`, which is not ours to change.
+  const { height } = useWindowDimensions();
+  const modalScroll = { maxHeight: Math.round(height * 0.7) };
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['instructor-tree', course.id],
     queryFn: () => fetchTree(course.id),
@@ -1089,7 +1096,9 @@ function TreeSection({
           }}
         >
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <ScrollView contentContainerStyle={styles.inspectorScroll}>{inspectorBody}</ScrollView>
+            <ScrollView style={modalScroll} contentContainerStyle={styles.inspectorScroll}>
+              {inspectorBody}
+            </ScrollView>
           </KeyboardAvoidingView>
         </LModal>
       )}
@@ -1098,6 +1107,9 @@ function TreeSection({
       {/* Outside the section's layout on purpose. Anything absolutely positioned
           inside it renders below the nav drawer, a later sibling of `main`. */}
       <LModal visible={confirming} title="Publish changes" onRequestClose={() => setConfirming(false)}>
+        {/* Only the reading scrolls; the actions stay pinned below it, so a long
+            impact list can never push Publish off the bottom of the screen. */}
+        <ScrollView style={modalScroll} contentContainerStyle={styles.dialogScroll}>
         <LText variant="small" tone="muted">
           {countChanges(changes)} change{countChanges(changes) === 1 ? '' : 's'} will reach students.
         </LText>
@@ -1127,6 +1139,7 @@ function TreeSection({
             Retiring the whole node instead keeps them.
           </Notice>
         ) : null}
+        </ScrollView>
 
         <View style={styles.rowWrap}>
           <LButton
@@ -1956,6 +1969,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   inspectorScroll: { padding: lms.space.lg, gap: lms.space.lg },
+  dialogScroll: { gap: lms.space.md },
   inspectorWide: {
     width: 340,
     flex: 0,

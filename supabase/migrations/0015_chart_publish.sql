@@ -155,11 +155,20 @@ begin
 
   -- 4. Field updates. coalesce against the existing row so an omitted key is
   -- "unchanged", never "null" — every one of these columns is NOT NULL.
-  -- xp_reward is deliberately not written here; it is settled in step 10.
   update skill_nodes n set
     title          = coalesce(u ->> 'title', n.title),
     description    = coalesce(u ->> 'description', n.description),
     kind           = coalesce((u ->> 'kind')::node_kind, n.kind),
+    -- xp_reward is authored data only while a node has no missions. The moment
+    -- it has any, its XP is the sum of them (asserted by request_help_subtree,
+    -- 0004:137-140) and step 10 settles it. Writing it here for a node with
+    -- missions would be overwritten in the same transaction, which is exactly
+    -- the silent no-op this clause exists to stop.
+    xp_reward      = case
+                       when exists (select 1 from missions m where m.node_id = n.id)
+                         then n.xp_reward
+                       else coalesce((u ->> 'xp_reward')::integer, n.xp_reward)
+                     end,
     icon_key       = case when u ? 'icon_key' then u ->> 'icon_key' else n.icon_key end,
     title_override = case when u ? 'title_override'
                           then nullif(btrim(coalesce(u ->> 'title_override', '')), '')

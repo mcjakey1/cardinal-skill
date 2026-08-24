@@ -932,6 +932,15 @@ function TreeSection({
     }
   };
 
+  // Null when the node has no missions, which is the only case its XP is
+  // authored rather than derived. Same graph `live` came from.
+  const missionXp = useMemo(() => {
+    const mine = (editMode && canEdit ? draft.working.missions : data?.missions ?? []).filter(
+      (m) => m.skillId === live?.id,
+    );
+    return mine.length > 0 ? mine.reduce((sum, m) => sum + m.xpReward, 0) : null;
+  }, [canEdit, data?.missions, draft.working.missions, editMode, live?.id]);
+
   const saveNodePatch = (patch: NodePatch) => {
     if (!live) return;
     edit({
@@ -958,6 +967,7 @@ function TreeSection({
           (p) => p.nodeId === live?.id,
         ).length
       }
+      missionXp={missionXp}
       canEdit={canEdit}
       editing={editing}
       onStartEdit={() => setEditing(true)}
@@ -1668,10 +1678,13 @@ const XP_MAX = 2000;
 
 function NodeEditor({
   node,
+  missionXp,
   onSave,
   onCancel,
 }: {
   node: SkillNode;
+  /** Total XP of this node's missions, or null when it has none. */
+  missionXp: number | null;
   onSave: (patch: NodePatch) => void;
   onCancel: () => void;
 }) {
@@ -1686,8 +1699,12 @@ function NodeEditor({
   const [kind, setKind] = useState<NodeKind>(node.kind);
   const [xp, setXp] = useState(String(node.xpReward));
 
+  // A node's XP is authored only while it has no missions. With missions it is
+  // their sum, recomputed on publish, so offering an input would take the edit,
+  // count it as a change, and then silently snap back on the refetch.
+  const xpAuthored = missionXp === null;
   const xpValue = Number.parseInt(xp, 10);
-  const xpError = Number.isNaN(xpValue) || xpValue < XP_MIN || xpValue > XP_MAX
+  const xpError = xpAuthored && (Number.isNaN(xpValue) || xpValue < XP_MIN || xpValue > XP_MAX)
     ? `A node is worth between ${XP_MIN} and ${XP_MAX} XP.`
     : undefined;
   const nameError = name.trim() === '' ? 'A node needs a name.' : undefined;
@@ -1710,13 +1727,22 @@ function NodeEditor({
 
       <Field label="What it covers" value={description} onChangeText={setDescription} tall />
 
-      <Field
-        label="XP"
-        value={xp}
-        onChangeText={setXp}
-        keyboardType="number-pad"
-        error={xpError}
-      />
+      {xpAuthored ? (
+        <Field
+          label="XP"
+          value={xp}
+          onChangeText={setXp}
+          keyboardType="number-pad"
+          error={xpError}
+        />
+      ) : (
+        <View style={styles.inspectorSection}>
+          <Figure label="XP" value={String(missionXp)} />
+          <LText variant="small" tone="muted">
+            The total of this node&rsquo;s missions. Change what a mission is worth to change it.
+          </LText>
+        </View>
+      )}
 
       <Segmented label="Kind" options={KINDS} value={kind} onChange={setKind} />
 
@@ -1733,7 +1759,9 @@ function NodeEditor({
               titleOverride: name.trim() === node.title.trim() ? null : name.trim(),
               description,
               kind,
-              xpReward: xpValue,
+              // Omitted entirely when missions own it, so the change set never
+              // claims an XP edit the publish will not make.
+              ...(xpAuthored ? { xpReward: xpValue } : {}),
             })
           }
         />
@@ -1757,6 +1785,7 @@ function NodeEditor({
 function NodeInspector({
   node,
   prereqCount,
+  missionXp,
   canEdit,
   editing,
   onStartEdit,
@@ -1765,6 +1794,8 @@ function NodeInspector({
 }: {
   node: SkillNode | null;
   prereqCount: number;
+  /** Total XP of this node's missions, or null when it has none. */
+  missionXp: number | null;
   canEdit: boolean;
   editing: boolean;
   onStartEdit: () => void;
@@ -1784,7 +1815,9 @@ function NodeInspector({
   }
 
   if (editing) {
-    return <NodeEditor node={node} onSave={onSave} onCancel={onCancelEdit} />;
+    return (
+      <NodeEditor node={node} missionXp={missionXp} onSave={onSave} onCancel={onCancelEdit} />
+    );
   }
 
   return (

@@ -2,7 +2,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SkillTree } from '@/features/skilltree/SkillTree';
@@ -818,75 +826,32 @@ function TreeSection({
     }
   };
 
-  const inspector = (
-    <View style={[styles.inspector, wide ? styles.inspectorWide : null]}>
-      <ScrollView contentContainerStyle={styles.inspectorScroll}>
-        {live ? (
-          editing ? (
-            <NodeEditor
-              node={live}
-              onCancel={() => setEditing(false)}
-              onSave={(patch) => {
-                edit({
-                  t: 'field',
-                  nodeId: live.id,
-                  before: {
-                    titleOverride: live.titleOverride ?? null,
-                    description: live.description,
-                    kind: live.kind,
-                    xpReward: live.xpReward,
-                  },
-                  after: patch,
-                });
-                setEditing(false);
-              }}
-            />
-          ) : (
-            <>
-              <View style={styles.inspectorSection}>
-                <LText variant="section">{live.title}</LText>
-                <View style={styles.rowWrap}>
-                  <Badge label={live.kind} tone="brand" />
-                  {live.graded === false ? <Badge label="Ungraded practice" tone="gold" /> : null}
-                  {live.archived ? <Badge label="Retired" tone="attention" /> : null}
-                </View>
-              </View>
+  const saveNodePatch = (patch: NodePatch) => {
+    if (!live) return;
+    edit({
+      t: 'field',
+      nodeId: live.id,
+      before: {
+        titleOverride: live.titleOverride ?? null,
+        description: live.description,
+        kind: live.kind,
+        xpReward: live.xpReward,
+      },
+      after: patch,
+    });
+    setEditing(false);
+  };
 
-              <View style={styles.inspectorSection}>
-                <Figure label="XP" value={String(live.xpReward)} />
-                <Figure
-                  label="Prerequisites"
-                  value={String(
-                    data?.tree.prereqs.filter((p) => p.nodeId === live.id).length ?? 0,
-                  )}
-                />
-              </View>
-
-              {live.description ? (
-                <View style={styles.inspectorSection}>
-                  <LText variant="micro" tone="muted">
-                    What it covers
-                  </LText>
-                  <LText variant="small">{live.description}</LText>
-                </View>
-              ) : null}
-
-              {canEdit ? (
-                <LButton label="Edit this node" icon="edit-3" onPress={() => setEditing(true)} />
-              ) : null}
-            </>
-          )
-        ) : (
-          <View style={styles.inspectorSection}>
-            <LText variant="section">No cell selected</LText>
-            <LText variant="small" tone="muted">
-              Pick a cell on the chart to see what it is worth and what it opens after. The chart is
-              drawn exactly as a student receives it.
-            </LText>
-          </View>
-        )}
-      </ScrollView>
-    </View>
+  const inspectorBody = (
+    <NodeInspector
+      node={live}
+      prereqCount={data?.tree.prereqs.filter((p) => p.nodeId === live?.id).length ?? 0}
+      canEdit={canEdit}
+      editing={editing}
+      onStartEdit={() => setEditing(true)}
+      onCancelEdit={() => setEditing(false)}
+      onSave={saveNodePatch}
+    />
   );
 
   return (
@@ -976,7 +941,28 @@ function TreeSection({
         )}
       </View>
 
-      {inspector}
+      {/* Below `lms.wide` the tree renders outside the page's ScrollView so the
+          canvas can be panned. A form stacked under it would squeeze the canvas
+          to its floor and then clip with no way to scroll to the bottom, so the
+          same inspector arrives as a sheet over the chart instead. */}
+      {wide ? (
+        <View style={[styles.inspector, styles.inspectorWide]}>
+          <ScrollView contentContainerStyle={styles.inspectorScroll}>{inspectorBody}</ScrollView>
+        </View>
+      ) : (
+        <LModal
+          visible={Boolean(live)}
+          title={live?.title ?? 'Node'}
+          onRequestClose={() => {
+            setSelected(null);
+            setEditing(false);
+          }}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <ScrollView contentContainerStyle={styles.inspectorScroll}>{inspectorBody}</ScrollView>
+          </KeyboardAvoidingView>
+        </LModal>
+      )}
       </View>
 
       {/* Outside the section's layout on purpose. Anything absolutely positioned
@@ -1568,6 +1554,73 @@ function NodeEditor({
         ) : null}
       </View>
     </View>
+  );
+}
+
+/**
+ * What the inspector shows, without the surround. The rail and the narrow-screen
+ * sheet wrap it differently and must otherwise render exactly the same thing.
+ */
+function NodeInspector({
+  node,
+  prereqCount,
+  canEdit,
+  editing,
+  onStartEdit,
+  onCancelEdit,
+  onSave,
+}: {
+  node: SkillNode | null;
+  prereqCount: number;
+  canEdit: boolean;
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: (patch: NodePatch) => void;
+}) {
+  if (!node) {
+    return (
+      <View style={styles.inspectorSection}>
+        <LText variant="section">No cell selected</LText>
+        <LText variant="small" tone="muted">
+          Pick a cell on the chart to see what it is worth and what it opens after. The chart is
+          drawn exactly as a student receives it.
+        </LText>
+      </View>
+    );
+  }
+
+  if (editing) {
+    return <NodeEditor node={node} onSave={onSave} onCancel={onCancelEdit} />;
+  }
+
+  return (
+    <>
+      <View style={styles.inspectorSection}>
+        <LText variant="section">{node.title}</LText>
+        <View style={styles.rowWrap}>
+          <Badge label={node.kind} tone="brand" />
+          {node.graded === false ? <Badge label="Ungraded practice" tone="gold" /> : null}
+          {node.archived ? <Badge label="Retired" tone="attention" /> : null}
+        </View>
+      </View>
+
+      <View style={styles.inspectorSection}>
+        <Figure label="XP" value={String(node.xpReward)} />
+        <Figure label="Prerequisites" value={String(prereqCount)} />
+      </View>
+
+      {node.description ? (
+        <View style={styles.inspectorSection}>
+          <LText variant="micro" tone="muted">What it covers</LText>
+          <LText variant="small">{node.description}</LText>
+        </View>
+      ) : null}
+
+      {canEdit ? (
+        <LButton label="Edit this node" icon="edit-3" onPress={onStartEdit} />
+      ) : null}
+    </>
   );
 }
 

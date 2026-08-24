@@ -15,6 +15,24 @@ export interface PublishCounts {
   missionsDeleted: number;
 }
 
+/**
+ * A missing function is a deployment gap; a failed transaction is a data
+ * problem. Only one of those is the instructor's, and they must not read alike.
+ *
+ * Both RPCs here ship in migration 0015. A project that has not applied it
+ * answers PGRST202 with a sentence about the PostgREST schema cache, which is
+ * true, unactionable, and reads to an instructor like their publish broke.
+ * Everything else is rethrown untouched.
+ */
+const NEEDS_MIGRATION =
+  'This needs a database update that has not been applied to this project yet. '
+  + 'Nothing was changed — it is a setup step, not a problem with your chart.';
+
+function failed(error: { code?: string }): never {
+  if (error.code === 'PGRST202') throw new Error(NEEDS_MIGRATION);
+  throw error;
+}
+
 /** Exact per-node counts for the confirm step. Owner-gated in the database. */
 export async function fetchArchiveImpact(courseId: string, nodeIds: string[]): Promise<ImpactRow[]> {
   if (nodeIds.length === 0) return [];
@@ -22,7 +40,7 @@ export async function fetchArchiveImpact(courseId: string, nodeIds: string[]): P
     p_course_id: courseId,
     p_node_ids: nodeIds,
   });
-  if (error) throw error;
+  if (error) failed(error);
   return (data ?? []).map((row: Record<string, number | string>) => ({
     nodeId: String(row.node_id),
     studentsCompleted: Number(row.students_completed),
@@ -42,7 +60,7 @@ export async function publishChart(courseId: string, set: ChartChangeSet): Promi
     p_course_id: courseId,
     p_changes: buildPublishPayload(set),
   });
-  if (error) throw error;
+  if (error) failed(error);
   const row = (Array.isArray(data) ? data[0] : data) ?? {};
   return {
     nodesInserted: Number(row.nodes_inserted ?? 0),

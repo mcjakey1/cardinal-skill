@@ -10,7 +10,7 @@
  */
 
 import { supabase } from '@/lib/supabase';
-import { parseBackdrop, type Backdrop } from '@/theme/backdrops';
+import { MAX_ACCOUNT_URI, parseBackdrop, type Backdrop } from '@/theme/backdrops';
 
 const TABLE = 'student_preferences';
 
@@ -31,6 +31,12 @@ export async function fetchAccountBackdrop(): Promise<Backdrop | null> {
 /** Write-through. Returns whether the account actually took it. */
 export async function saveAccountBackdrop(next: Backdrop): Promise<boolean> {
   try {
+    // Refused here rather than sent and rejected. Migration 0014 bounds the row,
+    // so an oversized backdrop would otherwise cost a round trip carrying every
+    // one of those bytes, only to come back as a check violation this function
+    // swallows — the request is the expensive part, not the failure.
+    if ((next.imageUri?.length ?? 0) > MAX_ACCOUNT_URI) return false;
+
     const { data } = await supabase.auth.getSession();
     const userId = data.session?.user.id;
     if (!userId) return false;

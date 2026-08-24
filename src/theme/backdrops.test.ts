@@ -5,9 +5,12 @@ import {
   BACKDROP_IDS,
   BACKDROP_LABELS,
   DEFAULT_BACKDROP,
+  MAX_ACCOUNT_URI,
   MAX_IMAGE_URI,
   PATTERN_TILE,
+  approximateBytes,
   checkImageUri,
+  describeSize,
   imageLimitFor,
   parseBackdrop,
   patternCells,
@@ -124,6 +127,27 @@ test('a picture stored on one device still displays on the other', () => {
   // account's choice would vanish on the very device it travelled to.
   const fromPhone = `data:image/jpeg;base64,${'A'.repeat(imageLimitFor('web') + 5000)}`;
   assert.equal(parseBackdrop({ id: 'image', imageUri: fromPhone, dim: 4 }).id, 'image');
+});
+
+test('every picking ceiling stays inside what the account row allows', () => {
+  // Migration 0014 bounds the row. If a picking limit ever passes this, the
+  // student gets a check violation nobody surfaces instead of a refusal.
+  for (const platform of ['web', 'native'] as const) {
+    assert.ok(imageLimitFor(platform) < MAX_ACCOUNT_URI, `${platform} exceeds the row`);
+  }
+});
+
+test('a refusal states the size in the units a student thinks in', () => {
+  const tooBig = `data:image/jpeg;base64,${'A'.repeat(1_000_000)}`;
+  const refused = checkImageUri(tooBig, imageLimitFor('web'));
+  assert.equal(refused.ok, false);
+  if (refused.ok) return;
+  assert.match(refused.reason, /\d/, 'the reason should carry real numbers');
+  // Base64 spends four characters on three bytes, so the figure quoted is the
+  // photo's actual weight and not its encoded length.
+  assert.ok(approximateBytes(tooBig) < 1_000_000);
+  assert.equal(describeSize(2_400_000), '2.4 MB');
+  assert.equal(describeSize(525_000), '525 KB');
 });
 
 test('pattern ink clears the background on every preset', () => {

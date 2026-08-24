@@ -166,6 +166,36 @@ export function imageLimitFor(platform: 'web' | 'native'): number {
   return platform === 'web' ? MAX_IMAGE_URI_WEB : MAX_IMAGE_URI;
 }
 
+/**
+ * The most a backdrop may weigh on its way to `student_preferences`.
+ *
+ * Mirrors the `canvas_backdrop_fits` constraint in migration 0014, a little
+ * under it to leave room for the rest of the object. Both limits above are
+ * already well inside this, so nothing the picker can produce reaches it — that
+ * is the point. It is the boundary check, not the working limit: whoever raises
+ * a picking ceiling later gets a refusal here rather than a check violation the
+ * database reports and `saveAccountBackdrop` swallows.
+ */
+export const MAX_ACCOUNT_URI = 4_000_000;
+
+/**
+ * Roughly how many bytes a data URI actually carries. Base64 spends four
+ * characters on every three bytes, so a student's "two megabyte photo" is about
+ * 2.7 million characters by the time it gets here — which is the number worth
+ * putting in front of them when it is refused.
+ */
+export function approximateBytes(uri: string): number {
+  const comma = uri.indexOf(',');
+  if (!uri.startsWith('data:') || comma < 0) return uri.length;
+  return Math.round(((uri.length - comma - 1) * 3) / 4);
+}
+
+/** Bytes as a student would say them. */
+export function describeSize(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1000))} KB`;
+}
+
 export type ImageUriCheck =
   | { ok: true; uri: string }
   | { ok: false; reason: string };
@@ -176,7 +206,10 @@ export function checkImageUri(raw: string, limit: number = MAX_IMAGE_URI): Image
   if (uri.length > limit) {
     return {
       ok: false,
-      reason: 'That photo is too large to carry to your other devices. Choose a smaller one, or paste a link to it.',
+      reason:
+        `That photo is ${describeSize(approximateBytes(uri))} and the limit is ` +
+        `${describeSize(approximateBytes('data:image/jpeg;base64,'.padEnd(limit, 'A')))}, ` +
+        'because it travels to your other devices. Choose a smaller one, or paste a link to it.',
     };
   }
   if (!ALLOWED_SCHEME.test(uri)) {

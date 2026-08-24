@@ -10,13 +10,14 @@
 
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import {
   BACKDROP_IDS,
   BACKDROP_LABELS,
   DIM_STEPS,
   checkImageUri,
+  imageLimitFor,
 } from '@/theme/backdrops';
 import type { DitherLevel } from '@/theme/dither';
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -27,12 +28,15 @@ import { Bevel, PixelButton, PixelInput, PixelText, bevelStyle } from './pixel';
 
 export function BackdropPicker() {
   const t = useTheme();
-  const { theme, backdrop, setBackdrop } = useAppTheme();
+  const { theme, backdrop, setBackdrop, imageBroken } = useAppTheme();
   const [link, setLink] = useState('');
   const [notice, setNotice] = useState<{ text: string; bad: boolean } | null>(null);
+  // The web keeps this in `localStorage`, which is far smaller than a device's
+  // store and counts every character twice.
+  const limit = imageLimitFor(Platform.OS === 'web' ? 'web' : 'native');
 
   const applyImage = (uri: string) => {
-    const checked = checkImageUri(uri);
+    const checked = checkImageUri(uri, limit);
     if (!checked.ok) {
       setNotice({ text: checked.reason, bad: true });
       return;
@@ -152,7 +156,15 @@ export function BackdropPicker() {
           </View>
         ) : null}
 
-        {notice ? (
+        {/* A selected choice that draws nothing is the confusing case: the
+            chart has quietly fallen back to its field and only this can say
+            why. It outranks the notice, which may be the "applied" line from
+            the very image that then failed to load. */}
+        {backdrop.id === 'image' && imageBroken ? (
+          <PixelText variant="micro" colour={theme.danger}>
+            That image will not load, so the chart is on its field. Check the link, or choose a photo.
+          </PixelText>
+        ) : notice ? (
           <PixelText variant="micro" colour={notice.bad ? theme.danger : theme.success}>
             {notice.text}
           </PixelText>

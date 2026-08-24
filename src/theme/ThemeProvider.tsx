@@ -44,6 +44,13 @@ interface AppThemeContextValue {
    */
   backdrop: Backdrop;
   setBackdrop: (next: Backdrop) => void;
+  /**
+   * The chosen picture would not load — a dead link, or a photo the browser
+   * refused. The chart quietly falls back to its field; this is what lets the
+   * picker say so instead of showing a selected choice that draws nothing.
+   */
+  imageBroken: boolean;
+  reportImageBroken: () => void;
   availableThemes: readonly ThemePalette[];
   ready: boolean;
 }
@@ -54,6 +61,8 @@ const AppThemeContext = createContext<AppThemeContextValue>({
   setThemeId: () => {},
   backdrop: DEFAULT_BACKDROP,
   setBackdrop: () => {},
+  imageBroken: false,
+  reportImageBroken: () => {},
   availableThemes,
   ready: false,
 });
@@ -69,9 +78,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [currentThemeId, setCurrentThemeId] = useState<ThemePresetId>(DEFAULT_THEME_ID);
   const [backdrop, setBackdropState] = useState<Backdrop>(DEFAULT_BACKDROP);
   const [ready, setReady] = useState(false);
+  const [imageBroken, setImageBroken] = useState(false);
   // The account is the source of truth, and it can answer before the disk does.
   // Without this the slower device read lands second and undoes it.
   const accountAnswered = useRef(false);
+
+  // A different picture deserves a fresh attempt, and a link can start working
+  // again, so this clears whenever the choice changes.
+  useEffect(() => setImageBroken(false), [backdrop.imageUri]);
+  const reportImageBroken = useCallback(() => setImageBroken(true), []);
 
   useEffect(() => {
     let live = true;
@@ -147,10 +162,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       setThemeId,
       backdrop,
       setBackdrop,
+      imageBroken,
+      reportImageBroken,
       availableThemes,
       ready,
     }),
-    [backdrop, currentThemeId, ready, setBackdrop, setThemeId],
+    [backdrop, currentThemeId, imageBroken, ready, reportImageBroken, setBackdrop, setThemeId],
   );
 
   return (

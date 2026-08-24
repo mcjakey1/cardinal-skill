@@ -8,6 +8,7 @@ import {
   MAX_IMAGE_URI,
   PATTERN_TILE,
   checkImageUri,
+  imageLimitFor,
   parseBackdrop,
   patternCells,
   patternInk,
@@ -102,6 +103,27 @@ test('every pattern covers enough of its tile to be seen', () => {
     assert.ok(coverage >= 0.05, `${id} covers ${(coverage * 100).toFixed(1)}% of its tile`);
     assert.ok(coverage <= 0.4, `${id} covers ${(coverage * 100).toFixed(1)}% and reads as a fill`);
   }
+});
+
+test('the web gets a smaller ceiling than a device', () => {
+  const web = imageLimitFor('web');
+  const native = imageLimitFor('native');
+  assert.ok(web < native, 'localStorage is the smaller store, and counts UTF-16');
+  // Two bytes per character there, in an origin budget of roughly five megabytes
+  // that this app also keeps its session, prefs and course cache in.
+  assert.ok(web * 2 < 5_000_000 / 2, 'a picture should not claim half the origin');
+
+  const photo = `data:image/jpeg;base64,${'A'.repeat(web + 1)}`;
+  assert.equal(checkImageUri(photo, web).ok, false);
+  assert.equal(checkImageUri(photo, native).ok, true);
+});
+
+test('a picture stored on one device still displays on the other', () => {
+  // Picked on a phone, under the device ceiling, synced down to the browser.
+  // Reading it back must not apply the web's stricter picking limit, or the
+  // account's choice would vanish on the very device it travelled to.
+  const fromPhone = `data:image/jpeg;base64,${'A'.repeat(imageLimitFor('web') + 5000)}`;
+  assert.equal(parseBackdrop({ id: 'image', imageUri: fromPhone, dim: 4 }).id, 'image');
 });
 
 test('pattern ink clears the background on every preset', () => {

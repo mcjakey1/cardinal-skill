@@ -147,20 +147,33 @@ export function patternCells(id: PatternId): PatternCell[] {
 const ALLOWED_SCHEME = /^(https:\/\/|data:image\/)/i;
 
 /**
- * The ceiling on an inlined picture. It has to clear three stores: AsyncStorage
- * on Android, which starts failing on entries past a couple of megabytes; the
- * `student_preferences` row; and the request that carries it there.
+ * The ceiling on an inlined picture, per platform.
+ *
+ * On a device, AsyncStorage is SQLite and starts failing on entries past a
+ * couple of megabytes. On the web it is `localStorage`, which is about 5MB for
+ * the whole origin and counts UTF-16 code units — so a 2,000,000-character data
+ * URI is 4MB of a store this app also keeps its session, prefs and course cache
+ * in. The write throws `QuotaExceededError`, and the only honest place to say
+ * so is before the student picks the photo, not after.
+ *
+ * 700,000 characters is ~1.4MB there, which leaves the rest of the origin room
+ * to breathe. A JPEG at the picker's half quality is usually well inside it.
  */
 export const MAX_IMAGE_URI = 2_000_000;
+export const MAX_IMAGE_URI_WEB = 700_000;
+
+export function imageLimitFor(platform: 'web' | 'native'): number {
+  return platform === 'web' ? MAX_IMAGE_URI_WEB : MAX_IMAGE_URI;
+}
 
 export type ImageUriCheck =
   | { ok: true; uri: string }
   | { ok: false; reason: string };
 
-export function checkImageUri(raw: string): ImageUriCheck {
+export function checkImageUri(raw: string, limit: number = MAX_IMAGE_URI): ImageUriCheck {
   const uri = raw.trim();
   if (!uri) return { ok: false, reason: 'Paste a link or choose a photo first.' };
-  if (uri.length > MAX_IMAGE_URI) {
+  if (uri.length > limit) {
     return {
       ok: false,
       reason: 'That photo is too large to carry to your other devices. Choose a smaller one, or paste a link to it.',

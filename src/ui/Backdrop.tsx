@@ -10,7 +10,7 @@
  * The preference itself lives in `@/theme/backdrops`.
  */
 
-import { useEffect, useId, useState } from 'react';
+import { useId } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 
@@ -39,19 +39,18 @@ interface Props {
 }
 
 export function Backdrop({ flat = false }: Props) {
-  const { theme, backdrop } = useAppTheme();
+  // `imageBroken` is held by the provider rather than here: every mounted
+  // Backdrop draws the same choice, and the picker has to be able to say that
+  // the picture failed instead of showing a selection that draws nothing.
+  const { theme, backdrop, imageBroken, reportImageBroken } = useAppTheme();
   // Two of these mount at once whenever the picker is open: the chart behind
   // the modal, and the preview inside it. Sharing a definition name meant
   // closing the picker took the chart's pattern with it.
   const scrimName = instanceNamespace('scrim', useId());
-  const [broken, setBroken] = useState(false);
-
-  // A new picture deserves a fresh attempt; a link can start working again.
-  useEffect(() => setBroken(false), [backdrop.imageUri]);
 
   const remote = backdrop.imageUri?.startsWith('https:') ?? false;
   const showImage =
-    backdrop.id === 'image' && Boolean(backdrop.imageUri) && !broken && !(flat && remote);
+    backdrop.id === 'image' && Boolean(backdrop.imageUri) && !imageBroken && !(flat && remote);
 
   if (showImage) {
     return (
@@ -62,7 +61,7 @@ export function Backdrop({ flat = false }: Props) {
           source={{ uri: backdrop.imageUri! }}
           style={StyleSheet.absoluteFill}
           resizeMode="cover"
-          onError={() => setBroken(true)}
+          onError={reportImageBroken}
         />
         {backdrop.dim > 0 ? (
           <Svg width="100%" height="100%" style={StyleSheet.absoluteFill}>

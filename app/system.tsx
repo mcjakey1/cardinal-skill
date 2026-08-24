@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePrefs } from '@/lib/prefs';
 import { clearLocal } from '@/lib/progress';
+import { BACKDROP_LABELS } from '@/theme/backdrops';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -26,7 +27,7 @@ export default function System() {
   const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
-  const { theme } = useAppTheme();
+  const { theme, backdrop } = useAppTheme();
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState(false);
@@ -73,6 +74,18 @@ export default function System() {
           >
             <PixelButton
               label="Choose"
+              tone="panel"
+              grow={false}
+              onPress={() => setThemePickerOpen(true)}
+            />
+          </Row>
+
+          <Row
+            title="Canvas backdrop"
+            detail={`${BACKDROP_LABELS[backdrop.id]} sits behind your skill tree. Patterns, or a photo of your own.`}
+          >
+            <PixelButton
+              label="Change"
               tone="panel"
               grow={false}
               onPress={() => setThemePickerOpen(true)}

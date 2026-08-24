@@ -5,6 +5,7 @@ import { usePrefs } from '@/lib/prefs';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch } from '@/theme/tokens';
 import type { ThemePalette, ThemePresetId } from '@/theme/themes';
+import { BackdropPicker } from './BackdropPicker';
 import { PixelButton, PixelIcon, PixelText } from './pixel';
 
 interface Props {
@@ -36,16 +37,21 @@ export function ThemePickerModal({ visible, onClose }: Props) {
         >
           <View style={styles.headerCopy}>
             <PixelText variant="title" colour={theme.textPrimary}>
-              Theme presets
+              Theme and canvas
             </PixelText>
             <PixelText variant="micro" colour={theme.textSecondary}>
-              Changes preview instantly and save on this device.
+              Changes preview instantly. The palette saves on this device; the backdrop saves to your account.
             </PixelText>
           </View>
           <PixelButton label="Done" grow={false} onPress={onClose} />
         </View>
 
         <ScrollView contentContainerStyle={styles.list}>
+          {/* The backdrop leads: it is the one setting here a student changes
+              more than once, and five full-height palette cards ahead of it is
+              a setting nobody finds. */}
+          <BackdropPicker />
+
           <View accessibilityRole="radiogroup" accessibilityLabel="Theme presets">
             {availableThemes.map((preset) => (
               <ThemeOption

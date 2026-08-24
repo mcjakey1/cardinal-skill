@@ -734,6 +734,12 @@ function TreeSection({
   // where it was made. Archived nodes are already gone as far as a student goes.
   const shown = useMemo(() => aliveSubgraph(draft.working), [draft.working]);
 
+  // The server returns retired nodes to the owner and hides them from students
+  // by RLS, so the read-only canvas has to filter them the same way edit mode
+  // does. Without this the owner is the one person shown a chart that is not
+  // the chart, which is the opposite of what this canvas is for.
+  const liveShown = useMemo(() => (data ? aliveSubgraph(data.tree) : null), [data]);
+
   const notice = (text: string) => {
     setLinkNotice(text);
     setTimeout(() => setLinkNotice(null), 2400);
@@ -1074,7 +1080,7 @@ function TreeSection({
             <DitherField variant="chart" flat={flat} />
           <SkillTree
             viewportKey={`instructor:${course.id}`}
-              tree={editMode && canEdit ? shown : data.tree}
+              tree={editMode && canEdit ? shown : liveShown ?? data.tree}
               masteredIds={data.masteredIds}
               selectedId={selected?.id ?? null}
               onSelectNode={selectNode}
@@ -1657,7 +1663,7 @@ function PageHead({
  * edge into a retired node, which would disable Publish for the one workflow
  * that needs it. Everything that asks "what survives" goes through here.
  */
-function aliveSubgraph(state: ChartState): Tree {
+function aliveSubgraph(state: Tree): Tree {
   const nodes = state.nodes.filter((n) => !n.archived);
   const ids = new Set(nodes.map((n) => n.id));
   return {

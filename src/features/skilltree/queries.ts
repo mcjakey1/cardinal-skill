@@ -60,7 +60,7 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
       supabase
         .from('skill_nodes')
         .select(
-          'id, course_id, track_id, title, description, kind, icon_key, xp_reward, syllabus_topic, universal_skill, learning_objectives, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded',
+          'id, course_id, track_id, title, description, kind, icon_key, xp_reward, syllabus_topic, universal_skill, learning_objectives, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded, archived',
         )
         .eq('course_id', courseId)
         .order('sort_order'),
@@ -110,6 +110,10 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
     // Only an explicit `false` is supplemental. Every node written before help
     // subtrees existed came from a syllabus and is graded.
     graded: r.graded,
+    // Retired by the owner. RLS hides these rows from students entirely, so a
+    // non-owner never sees one; the owner does, and needs the flag to tell a
+    // retired node from a live one and to restore it.
+    archived: r.archived,
   }));
 
   const prereqs: Prereq[] = (prereqsRes.data ?? []).map((r) => ({

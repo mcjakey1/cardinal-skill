@@ -143,6 +143,13 @@ interface Props {
   onToggleLinkMode?: () => void;
   onCancelLink?: () => void;
   onDeleteNode?: () => void;
+  /**
+   * What the destructive tool is called. Defaults to DELETE NODE, which is true
+   * on the student screen: that one really does drop the node from a local
+   * draft. The instructor path archives instead, and "archive, never delete" is
+   * the safety decision this whole feature rests on, so it says so there.
+   */
+  deleteLabel?: string;
 }
 
 interface Placed extends SkillNode {
@@ -290,6 +297,7 @@ function SkillTreeCanvas({
   linkMode,
   linkSourceId,
   linkNotice,
+  deleteLabel,
   onToggleEditMode,
   onAddNode,
   onToggleLinkMode,
@@ -665,6 +673,7 @@ function SkillTreeCanvas({
             linkSourceId={linkSourceId}
             selected={Boolean(selectedId)}
             reduceMotion={Boolean(reduceMotion)}
+            deleteLabel={deleteLabel}
             onAdd={() => {
               const world = toWorld(
                 { x: viewport.width / 2, y: viewport.height / 2 },
@@ -691,11 +700,12 @@ function SkillTreeCanvas({
   );
 }
 
-function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, onAdd, onLink, onDelete, onReset, onExit }: {
+function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLabel, onAdd, onLink, onDelete, onReset, onExit }: {
   linkMode: boolean;
   linkSourceId?: string | null;
   selected: boolean;
   reduceMotion: boolean;
+  deleteLabel?: string;
   onAdd: () => void;
   onLink: () => void;
   onDelete?: () => void;
@@ -706,7 +716,7 @@ function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, onAdd, on
   const actions = [
     { label: '+ ADD NODE', onPress: onAdd, disabled: false },
     { label: linkMode && linkSourceId ? 'PICK TARGET' : 'CONNECT', onPress: onLink, disabled: false },
-    { label: 'DELETE NODE', onPress: onDelete, disabled: !selected },
+    { label: deleteLabel ?? 'DELETE NODE', onPress: onDelete, disabled: !selected },
     { label: 'RESET POSITIONS', onPress: onReset, disabled: !onReset },
     { label: 'EXIT EDIT', onPress: onExit, disabled: false },
   ];

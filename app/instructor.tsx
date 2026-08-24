@@ -1031,18 +1031,25 @@ function TreeSection({
             {data?.title ?? course.title}
           </LText>
           <View style={styles.spacer} />
-          {draftReady && countChanges(changes) > 0 ? (
+          {/* `|| canRedo` because undoing the last op takes the count to zero,
+              and without it the whole tray vanishes mid-gesture and strands the
+              redo. The badge and Publish still track real changes. */}
+          {draftReady && (countChanges(changes) > 0 || canRedo) ? (
             <>
-              <Badge label={`${countChanges(changes)} unpublished`} tone="gold" />
+              {countChanges(changes) > 0 ? (
+                <Badge label={`${countChanges(changes)} unpublished`} tone="gold" />
+              ) : null}
               <LButton label="Undo" icon="rotate-ccw" size="sm" disabled={!canUndo} onPress={undoEdit} />
               <LButton label="Redo" icon="rotate-cw" size="sm" disabled={!canRedo} onPress={redoEdit} />
-              <LButton
-                label="Publish"
-                variant="primary"
-                size="sm"
-                disabled={!validation.isValid}
-                onPress={openConfirm}
-              />
+              {countChanges(changes) > 0 ? (
+                <LButton
+                  label="Publish"
+                  variant="primary"
+                  size="sm"
+                  disabled={!validation.isValid}
+                  onPress={openConfirm}
+                />
+              ) : null}
             </>
           ) : null}
           {/* Only with nothing unpublished pending: an undo on top of a
@@ -1131,6 +1138,9 @@ function TreeSection({
               onAddNode={canEdit ? addNode : undefined}
               onToggleLinkMode={canEdit ? startLink : undefined}
               onCancelLink={canEdit ? cancelLink : undefined}
+              // "Archive, never delete" is the safety decision this feature rests
+              // on; the tool that does it should not say the opposite.
+              deleteLabel="RETIRE NODE"
               onDeleteNode={canEdit ? archiveSelected : undefined}
               // `useNodeLayout` is a device-local arrangement of someone else's
               // chart. An instructor's move is a real coordinate that publishes.
@@ -1186,7 +1196,8 @@ function TreeSection({
                 {row.missionsHidden === 1 ? '' : 's'} hidden, {row.danglingEdges} connection
                 {row.danglingEdges === 1 ? '' : 's'} dropped
                 {row.helpDescendants > 0 ? `, ${row.helpDescendants} help step${row.helpDescendants === 1 ? '' : 's'} hidden with it` : ''}.
-                Their XP stays banked, and you can restore it.
+                Their XP stays banked and nothing is deleted, so this is reversible
+                while it is unpublished, and by Undo publish straight afterwards.
               </LText>
             ))}
           </Notice>

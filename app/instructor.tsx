@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -10,6 +10,7 @@ import { MIN_COHORT, STALE_DAYS, activityFlag } from '@/features/skilltree/cohor
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
 import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
+import { validateGraph } from '@/features/skilltree/validation';
 import type { NodeKind, SkillNode } from '@/features/skilltree/types';
 import type { NodePatch } from '@/features/skilltree/chartDraft';
 import { useChartDraft } from '@/lib/useChartDraft';
@@ -643,7 +644,20 @@ function TreeSection({
     queryFn: () => fetchTree(course.id),
   });
 
-  const { edit } = useChartDraft(canEdit ? course.id : undefined);
+  const { draft, ready, edit, reset } = useChartDraft(canEdit ? course.id : undefined);
+
+  // Seed once per course, and only from a fresh read. A draft already holding
+  // edits must survive a refetch, or a background refresh silently discards
+  // work in progress.
+  const seeded = useRef<string | null>(null);
+  useEffect(() => {
+    if (!canEdit || !data || !ready) return;
+    if (seeded.current === course.id) return;
+    seeded.current = course.id;
+    if (draft.ops.length === 0) {
+      reset({ nodes: data.tree.nodes, prereqs: data.tree.prereqs, missions: data.missions });
+    }
+  }, [canEdit, course.id, data, draft.ops.length, ready, reset]);
 
   // `selected` is a snapshot from the moment of the click. Everything below
   // reads the live row so an edit is never applied to a pre-publish copy.
@@ -653,6 +667,89 @@ function TreeSection({
   useEffect(() => {
     setEditing(false);
   }, [selected?.id]);
+
+  const [editMode, setEditMode] = useState(false);
+  const [linkMode, setLinkMode] = useState(false);
+  const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+
+  // In edit mode the canvas draws the draft, so an unpublished change shows
+  // where it was made. Archived nodes are already gone as far as a student goes.
+  const shown = useMemo(
+    () => ({
+      nodes: draft.working.nodes.filter((n) => !n.archived),
+      prereqs: draft.working.prereqs,
+    }),
+    [draft.working],
+  );
+
+  const notice = (text: string) => {
+    setLinkNotice(text);
+    setTimeout(() => setLinkNotice(null), 2400);
+  };
+
+  const addNode = (at: { x: number; y: number }) => {
+    const node: SkillNode = {
+      id: crypto.randomUUID(),
+      courseId: course.id,
+      trackId: null,
+      title: 'New node',
+      description: '',
+      kind: 'topic',
+      xpReward: 50,
+      x: at.x,
+      y: at.y,
+      sortOrder: draft.working.nodes.length,
+    };
+    edit({ t: 'add', node });
+    setSelected(node);
+  };
+
+  const startLink = () => {
+    if (!selected) {
+      notice('Select a node first');
+      return;
+    }
+    setLinkSourceId(selected.id);
+    setLinkMode(true);
+  };
+
+  const cancelLink = () => {
+    setLinkMode(false);
+    setLinkSourceId(null);
+  };
+
+  const selectNode = (node: SkillNode) => {
+    if (!linkMode || !linkSourceId) {
+      setSelected(node);
+      return;
+    }
+    if (linkSourceId === node.id) {
+      notice('A node cannot require itself');
+      return;
+    }
+    const next = [...draft.working.prereqs, { nodeId: node.id, prereqId: linkSourceId }];
+    const check = validateGraph(draft.working.nodes, next);
+    if (!check.isValid) {
+      notice(check.errors[0]?.message ?? 'That link would create a loop');
+      cancelLink();
+      return;
+    }
+    edit({ t: 'link', nodeId: node.id, prereqId: linkSourceId });
+    cancelLink();
+  };
+
+  const archiveSelected = () => {
+    if (!selected) return;
+    edit({ t: 'archive', nodeId: selected.id });
+    setSelected(null);
+  };
+
+  const moveNode = (nodeId: string, at: { x: number; y: number }) => {
+    const before = draft.working.nodes.find((n) => n.id === nodeId);
+    if (!before) return;
+    edit({ t: 'move', nodeId, before: { x: before.x, y: before.y }, after: at });
+  };
 
   const inspector = (
     <View style={[styles.inspector, wide ? styles.inspectorWide : null]}>
@@ -766,12 +863,32 @@ function TreeSection({
             <DitherField variant="chart" flat={flat} />
           <SkillTree
             viewportKey={`instructor:${course.id}`}
-              tree={data.tree}
+              tree={editMode && canEdit ? shown : data.tree}
               masteredIds={data.masteredIds}
               selectedId={selected?.id ?? null}
-              onSelectNode={setSelected}
+              onSelectNode={selectNode}
               reduceMotion={motionOff}
               lowBandwidth={flat}
+              editMode={editMode}
+              linkMode={linkMode}
+              linkSourceId={linkSourceId}
+              linkNotice={linkNotice}
+              onToggleEditMode={
+                canEdit
+                  ? (next) => {
+                      setEditMode(next);
+                      if (!next) cancelLink();
+                    }
+                  : undefined
+              }
+              onAddNode={canEdit ? addNode : undefined}
+              onToggleLinkMode={canEdit ? startLink : undefined}
+              onCancelLink={canEdit ? cancelLink : undefined}
+              onDeleteNode={canEdit ? archiveSelected : undefined}
+              // `useNodeLayout` is a device-local arrangement of someone else's
+              // chart. An instructor's move is a real coordinate that publishes.
+              positions={undefined}
+              onMoveNode={canEdit ? moveNode : undefined}
             />
           </View>
         )}

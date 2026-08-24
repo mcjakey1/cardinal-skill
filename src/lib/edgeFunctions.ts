@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { edgeErrorMessage } from './edgeFunctionError';
+import { readEdgeResponseText, type EdgeResponseStreamTelemetry } from './edgeStream';
 
 export { edgeErrorMessage } from './edgeFunctionError';
 
@@ -8,13 +9,18 @@ const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 const DEFAULT_TIMEOUT_MS = 90_000;
 
 export class EdgeFunctionError extends Error {
-  constructor(
-    message: string,
-    readonly status: number | null,
-  ) {
+  readonly status: number | null;
+
+  constructor(message: string, status: number | null) {
     super(message);
     this.name = 'EdgeFunctionError';
+    this.status = status;
   }
+}
+
+export interface EdgeFunctionTelemetry extends EdgeResponseStreamTelemetry {
+  onRequest?: (event: { endpoint: string; requestBytes: number }) => void;
+  onResponse?: (event: { status: number; durationMs: number; contentLength: number | null }) => void;
 }
 
 /**
@@ -26,6 +32,7 @@ export async function callEdgeFunction<T>(
   functionName: string,
   body: Readonly<Record<string, unknown>>,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  telemetry?: EdgeFunctionTelemetry,
 ): Promise<T> {
   if (!supabaseUrl || !anonKey) {
     throw new EdgeFunctionError('The API connection is not configured on this device.', null);
@@ -39,18 +46,28 @@ export async function callEdgeFunction<T>(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const endpoint = `${supabaseUrl}/functions/v1/${functionName}`;
+  const requestBody = JSON.stringify(body);
+  const requestBytes = new TextEncoder().encode(requestBody).byteLength;
+  const startedAt = Date.now();
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/${functionName}`, {
+    telemetry?.onRequest?.({ endpoint, requestBytes });
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         apikey: anonKey,
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: requestBody,
       signal: controller.signal,
     });
-    const raw = await response.text();
+    telemetry?.onResponse?.({
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      contentLength: parseContentLength(response.headers.get('content-length')),
+    });
+    const raw = await readEdgeResponseText(response, telemetry);
     let parsed: unknown = null;
     if (raw) {
       try {
@@ -78,4 +95,10 @@ export async function callEdgeFunction<T>(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }

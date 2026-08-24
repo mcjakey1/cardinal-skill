@@ -49,6 +49,22 @@ test('siblings at the same depth do not land on top of each other', () => {
   assert.notEqual(at('b').y, at('c').y, 'same column means they must differ vertically');
 });
 
+test('every root stays on the leftmost rank even when paths merge at different depths', () => {
+  const nodes = [node('root-a'), node('root-b'), node('middle'), node('merge')];
+  const prereqs: Prereq[] = [
+    { nodeId: 'middle', prereqId: 'root-b' },
+    { nodeId: 'merge', prereqId: 'root-a' },
+    { nodeId: 'merge', prereqId: 'middle' },
+  ];
+
+  const placed = autoLayout(nodes, prereqs);
+  const at = (id: string) => placed.nodes.find((item) => item.id === id)!;
+
+  assert.equal(at('root-a').x, 0);
+  assert.equal(at('root-b').x, 0);
+  assert.ok(at('merge').x > at('middle').x);
+});
+
 test('a cycle still places every node instead of hanging', () => {
   // The parser is untrusted input: a -> b -> c -> a is a graph it can emit.
   const nodes = [node('a'), node('b'), node('c')];
@@ -77,7 +93,7 @@ test('a prerequisite pointing at a node that does not exist is ignored', () => {
   const at = (id: string) => placed.nodes.find((n) => n.id === id)!;
 
   assert.equal(at('a').x, 0);
-  assert.equal(at('b').x, 150, 'b ranks off its one real prerequisite, not the missing one');
+  assert.equal(at('b').x, 210, 'b ranks off its one real prerequisite, not the missing one');
 });
 
 test('an empty chart lays out to an empty chart', () => {

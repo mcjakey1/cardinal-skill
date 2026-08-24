@@ -39,15 +39,46 @@ export class BAIError extends Error {
   }
 }
 
-/** Extracts one JSON object from providers that wrap otherwise valid output in prose or fences. */
+/** Extracts the first complete JSON object from wrapped or duplicated provider output. */
 export function parseJsonObjectText<T>(content: string): T {
   const trimmed = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const objectStart = trimmed.indexOf('{');
-  const objectEnd = trimmed.lastIndexOf('}');
-  const candidate = objectStart >= 0 && objectEnd > objectStart
-    ? trimmed.slice(objectStart, objectEnd + 1)
-    : trimmed;
-  return JSON.parse(candidate) as T;
+  let lastError: unknown;
+  for (let start = trimmed.indexOf('{'); start >= 0; start = trimmed.indexOf('{', start + 1)) {
+    const end = balancedObjectEnd(trimmed, start);
+    if (end < 0) continue;
+    try {
+      return JSON.parse(trimmed.slice(start, end + 1)) as T;
+    } catch (cause) {
+      lastError = cause;
+    }
+  }
+  if (lastError) throw lastError;
+  return JSON.parse(trimmed) as T;
+}
+
+function balancedObjectEnd(value: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === '{') depth += 1;
+    if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
 }
 
 /** Verifies the configured key and confirms that this account can see the selected model. */

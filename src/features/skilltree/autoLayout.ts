@@ -18,7 +18,7 @@ export interface LayoutConfig {
   nodeSep: number;
 }
 
-export const DEFAULT_LAYOUT: LayoutConfig = { rankSep: 150, nodeSep: 90 };
+export const DEFAULT_LAYOUT: LayoutConfig = { rankSep: 210, nodeSep: 120 };
 
 export interface LayoutResult {
   nodes: SkillNode[];

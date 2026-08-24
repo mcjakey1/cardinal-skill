@@ -167,3 +167,21 @@ test('extracts a JSON object from fenced or prefaced provider output', () => {
     /unterminated string/i,
   );
 });
+
+test('uses the first complete object when a provider appends duplicate JSON', () => {
+  assert.deepEqual(
+    parseJsonObjectText<{ courseTitle: string }>(
+      '{"courseTitle":"Digital Signal Processing"}\n{"courseTitle":"Duplicate"}',
+    ),
+    { courseTitle: 'Digital Signal Processing' },
+  );
+});
+
+test('balanced JSON extraction ignores braces and escaped quotes inside strings', () => {
+  assert.deepEqual(
+    parseJsonObjectText<{ mission: string }>(
+      'prefix {"mission":"Compare {FIR} and \\"IIR\\" responses."} trailing {noise}',
+    ),
+    { mission: 'Compare {FIR} and "IIR" responses.' },
+  );
+});

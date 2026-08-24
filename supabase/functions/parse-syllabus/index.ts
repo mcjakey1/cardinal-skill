@@ -2,12 +2,25 @@
 import Dagre, { layout as runDagreLayout } from 'npm:@dagrejs/dagre@3.1.0';
 import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
 import { parseJsonObjectText } from '../_shared/bai.ts';
+import { normalizeTieredCourseDag } from '../_shared/courseGraph.ts';
 import {
-  checkOpenRouterHealth,
-  OPENROUTER_MODEL,
-  OpenRouterError,
-  requestOpenRouterCompletion,
-} from '../_shared/openrouter.ts';
+  MAX_PARSED_SKILLS,
+  MIN_PARSED_SKILLS,
+  requireSyllabusCoverage,
+  requireSyllabusScaledSkillCount,
+  scaleMission,
+  syllabusGraphRepairPrompt,
+  SYLLABUS_GRAPH_SYSTEM_PROMPT,
+  SYLLABUS_OUTLINE_SYSTEM_PROMPT,
+  skillCountRangeForWeeks,
+  stableGenerationSeed,
+} from '../_shared/curriculum.ts';
+import {
+  checkGeminiHealth,
+  GEMINI_MODEL,
+  GeminiError,
+  requestGeminiCompletion,
+} from '../_shared/gemini.ts';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -25,67 +38,81 @@ const KINDS = ['topic', 'reading', 'assignment', 'assessment', 'project'] as con
 const TREE_SCHEMA = {
   type: 'object',
   properties: {
-    course_code: { type: 'string' },
-    course_name: { type: 'string' },
-    course_description: { type: 'string' },
-    units: { type: 'integer', minimum: 0, maximum: 30 },
-    semester_description: { type: 'string' },
+    courseTitle: { type: 'string' },
+    courseCode: { type: 'string', nullable: true },
     nodes: {
-      type: 'array', minItems: 1, maxItems: 24,
+      type: 'array', minItems: MIN_PARSED_SKILLS, maxItems: MAX_PARSED_SKILLS,
       items: {
         type: 'object',
         properties: {
-          key: { type: 'string' },
-          title: { type: 'string' },
-          syllabus_topic: { type: 'string' },
-          universal_skill: { type: 'string' },
+          id: { type: 'string' },
+          label: { type: 'string' },
           description: { type: 'string' },
-          kind: { type: 'string', enum: KINDS },
-          icon_key: { type: 'string', enum: ICONS },
-          prereq_keys: { type: 'array', items: { type: 'string' } },
-          learning_objectives: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'string' } },
-          missions: {
-            type: 'array', minItems: 2, maxItems: 2,
-            items: {
-              type: 'object',
-              properties: {
-                key: { type: 'string' },
-                title: { type: 'string' },
-                description: { type: 'string' },
-                type: { type: 'string', enum: KINDS },
-                estimated_minutes: { type: 'integer' },
-                xp: { type: 'integer' },
-              },
-              required: ['key', 'title', 'description', 'type', 'estimated_minutes', 'xp'],
-              additionalProperties: false,
+          tier: { type: 'integer', minimum: 1, maximum: 4 },
+          unit: { type: 'string' },
+          mission: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              description: { type: 'string' },
+              difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
+              estimatedMinutes: { type: 'integer', minimum: 5, maximum: 45 },
+              xpReward: { type: 'integer', minimum: 20, maximum: 100 },
             },
+            required: ['title', 'description', 'difficulty', 'estimatedMinutes', 'xpReward'],
+            additionalProperties: false,
           },
         },
-        required: [
-          'key', 'title', 'syllabus_topic', 'universal_skill', 'description', 'kind',
-          'icon_key', 'prereq_keys', 'learning_objectives', 'missions',
-        ],
+        required: ['id', 'label', 'description', 'tier', 'unit', 'mission'],
+        additionalProperties: false,
+      },
+    },
+    edges: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          source: { type: 'string' },
+          target: { type: 'string' },
+        },
+        required: ['source', 'target'],
         additionalProperties: false,
       },
     },
   },
-  required: ['course_code', 'course_name', 'course_description', 'units', 'semester_description', 'nodes'],
+  required: ['courseTitle', 'courseCode', 'nodes', 'edges'],
   additionalProperties: false,
 } as const;
 
-const SYSTEM = `Convert a university syllabus into a concise prerequisite DAG.
-
-Rules:
-- Extract the official course code, full title, unit count, concise description, and semester or section description. Use 0 units or an empty string only when the syllabus does not state the value.
-- Extract only distinct academic topics, units, modules, and named assessments from the schedule. Ignore policies, attendance, office hours, and grading boilerplate.
-- Keep the graph concise: combine duplicate weekly entries and return no more than 24 nodes.
-- Preserve the syllabus vocabulary. Do not invent subject matter.
-- Order nodes so every prerequisite appears earlier than the node that requires it. prereq_keys must be acyclic and express conceptual dependency, not calendar order.
-- Give every node exactly two bite-sized missions strictly grounded in that topic: a reading or lecture review, then a practice drill or assignment. Include realistic minutes and XP.
-- Give every node one or two observable learning objectives. Keep all descriptions to one short sentence.
-- universal_skill is a reusable competency such as Algorithmic logic, Data interpretation, or Academic writing; use an empty string when none is justified.
-- Choose a contextual pixel icon. Exams use trophy or boss skull; probability uses dice or coin; data uses grid or bar chart; code uses cursor or brackets; general theory uses scroll or spellbook.
-- Return one compact JSON object only. Do not use Markdown fences. Escape quotes inside strings and never place a raw line break inside a JSON string.`;
+const OUTLINE_SCHEMA = {
+  type: 'object',
+  properties: {
+    courseTitle: { type: 'string' },
+    courseCode: { type: 'string', nullable: true },
+    estimatedWeeks: { type: 'integer', minimum: 1, maximum: 52 },
+    coverage: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 52,
+      items: {
+        type: 'object',
+        properties: {
+          week: { type: 'integer', minimum: 1, maximum: 52 },
+          topics: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 12,
+            items: { type: 'string' },
+          },
+        },
+        required: ['week', 'topics'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['courseTitle', 'courseCode', 'estimatedWeeks', 'coverage'],
+  additionalProperties: false,
+} as const;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
@@ -107,16 +134,16 @@ Deno.serve(async (req) => {
   } catch {
     return json({ error: 'Body must be JSON.' }, 400);
   }
-  const apiKey = Deno.env.get('OPENROUTER_API_KEY');
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
   if (body.action === 'status') {
     if (!apiKey) return json({ error: 'The syllabus parser is not configured yet.', status: 'offline' }, 503);
     try {
-      await checkOpenRouterHealth(apiKey);
-      return json({ status: 'online', model: OPENROUTER_MODEL, engine: 'openrouter' }, 200);
+      await checkGeminiHealth(apiKey);
+      return json({ status: 'online', model: GEMINI_MODEL, engine: 'gemini' }, 200);
     } catch (cause) {
-      const error = cause instanceof OpenRouterError ? cause : null;
+      const error = cause instanceof GeminiError ? cause : null;
       return json({
-        error: error?.message ?? 'The OpenRouter parser health check failed.',
+        error: error?.message ?? 'The Gemini parser health check failed.',
         status: 'offline',
       }, 503);
     }
@@ -145,52 +172,106 @@ Deno.serve(async (req) => {
   if (courseError) return json({ error: courseError.message }, 500);
   if (!course) return json({ error: 'Course not found.' }, 404);
 
+  const { count: existingNodeCount, error: existingNodeError } = await supabase
+    .from('skill_nodes')
+    .select('id', { count: 'exact', head: true })
+    .eq('course_id', courseId);
+  if (existingNodeError) return json({ error: existingNodeError.message }, 500);
+  if ((existingNodeCount ?? 0) > 0) {
+    return json({ error: 'This course already has a skill tree. Start a new import instead.' }, 409);
+  }
+
   if (!apiKey) return json({ error: 'The syllabus parser is not configured yet.' }, 503);
   const startedAt = Date.now();
   console.info(JSON.stringify({ event: 'parser.stage', stage: 'request_received', has_pdf: Boolean(pdf) }));
   const promptText = syllabusText?.trim().slice(0, 60_000);
-  const prompt = pdf
-    ? 'Read the attached syllabus PDF and return its structured course graph.'
-    : `Return the structured course graph for this syllabus.\n\n<syllabus>\n${promptText}\n</syllabus>`;
+  const sourceSeed = await stableGenerationSeed(pdf ?? promptText ?? '');
+  const outlinePrompt = pdf
+    ? 'Extract the cleaned weekly academic outline from the attached syllabus PDF.'
+    : `Extract the cleaned weekly academic outline from this syllabus.\n\n<syllabus>\n${promptText}\n</syllabus>`;
   if (pdf) {
     console.info(JSON.stringify({
       event: 'parser.stage',
-      stage: 'pdf_forwarded_to_openrouter',
+      stage: 'pdf_forwarded_to_gemini',
       duration_ms: Date.now() - startedAt,
     }));
   }
 
-  const parserSystem = `${SYSTEM}\nRequired JSON shape:\n${JSON.stringify(TREE_SCHEMA)}`;
+  let outline: SyllabusOutline;
+  try {
+    const outlineText = await requestGeminiCompletion({
+      apiKey,
+      system: `${SYLLABUS_OUTLINE_SYSTEM_PROMPT}\nRequired JSON shape:\n${JSON.stringify(OUTLINE_SCHEMA)}`,
+      prompt: outlinePrompt,
+      maxTokens: 6_000,
+      seed: sourceSeed,
+      timeoutMs: 60_000,
+      operation: 'extract-syllabus-outline',
+      responseJsonSchema: OUTLINE_SCHEMA,
+      document: pdf
+        ? {
+          base64: pdf,
+          mediaType: 'application/pdf',
+          filename: clean(body.documentName, 160) || 'syllabus.pdf',
+        }
+        : undefined,
+    });
+    outline = normalizeOutline(parseJsonObjectText<SyllabusOutlineInput>(outlineText));
+  } catch (cause) {
+    const providerError = cause instanceof GeminiError ? cause : null;
+    console.error(JSON.stringify({
+      event: 'parser.stage',
+      stage: 'outline_extraction_failed',
+      duration_ms: Date.now() - startedAt,
+      message: cause instanceof Error ? cause.message.slice(0, 240) : 'Unknown outline error',
+    }));
+    if (providerError) {
+      return json({ error: providerError.message }, providerError.status === 422 ? 422 : 502);
+    }
+    return json({
+      error: `Gemini could not recover the syllabus coverage table: ${validationMessage(cause)} Nothing was saved.`,
+    }, 422);
+  }
+
+  const skillRange = skillCountRangeForWeeks(outline.estimatedWeeks);
+  console.info(JSON.stringify({
+    event: 'parser.stage',
+    stage: 'outline_complete',
+    duration_ms: Date.now() - startedAt,
+    estimated_weeks: outline.estimatedWeeks,
+    coverage_rows: outline.coverage.length,
+    coverage_topics: outline.coverage.reduce((sum, row) => sum + row.topics.length, 0),
+    required_skill_min: skillRange.min,
+    required_skill_max: skillRange.max,
+  }));
+
+  const graphSchema = treeSchemaForRange(skillRange.min, skillRange.max);
+  const parserSystem = `${SYLLABUS_GRAPH_SYSTEM_PROMPT}\nThis cleaned outline spans ${outline.estimatedWeeks} weeks. Return ${skillRange.min} to ${skillRange.max} nodes. Cover every listed topic, and expand repeated multi-week topics into progressive skills.\nRequired JSON shape:\n${JSON.stringify(graphSchema)}`;
+  const prompt = `Build the complete course graph from this cleaned syllabus outline.\n\n<cleanedSyllabus>\n${JSON.stringify(outline)}\n</cleanedSyllabus>`;
   const completionInput = {
     apiKey,
     prompt,
-    maxTokens: 6500,
-    timeoutMs: 55_000,
-    document: pdf
-      ? {
-        base64: pdf,
-        mediaType: 'application/pdf' as const,
-        filename: clean(body.documentName, 160) || 'syllabus.pdf',
-      }
-      : undefined,
+    maxTokens: 16_000,
+    seed: sourceSeed,
+    timeoutMs: 90_000,
   };
-  let responseText: string;
+  let responseText = '';
   let parsed: ParsedTree;
   try {
-    responseText = await requestOpenRouterCompletion({
+    responseText = await requestGeminiCompletion({
       ...completionInput,
       system: parserSystem,
       operation: 'parse-syllabus',
-      temperature: 0.1,
+      responseJsonSchema: graphSchema,
     });
-    parsed = normalizeTree(parseJsonObjectText<ParsedTree>(responseText));
+    parsed = normalizeTree(parseJsonObjectText<ParsedCourseGraph>(responseText), outline);
     console.info(JSON.stringify({
       event: 'parser.stage',
       stage: 'model_complete',
       duration_ms: Date.now() - startedAt,
     }));
   } catch (firstCause) {
-    const firstProviderError = firstCause instanceof OpenRouterError ? firstCause : null;
+    const firstProviderError = firstCause instanceof GeminiError ? firstCause : null;
     if (firstProviderError && firstProviderError.status !== 502) {
       return json(
         { error: firstProviderError.message },
@@ -203,21 +284,39 @@ Deno.serve(async (req) => {
       duration_ms: Date.now() - startedAt,
       message: firstCause instanceof Error ? firstCause.message.slice(0, 240) : 'Unknown parse error',
     }));
+    const firstValidationFailure = validationMessage(firstCause);
+    const candidate = tryParseCourseGraph(responseText);
+    const candidateCount = candidate?.nodes.length ?? 0;
+    const repairTarget = Math.max(skillRange.min, Math.min(skillRange.max, candidateCount));
+    const repairSchema = treeSchemaForRange(repairTarget, repairTarget);
+    console.info(JSON.stringify({
+      event: 'parser.stage',
+      stage: 'graph_repair_started',
+      duration_ms: Date.now() - startedAt,
+      candidate_nodes: candidateCount,
+      repair_target_nodes: repairTarget,
+    }));
     try {
-      responseText = await requestOpenRouterCompletion({
+      responseText = await requestGeminiCompletion({
         ...completionInput,
-        system: `${parserSystem}\nThe previous generation was empty or invalid JSON. Regenerate the complete object from scratch and verify every string, array, and closing brace before responding.`,
+        system: `${SYLLABUS_GRAPH_SYSTEM_PROMPT}\nThis is a validation repair. Return exactly ${repairTarget} nodes and verify every graph rule before responding.\nRequired JSON shape:\n${JSON.stringify(repairSchema)}`,
+        prompt: syllabusGraphRepairPrompt({
+          outline,
+          candidate,
+          failure: firstValidationFailure,
+          targetCount: repairTarget,
+        }),
         operation: 'parse-syllabus-json-retry',
-        temperature: 0,
+        responseJsonSchema: repairSchema,
       });
-      parsed = normalizeTree(parseJsonObjectText<ParsedTree>(responseText));
+      parsed = normalizeTree(parseJsonObjectText<ParsedCourseGraph>(responseText), outline);
       console.info(JSON.stringify({
         event: 'parser.stage',
         stage: 'json_retry_complete',
         duration_ms: Date.now() - startedAt,
       }));
     } catch (retryCause) {
-      const retryProviderError = retryCause instanceof OpenRouterError ? retryCause : null;
+      const retryProviderError = retryCause instanceof GeminiError ? retryCause : null;
       console.error(JSON.stringify({
         event: 'parser.stage',
         stage: 'json_retry_failed',
@@ -228,7 +327,7 @@ Deno.serve(async (req) => {
         return json({ error: retryProviderError.message }, retryProviderError.status === 422 ? 422 : 502);
       }
       return json({
-        error: 'Nemotron returned malformed course data twice. Try a shorter syllabus or paste only the course schedule.',
+        error: `Gemini returned course data Cardinal could not validate: ${validationMessage(retryCause)} Nothing was saved; retry the same file.`,
       }, 422);
     }
   }
@@ -300,7 +399,7 @@ Deno.serve(async (req) => {
     mission_count: missions.length,
     edge_count: edges.length,
     layout_engine: 'dagre-3.1.0',
-    model: OPENROUTER_MODEL,
+    model: GEMINI_MODEL,
   }, 201);
 });
 
@@ -313,6 +412,20 @@ interface ParserRequest {
   documentName?: string;
 }
 
+interface SyllabusOutlineInput {
+  courseTitle: string;
+  courseCode: string | null;
+  estimatedWeeks: number;
+  coverage: Array<{ week: number; topics: string[] }>;
+}
+
+interface SyllabusOutline {
+  courseTitle: string;
+  courseCode: string | null;
+  estimatedWeeks: number;
+  coverage: Array<{ week: number; topics: string[] }>;
+}
+
 interface ParsedMission {
   key: string;
   title: string;
@@ -322,12 +435,35 @@ interface ParsedMission {
   xp: number;
 }
 
+interface ParsedCourseGraphNode {
+  id: string;
+  label: string;
+  description: string;
+  tier: number;
+  unit: string;
+  mission: {
+    title: string;
+    description: string;
+    difficulty: 'Easy' | 'Medium' | 'Hard';
+    estimatedMinutes: number;
+    xpReward: number;
+  };
+}
+
+interface ParsedCourseGraph {
+  courseTitle: string;
+  courseCode: string | null;
+  nodes: ParsedCourseGraphNode[];
+  edges: Array<{ source: string; target: string }>;
+}
+
 interface ParsedNode {
   key: string;
   title: string;
   syllabus_topic: string;
   universal_skill: string;
   description: string;
+  tier: number;
   kind: typeof KINDS[number];
   icon_key: typeof ICONS[number];
   prereq_keys: string[];
@@ -350,61 +486,189 @@ function clean(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
-/** Treat model output as untrusted even when a provider says it matches a schema. */
-function normalizeTree(input: ParsedTree): ParsedTree {
-  if (!Array.isArray(input.nodes) || input.nodes.length === 0 || input.nodes.length > 24) {
-    throw new Error('The parser must return between 1 and 24 academic topics.');
+function cleanFull(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function validationMessage(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : 'Unknown validation error.';
+  return clean(message.replace(/\s+/g, ' '), 240) || 'Unknown validation error.';
+}
+
+function treeSchemaForRange(minItems: number, maxItems: number): Record<string, unknown> {
+  return {
+    ...TREE_SCHEMA,
+    properties: {
+      ...TREE_SCHEMA.properties,
+      nodes: {
+        ...TREE_SCHEMA.properties.nodes,
+        minItems,
+        maxItems,
+      },
+    },
+  };
+}
+
+function tryParseCourseGraph(value: string): ParsedCourseGraph | null {
+  try {
+    const parsed = parseJsonObjectText<ParsedCourseGraph>(value);
+    return parsed && Array.isArray(parsed.nodes) ? parsed : null;
+  } catch {
+    return null;
   }
-  const keys = new Set<string>();
-  const indexByKey = new Map<string, number>();
-  input.nodes.forEach((node, index) => {
-    const key = clean(node.key, 80);
-    if (!key || keys.has(key)) throw new Error('The parser returned duplicate or empty node keys.');
-    keys.add(key);
-    indexByKey.set(key, index);
+}
+
+function normalizeOutline(input: SyllabusOutlineInput): SyllabusOutline {
+  if (!input || !Array.isArray(input.coverage)) {
+    throw new Error('The syllabus outline must include weekly academic coverage.');
+  }
+  const coverage = input.coverage.flatMap((row) => {
+    const rawWeek = Math.round(Number(row?.week) || 0);
+    if (rawWeek < 1 || rawWeek > 52) return [];
+    const week = rawWeek;
+    const topics = Array.isArray(row?.topics)
+      ? [...new Set(row.topics
+        .map((topic) => clean(topic, 300))
+        .filter((topic) => topic && !isAssessmentOnlyTopic(topic)))]
+      : [];
+    return week > 0 && topics.length > 0 ? [{ week, topics }] : [];
   });
-  const nodes = input.nodes.map((node, index): ParsedNode => {
-    const key = clean(node.key, 80);
-    const missions = Array.isArray(node.missions) ? node.missions.slice(0, 3) : [];
-    if (missions.length < 2) throw new Error(`${clean(node.title, 120) || 'A topic'} needs at least two missions.`);
+  if (coverage.length === 0) {
+    throw new Error('No instructional topics were recovered from the syllabus coverage table.');
+  }
+  const latestCoverageWeek = Math.max(...coverage.map((row) => row.week));
+  const estimatedWeeks = Math.max(
+    latestCoverageWeek,
+    Math.max(1, Math.min(52, Math.round(Number(input.estimatedWeeks) || latestCoverageWeek))),
+  );
+  return {
+    courseTitle: clean(input.courseTitle, 160) || 'Imported Course',
+    courseCode: clean(input.courseCode, 32) || null,
+    estimatedWeeks,
+    coverage,
+  };
+}
+
+function isAssessmentOnlyTopic(topic: string): boolean {
+  return /^(?:final|midterm|preliminary)?\s*(?:examination|exam|quiz|assessment)(?:\s+week)?$/i.test(topic.trim());
+}
+
+/** Convert the small public parser contract into Cardinal's richer stored model. */
+function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): ParsedTree {
+  if (!Array.isArray(input.nodes)) throw new Error('The parser must return academic skills as an array.');
+  requireSyllabusScaledSkillCount(input.nodes, outline.estimatedWeeks);
+  requireSyllabusCoverage(input.nodes, outline.coverage);
+  const usedKeys = new Set<string>();
+  const keyByInputId = new Map<string, string>();
+  const normalizedKeys = input.nodes.map((node, index) => {
+    const rawId = clean(node.id, 120);
+    const stem = slug(rawId || clean(node.label, 120)) || `skill-${index + 1}`;
+    let key = stem;
+    let suffix = 2;
+    while (usedKeys.has(key)) key = `${stem}-${suffix++}`;
+    usedKeys.add(key);
+    if (rawId && !keyByInputId.has(rawId)) keyByInputId.set(rawId, key);
+    return key;
+  });
+  const prereqsByKey = new Map(normalizedKeys.map((key) => [key, [] as string[]]));
+  for (const edge of Array.isArray(input.edges) ? input.edges : []) {
+    const source = keyByInputId.get(clean(edge.source, 120));
+    const target = keyByInputId.get(clean(edge.target, 120));
+    if (!source || !target || source === target) continue;
+    prereqsByKey.get(target)?.push(source);
+  }
+
+  const nodes = normalizeTieredCourseDag(input.nodes.map((node, index): ParsedNode => {
+    const key = normalizedKeys[index]!;
+    const title = compactLabel(node.label);
+    const description = clean(node.description, 600) || `Apply ${title} in a focused example.`;
+    const missionTitle = clean(node.mission?.title, 160) || `Practice ${title}`;
+    const missionDescription = cleanFull(node.mission?.description)
+      || `Complete one worked exercise that demonstrates ${title}.`;
+    const missionScale = scaleMission(
+      node.mission?.difficulty,
+      node.mission?.estimatedMinutes,
+      node.mission?.xpReward,
+    );
+    const kind = inferKind(`${title} ${description} ${missionTitle}`);
     return {
       key,
-      title: clean(node.title, 120) || 'Untitled topic',
-      syllabus_topic: clean(node.syllabus_topic, 240),
-      universal_skill: clean(node.universal_skill, 120),
-      description: clean(node.description, 600),
-      kind: KINDS.includes(node.kind) ? node.kind : 'topic',
-      icon_key: ICONS.includes(node.icon_key) ? node.icon_key : 'pixel_spellbook',
-      prereq_keys: [...new Set(Array.isArray(node.prereq_keys) ? node.prereq_keys : [])]
-        .filter((parent) => (indexByKey.get(parent) ?? index) < index),
-      learning_objectives: (Array.isArray(node.learning_objectives) ? node.learning_objectives : [])
-        .map((objective) => clean(objective, 240)).filter(Boolean).slice(0, 2),
-      missions: missions.map((mission, missionIndex) => ({
-        key: clean(mission.key, 80) || `${key}-mission-${missionIndex + 1}`,
-        title: clean(mission.title, 160) || `Practice ${missionIndex + 1}`,
-        description: clean(mission.description, 500),
-        type: KINDS.includes(mission.type) ? mission.type : 'assignment',
-        estimated_minutes: Math.max(5, Math.min(480, Math.round(Number(mission.estimated_minutes) || 30))),
-        xp: Math.max(5, Math.min(500, Math.round(Number(mission.xp) || 20))),
-      })),
+      title,
+      syllabus_topic: clean(node.unit, 240),
+      universal_skill: '',
+      description,
+      tier: Number(node.tier),
+      kind,
+      icon_key: inferIcon(`${title} ${node.unit}`),
+      prereq_keys: [...new Set(prereqsByKey.get(key) ?? [])],
+      learning_objectives: [`Complete a focused application of ${title}.`],
+      missions: [{
+        key: `${key}-mission`,
+        title: missionTitle,
+        description: missionDescription,
+        type: kind === 'assessment' || kind === 'project' ? kind : 'assignment',
+        estimated_minutes: missionScale.estimatedMinutes,
+        xp: missionScale.xpReward,
+      }],
     };
-  });
+  }));
   return {
-    course_code: clean(input.course_code, 32),
-    course_name: clean(input.course_name, 160),
-    course_description: clean(input.course_description, 1000),
-    units: Math.max(0, Math.min(30, Math.round(Number(input.units) || 0))),
-    semester_description: clean(input.semester_description, 160),
+    course_code: clean(input.courseCode, 32),
+    course_name: clean(input.courseTitle, 160),
+    course_description: '',
+    units: 0,
+    semester_description: '',
     nodes,
   };
 }
 
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+}
+
+function compactLabel(value: unknown): string {
+  const words = clean(value, 160).split(/\s+/).filter(Boolean).slice(0, 4);
+  if (words.length === 0) return 'Untitled Skill';
+  if (words.length === 1) words.push('Foundations');
+  return words.join(' ');
+}
+
+function inferKind(value: string): typeof KINDS[number] {
+  if (/\b(exam|quiz|test|assessment)\b/i.test(value)) return 'assessment';
+  if (/\b(project|capstone|presentation)\b/i.test(value)) return 'project';
+  if (/\b(read|reading|chapter|article)\b/i.test(value)) return 'reading';
+  if (/\b(assignment|problem set|exercise|practice)\b/i.test(value)) return 'assignment';
+  return 'topic';
+}
+
+function inferIcon(value: string): typeof ICONS[number] {
+  if (/\b(exam|test|assessment)\b/i.test(value)) return 'pixel_trophy';
+  if (/\b(probability|random|chance)\b/i.test(value)) return 'pixel_dice';
+  if (/\b(data|table|matrix|statistics)\b/i.test(value)) return 'pixel_grid';
+  if (/\b(tree|graph|network)\b/i.test(value)) return 'pixel_binary_tree';
+  if (/\b(code|algorithm|program)\b/i.test(value)) return 'pixel_brackets';
+  if (/\b(logic|boolean|circuit|gate)\b/i.test(value)) return 'pixel_gate';
+  if (/\b(set|relation|function)\b/i.test(value)) return 'pixel_atom';
+  return 'pixel_spellbook';
+}
+
 function layoutWithDagre(nodes: ParsedNode[]): LaidOutNode[] {
+  const nodeWidth = 108;
+  const nodeHeight = 88;
+  const rankSep = 180;
+  const rankByKey = new Map<string, number>();
+  for (const node of nodes) {
+    const rank = node.prereq_keys.length === 0
+      ? 0
+      : Math.max(...node.prereq_keys.map((key) => rankByKey.get(key) ?? 0)) + 1;
+    rankByKey.set(node.key, rank);
+  }
+
   const graph = new Dagre.graphlib.Graph()
-    .setGraph({ rankdir: 'TB', ranksep: 110, nodesep: 72, edgesep: 32 })
+    .setGraph({ rankdir: 'LR', ranksep: rankSep, nodesep: 104, edgesep: 48 })
     .setDefaultEdgeLabel(() => ({}));
 
-  for (const node of nodes) graph.setNode(node.key, { width: 108, height: 88 });
+  for (const node of nodes) graph.setNode(node.key, { width: nodeWidth, height: nodeHeight });
   for (const node of nodes) {
     for (const prerequisite of node.prereq_keys) graph.setEdge(prerequisite, node.key);
   }
@@ -414,7 +678,9 @@ function layoutWithDagre(nodes: ParsedNode[]): LaidOutNode[] {
     const position = graph.node(node.key);
     return {
       ...node,
-      x: Number.isFinite(position?.x) ? position.x : 0,
+      // Semantic tiers may contain prerequisite chains of their own. A
+      // topological sub-rank keeps those same-tier edges flowing left-to-right.
+      x: (rankByKey.get(node.key) ?? 0) * (nodeWidth + rankSep),
       y: Number.isFinite(position?.y) ? position.y : sort_order * 140,
       sort_order,
     };

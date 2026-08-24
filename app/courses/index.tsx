@@ -1,176 +1,229 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { usePixelTransition } from '@/ui/PixelTransition';
 import Head from 'expo-router/head';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AccessibilityInfo, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
-import { fetchCourseOptions } from '@/features/skilltree/courseQueries';
+import {
+  deleteCourse,
+  duplicateCourse,
+  fetchCourseOptions,
+  persistCourseOrder,
+  resetCourseProgress,
+  updateCourseMetadata,
+  type CourseMetadata,
+  type CourseOption,
+} from '@/features/skilltree/courseQueries';
+import { mergeVisibleCourseOrder } from '@/features/skilltree/courseOrdering';
 import { usePrefs } from '@/lib/prefs';
-import { space, touch } from '@/theme/tokens';
+import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
+import { ReorderableCourseList } from '@/ui/ReorderableCourseList';
 import { Window } from '@/ui/Window';
-import { PixelButton, PixelIcon, PixelText, bevelStyle } from '@/ui/pixel';
+import { PixelButton, PixelInput, PixelText } from '@/ui/pixel';
+import { usePixelTransition } from '@/ui/PixelTransition';
 
 export default function Courses() {
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
-  const { lowBandwidth } = usePrefs();
+  const prefs = usePrefs();
+  const [search, setSearch] = useState('');
+  const [ordered, setOrdered] = useState<CourseOption[]>([]);
+  const [orderNotice, setOrderNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const orderSaveVersion = useRef(0);
 
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['courses'],
     queryFn: fetchCourseOptions,
   });
 
-  const open = (id: string) =>
-    transition(() => router.navigate({ pathname: '/tree/[courseId]', params: { courseId: id } }));
-  const realCourses = data?.filter((course) => course.id !== DEMO_COURSE_ID);
+  useEffect(() => {
+    if (data) setOrdered(data.filter((course) => !course.isFixture));
+  }, [data]);
+
+  const visibleCourses = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase();
+    if (!needle) return ordered;
+    return ordered.filter((course) => (
+      course.title.toLocaleLowerCase().includes(needle)
+      || course.courseCode?.toLocaleLowerCase().includes(needle)
+      || course.term?.toLocaleLowerCase().includes(needle)
+    ));
+  }, [ordered, search]);
+
+  const open = (id: string, edit = false) => transition(() => router.navigate({
+    pathname: '/tree/[courseId]',
+    params: edit ? { courseId: id, edit: '1' } : { courseId: id },
+  }));
+
+  const refreshCourses = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['courses'] });
+  };
+
+  const rename = async (courseId: string, metadata: CourseMetadata) => {
+    try {
+      await updateCourseMetadata(courseId, metadata);
+      setOrdered((current) => current.map((course) => course.id === courseId
+        ? {
+            ...course,
+            title: metadata.title,
+            courseCode: metadata.courseCode || null,
+          }
+        : course));
+      await refreshCourses();
+      AccessibilityInfo.announceForAccessibility('Course renamed.');
+    } catch {
+      throw new Error('The course could not be renamed. Check your connection and try again.');
+    }
+  };
+
+  const reset = async (courseId: string) => {
+    try {
+      await resetCourseProgress(courseId);
+      await queryClient.invalidateQueries({ queryKey: ['tree', courseId] });
+      AccessibilityInfo.announceForAccessibility('Course progress reset to zero.');
+    } catch {
+      throw new Error('Progress could not be reset. Check your connection and try again.');
+    }
+  };
+
+  const duplicate = async (courseId: string) => {
+    try {
+      const copiedCourseId = await duplicateCourse(courseId);
+      await refreshCourses();
+      AccessibilityInfo.announceForAccessibility('Editable course copy created.');
+      open(copiedCourseId, true);
+    } catch {
+      throw new Error('The chart copy could not be created. Check your connection and try again.');
+    }
+  };
+
+  const remove = async (courseId: string) => {
+    try {
+      await deleteCourse(courseId);
+      setOrdered((current) => current.filter((course) => course.id !== courseId));
+      if (prefs.lastCourseId === courseId) prefs.set('lastCourseId', null);
+      await refreshCourses();
+      AccessibilityInfo.announceForAccessibility('Course deleted.');
+    } catch {
+      throw new Error('The course could not be deleted. Only its owner can delete it.');
+    }
+  };
+
+  const reorder = (nextVisible: CourseOption[]) => {
+    const nextAll = mergeVisibleCourseOrder(ordered, nextVisible);
+    const saveVersion = orderSaveVersion.current + 1;
+    orderSaveVersion.current = saveVersion;
+    setOrdered(nextAll);
+    setOrderNotice(null);
+    persistCourseOrder(nextAll)
+      .then((synced) => {
+        if (orderSaveVersion.current !== saveVersion) return;
+        if (synced) return;
+        setOrderNotice({ text: 'Order saved on this device · cloud sync pending', error: false });
+        AccessibilityInfo.announceForAccessibility('Course order saved on this device. Cloud sync is pending.');
+      })
+      .catch(() => {
+        if (orderSaveVersion.current !== saveVersion) return;
+        setOrderNotice({ text: 'This device could not save the new order. Try again.', error: true });
+        AccessibilityInfo.announceForAccessibility('This device could not save the course order.');
+      });
+  };
+
+  const goToUpload = () => transition(() => router.navigate('/upload'));
+  const createBlank = () => transition(() => router.navigate({ pathname: '/upload', params: { manual: '1' } }));
 
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
-      <DitherField variant="quiet" bands={7} flat={lowBandwidth} />
+      <DitherField variant="quiet" bands={7} flat={prefs.lowBandwidth} />
 
       <Head>
         <title>Your charts · Cardinal Skill</title>
-        <meta name="description" content="Every course chart you have open." />
+        <meta name="description" content="Search, reorder, and manage your course charts." />
       </Head>
 
-      <View style={[styles.header, { paddingTop: insets.top + space.cell }]}>
-        <PixelText variant="title">Your charts</PixelText>
-      </View>
-
-      {isPending ? (
-        <Notice title="Reading courses">
-          <PixelText variant="body" colour={t.inkMuted}>
-            00: OPENING LIBRARY
-          </PixelText>
-        </Notice>
-      ) : error ? (
-        <Notice title="Courses unavailable">
-          <PixelText variant="body" colour={t.ink}>
-            Couldn&apos;t load your courses. Check your connection and try again.
-          </PixelText>
-          <PixelButton label="Try again" onPress={() => refetch()} />
-          <PixelButton
-            label="See an example chart"
-            tone="panel"
-            onPress={() => open(DEMO_COURSE_ID)}
+      <View style={[styles.content, { paddingTop: insets.top + space.cell, paddingBottom: insets.bottom + space.cell }]}>
+        <View style={styles.header}>
+          <PixelText variant="title">Your charts</PixelText>
+          <PixelInput
+            label="Search charts"
+            value={search}
+            onChangeText={setSearch}
+            placeholder="SEARCH CHARTS..."
+            autoCapitalize="none"
+            autoCorrect={false}
           />
-        </Notice>
-      ) : (
-        <FlatList
-          data={realCourses}
-          keyExtractor={(c) => c.id}
-          contentContainerStyle={styles.list}
-          ListEmptyComponent={
-            <Notice title="No charts yet">
-              <PixelText variant="body" colour={t.ink}>
-                Upload a syllabus and one gets drawn for you.
-              </PixelText>
-              <PixelButton label="Upload a syllabus" onPress={() => transition(() => router.navigate('/upload'))} />
-              <PixelButton
-                label="See an example chart"
-                tone="panel"
-                onPress={() => open(DEMO_COURSE_ID)}
-              />
+          {orderNotice ? (
+            <PixelText variant="body" colour={orderNotice.error ? t.alarm : t.warning}>
+              {orderNotice.text}
+            </PixelText>
+          ) : null}
+        </View>
+
+        <View style={styles.library}>
+          {isPending ? (
+            <Notice title="Reading courses">
+              <PixelText variant="body" colour={t.inkMuted}>00: OPENING LIBRARY</PixelText>
             </Notice>
-          }
-          renderItem={({ item, index }) => (
-            <CourseCell
-              index={index + 1}
-              title={item.title}
-              term={item.term}
-              onPress={() => open(item.id)}
+          ) : error ? (
+            <Notice title="Courses unavailable">
+              <PixelText variant="body" colour={t.ink}>
+                Couldn&apos;t load your courses. Check your connection and try again.
+              </PixelText>
+              <PixelButton label="Try again" onPress={() => refetch()} />
+            </Notice>
+          ) : (
+            <ReorderableCourseList
+              courses={visibleCourses}
+              activeCourseId={prefs.lastCourseId}
+              reduceMotion={prefs.motionOff}
+              onOpen={open}
+              onReorder={reorder}
+              onRename={rename}
+              onReset={reset}
+              onDuplicate={duplicate}
+              onDelete={remove}
+              empty={
+                <Notice title={search.trim() ? 'No matching charts' : 'No charts yet'}>
+                  <PixelText variant="body" colour={t.ink}>
+                    {search.trim()
+                      ? 'Try a different course title, code, or term.'
+                      : 'Upload a syllabus or start with a blank chart.'}
+                  </PixelText>
+                </Notice>
+              }
             />
           )}
-          /* The empty state already offers both of these; a footer would print
-             them twice on the one screen where they matter most. */
-          ListFooterComponent={
-            realCourses && realCourses.length > 0 ? (
-              <View style={styles.footer}>
-                <CourseCell
-                  index={0}
-                  title={DEMO_COURSE_TITLE}
-                  term="Example chart"
-                  onPress={() => open(DEMO_COURSE_ID)}
-                />
-                <PixelButton label="Upload a syllabus" onPress={() => transition(() => router.navigate('/upload'))} />
-              </View>
-            ) : null
-          }
-        />
-      )}
-    </View>
-  );
-}
+        </View>
 
-function CourseCell({
-  index,
-  title,
-  term,
-  onPress,
-}: {
-  index: number;
-  title: string;
-  term: string | null;
-  onPress: () => void;
-}) {
-  const t = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={term ? `${title}, ${term}` : title}
-      style={({ pressed }) => [styles.cell, bevelStyle(t, 'panel', pressed ? 'inset' : 'raised')]}
-    >
-      <View style={styles.cellIndex}>
-        <PixelText variant="micro" colour={t.inkMuted}>
-          {String(index).padStart(2, '0')}
-        </PixelText>
+        <View style={styles.actions}>
+          <PixelButton label="Upload a syllabus" onPress={goToUpload} />
+          <PixelButton label="+ Create blank chart by hand" tone="panel" onPress={createBlank} />
+        </View>
       </View>
-      <View style={styles.cellBody}>
-        <PixelText variant="body" numberOfLines={1}>
-          {title}
-        </PixelText>
-        {term ? (
-          <PixelText variant="micro" colour={t.inkMuted}>
-            {term.toUpperCase()}
-          </PixelText>
-        ) : null}
-      </View>
-      <PixelIcon name="play" size={12} colour={t.brand} />
-    </Pressable>
+    </View>
   );
 }
 
 function Notice({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.centred}>
-      <Window title={title} style={styles.notice}>
-        {children}
-      </Window>
+      <Window title={title} style={styles.notice}>{children}</Window>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: { paddingHorizontal: space.md, paddingBottom: space.cell },
-  list: { padding: space.md, gap: space.cell },
+  content: { width: '100%', maxWidth: 820, flex: 1, alignSelf: 'center' },
+  header: { paddingHorizontal: space.md, paddingBottom: space.cell, gap: space.cell },
+  library: { flex: 1 },
+  actions: { paddingHorizontal: space.md, gap: space.cell },
   centred: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.md },
-  notice: { width: '100%', maxWidth: 420 },
-  cell: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.md,
-    minHeight: touch + space.md,
-    paddingHorizontal: space.md,
-  },
-  cellIndex: { minWidth: 24 },
-  cellBody: { flex: 1, gap: space.hair },
-  footer: { gap: space.cell, marginTop: space.md },
+  notice: { width: '100%', maxWidth: 440 },
 });

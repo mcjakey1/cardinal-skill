@@ -1,5 +1,4 @@
-# Cardinal Skill - Python Backend & Data Pipeline Requirements (Placeholder)
-# This file is prepared for future Python backend microservices, AI syllabus parsers,
-# or analytics processing scripts.
-#
-# Primary runtime is Expo / React Native and Deno (Supabase Edge Functions).
+# Cardinal Skill has no Python runtime dependencies.
+# The application runs on Expo / React Native, and its server-side syllabus
+# parser runs in Deno through Supabase Edge Functions. Keep this file empty
+# unless a Python-specific tool or service is deliberately introduced.

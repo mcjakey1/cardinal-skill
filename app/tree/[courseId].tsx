@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   Pressable,
@@ -34,9 +34,11 @@ import {
 import { HELP_SHARE } from '@/features/skilltree/subtree';
 import { fetchTree } from '@/features/skilltree/queries';
 import {
+  duplicateCourse,
   fetchCourseOptions,
   updateCourseMetadata,
   type CourseMetadata,
+  type CourseOption,
 } from '@/features/skilltree/courseQueries';
 import { aliveSubgraph } from '@/features/skilltree/chartDraft';
 import { nodeProgress, rollUpProgress } from '@/features/skilltree/rollup';
@@ -89,10 +91,14 @@ const NAME_SOURCE: Record<NameSource, string> = {
   syllabus: 'SYLLABUS TITLE',
 };
 
+const unavailableCourseManagement = async () => {
+  throw new Error('Course management is unavailable until this chart reconnects.');
+};
+
 export default function TreeScreen() {
   const t = useTheme();
   const { theme } = useAppTheme();
-  const { courseId } = useLocalSearchParams<{ courseId: string }>();
+  const { courseId, edit } = useLocalSearchParams<{ courseId: string; edit?: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { transition } = usePixelTransition();
@@ -109,7 +115,8 @@ export default function TreeScreen() {
   const [courseMenuOpen, setCourseMenuOpen] = useState(false);
   const [companionOpen, setCompanionOpen] = useState(false);
   const [claimedMissionId, setClaimedMissionId] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState(false);
+  const [editMode, setEditMode] = useState(edit === '1');
+  const [cameraFocusRequest, setCameraFocusRequest] = useState(0);
   const [linkMode, setLinkMode] = useState(false);
   const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
@@ -132,6 +139,13 @@ export default function TreeScreen() {
     [],
   );
 
+  useEffect(() => {
+    setEditMode(edit === '1');
+    setSelectedId(null);
+    setLinkMode(false);
+    setLinkSourceId(null);
+  }, [courseId, edit]);
+
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['tree', courseId],
     queryFn: () => fetchTree(courseId),
@@ -142,8 +156,24 @@ export default function TreeScreen() {
     queryFn: fetchCourseOptions,
   });
 
-  const { log, missionLog, complete, toggleMission, reset: resetLocalProgress } = useLocalProgress(courseId);
-  const { edited, save: saveEditedTree, clear: clearEditedTree } = useEditedTree(
+  const {
+    log,
+    missionLog,
+    ready: progressReady,
+    complete,
+    toggleMission,
+    reset: resetLocalProgress,
+  } = useLocalProgress(courseId);
+
+  useFocusEffect(useCallback(() => {
+    setCameraFocusRequest((request) => request + 1);
+  }, []));
+  const {
+    edited,
+    ready: editedTreeReady,
+    save: saveEditedTree,
+    clear: clearEditedTree,
+  } = useEditedTree(
     courseId,
     data?.tree.nodes.map((n) => n.id),
   );
@@ -198,6 +228,14 @@ export default function TreeScreen() {
     [data?.missions, edited?.missions],
   );
 
+  // A blank course is the manual-authoring entry point. The URL flag gets the
+  // first visit there immediately; this fallback also restores the editor
+  // after a reload, when transient query parameters are no longer present.
+  useEffect(() => {
+    if (!editedTreeReady || !data || !sourceTree || sourceTree.nodes.length > 0) return;
+    setEditMode(true);
+  }, [data, editedTreeReady, sourceTree]);
+
   const merged = useMemo(() => {
     if (!data || !sourceTree) return null;
     return rollUpProgress({
@@ -239,8 +277,30 @@ export default function TreeScreen() {
     [named, sourceTree?.prereqs],
   );
 
-  if (isPending) return <Loading />;
-  if (error || !data || !merged) return <Failed onRetry={() => refetch()} />;
+  if (isPending || !editedTreeReady || !progressReady) return <Loading />;
+  if (error || !data || !merged) {
+    const failedTitle = courseOptions.find((course) => course.id === courseId)?.title
+      ?? 'Chart unavailable';
+    return (
+      <Failed
+        currentCourseId={courseId}
+        currentTitle={failedTitle}
+        detail={readableError(error)}
+        courses={courseOptions}
+        reduceMotion={prefs.motionOff}
+        onRetry={() => refetch()}
+        onUpload={() => transition(() => router.navigate('/upload'))}
+        onSelect={(nextCourseId) => {
+          if (nextCourseId !== courseId) {
+            transition(() => router.replace({
+              pathname: '/tree/[courseId]',
+              params: { courseId: nextCourseId },
+            }));
+          }
+        }}
+      />
+    );
+  }
 
   const { title } = data;
   const missions = sourceMissions;
@@ -255,9 +315,20 @@ export default function TreeScreen() {
         canEdit: false,
         canDelete: false,
         canRemove: false,
+        isFixture: false,
+        sortOrder: 0,
       }, ...courseOptions];
 
-  if (tree.nodes.length === 0) return <EmptyChart title={title} />;
+  if (tree.nodes.length === 0 && !editMode) {
+    return (
+      <EmptyChart
+        title={title}
+        onEdit={() => setEditMode(true)}
+        onCourses={() => router.replace('/courses')}
+        onUpload={() => router.navigate('/upload')}
+      />
+    );
+  }
 
   const level = levelForXp(xp);
   const courseXpMax = totalXp(tree.nodes);
@@ -594,6 +665,21 @@ export default function TreeScreen() {
     }
   };
 
+  const duplicateTree = async (targetCourseId: string) => {
+    try {
+      const copiedCourseId = await duplicateCourse(targetCourseId);
+      await queryClient.invalidateQueries({ queryKey: ['courses'] });
+      AccessibilityInfo.announceForAccessibility('Editable course copy created.');
+      transition(() => router.replace({
+        pathname: '/tree/[courseId]',
+        params: { courseId: copiedCourseId, edit: '1' },
+      }));
+    } catch {
+      AccessibilityInfo.announceForAccessibility('The course copy could not be created.');
+      throw new Error('The course copy could not be created. Check your connection and try again.');
+    }
+  };
+
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
       <Backdrop flat={prefs.lowBandwidth} />
@@ -615,10 +701,12 @@ export default function TreeScreen() {
             currentCourseId={courseId}
             currentTitle={title}
             courses={selectableCourses}
+            currentProgress={{ cleared: masteredIds.length, total: tree.nodes.length }}
             reduceMotion={prefs.motionOff}
             onToggle={() => setCourseMenuOpen((open) => !open)}
             onUpdate={saveCourseMetadata}
             onReset={resetProgress}
+            onDuplicate={duplicateTree}
             onDelete={deleteTree}
             onSelect={(nextCourseId) => {
               setCourseMenuOpen(false);
@@ -640,9 +728,6 @@ export default function TreeScreen() {
             <PixelText variant="micro" colour={t.ink}>UPLOAD</PixelText>
           </Pressable>
           </View>
-          <PixelText variant="micro" colour={t.ink}>
-            {masteredIds.length} of {tree.nodes.length} cleared
-          </PixelText>
         </View>
 
         <View style={styles.readout}>
@@ -709,6 +794,7 @@ export default function TreeScreen() {
         onMoveNode={moveNode}
         onResetLayout={resetLayout}
         progressByNode={progressByNode}
+        focusRequestKey={cameraFocusRequest}
       />
         </View>
 
@@ -1201,7 +1287,7 @@ export default function TreeScreen() {
           reduceMotion={prefs.motionOff}
         />
         </>
-      ) : next ? (
+      ) : editMode ? null : next ? (
         <Pressable
           onPress={() => setSelectedId(next.id)}
           accessibilityRole="button"
@@ -1366,24 +1452,104 @@ function Loading() {
   );
 }
 
-function Failed({ onRetry }: { onRetry: () => void }) {
+function Failed({
+  currentCourseId,
+  currentTitle,
+  detail,
+  courses,
+  reduceMotion,
+  onRetry,
+  onUpload,
+  onSelect,
+}: {
+  currentCourseId: string;
+  currentTitle: string;
+  detail: string;
+  courses: readonly CourseOption[];
+  reduceMotion: boolean;
+  onRetry: () => void;
+  onUpload: () => void;
+  onSelect: (courseId: string) => void;
+}) {
   const t = useTheme();
+  const { theme } = useAppTheme();
+  const insets = useSafeAreaInsets();
+  const [courseMenuOpen, setCourseMenuOpen] = useState(false);
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
       <Backdrop />
+      <View
+        style={[
+          styles.marginalia,
+          styles.failedHeader,
+          {
+            paddingTop: insets.top + space.cell,
+            backgroundColor: theme.hudBackground,
+            borderBottomColor: theme.border,
+          },
+        ]}
+      >
+        <CourseSelector
+          open={courseMenuOpen}
+          currentCourseId={currentCourseId}
+          currentTitle={currentTitle}
+          courses={courses}
+          reduceMotion={reduceMotion}
+          managementDisabled
+          onToggle={() => setCourseMenuOpen((open) => !open)}
+          onSelect={(nextCourseId) => {
+            setCourseMenuOpen(false);
+            onSelect(nextCourseId);
+          }}
+          onUpdate={unavailableCourseManagement}
+          onReset={unavailableCourseManagement}
+          onDuplicate={unavailableCourseManagement}
+          onDelete={unavailableCourseManagement}
+        />
+        <Pressable
+          onPress={onUpload}
+          accessibilityRole="button"
+          accessibilityLabel="Upload a syllabus"
+          style={({ pressed }) => [
+            styles.uploadButton,
+            bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+          ]}
+        >
+          <PixelIcon name="plus" size={12} colour={t.info} />
+          <PixelText variant="micro" colour={t.ink}>UPLOAD</PixelText>
+        </Pressable>
+      </View>
       <View style={styles.centred}>
         <Window title="Chart unavailable" style={styles.notice}>
           <PixelText variant="body" colour={t.ink}>
-            Couldn&apos;t load this chart. Check your connection and try again.
+            {detail}
           </PixelText>
-          <PixelButton label="Try again" onPress={onRetry} />
+          <PixelButton label="Retry" onPress={onRetry} />
+          <PixelButton
+            label="Switch course"
+            tone="panel"
+            onPress={() => setCourseMenuOpen(true)}
+          />
         </Window>
       </View>
     </View>
   );
 }
 
-function EmptyChart({ title }: { title: string }) {
+function readableError(cause: unknown): string {
+  if (cause && typeof cause === 'object' && 'message' in cause) {
+    const message = String(cause.message).trim();
+    if (message) return `Couldn't load this chart: ${message}`;
+  }
+  return "Couldn't load this chart. Check your connection and try again.";
+}
+
+function EmptyChart({ title, onEdit, onCourses, onUpload }: {
+  title: string;
+  onEdit: () => void;
+  onCourses: () => void;
+  onUpload: () => void;
+}) {
   const t = useTheme();
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
@@ -1391,8 +1557,11 @@ function EmptyChart({ title }: { title: string }) {
       <View style={styles.centred}>
         <Window title={title} style={styles.notice}>
           <PixelText variant="body" colour={t.ink}>
-            This course has no nodes yet. Upload its syllabus and a chart gets drawn for you.
+            This blank course is ready for its first skill. Start editing to add and connect nodes.
           </PixelText>
+          <PixelButton label="+ Add first node" onPress={onEdit} />
+          <PixelButton label="Back to courses" tone="panel" onPress={onCourses} />
+          <PixelButton label="Upload a syllabus instead" tone="panel" onPress={onUpload} />
         </Window>
       </View>
     </View>
@@ -1415,6 +1584,7 @@ const styles = StyleSheet.create({
     paddingBottom: space.cell,
     borderBottomWidth: bevel,
   },
+  failedHeader: { alignItems: 'center' },
   courseBlock: { flexShrink: 1, gap: space.hair, zIndex: 20 },
   courseActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
   uploadButton: {
@@ -1431,13 +1601,21 @@ const styles = StyleSheet.create({
   // No `alignItems` here on purpose: the default is `stretch`, and the chart
   // column needs the row's full height. Setting it to `flex-start` collapsed the
   // chart to zero height and rendered an empty canvas.
-  wideBody: { flex: 1, flexDirection: 'row' },
+  wideBody: { flex: 1, flexDirection: 'row', position: 'relative' },
   dock: { margin: space.cell },
   detailWindow: { width: '100%' },
   // The panel sits in its own column but must not be stretched to the row's
   // height by the `stretch` default above.
   dockWide: { width: 420, margin: space.cell, maxHeight: '100%', alignSelf: 'flex-start' },
-  nextBarWide: { width: DOCK_WIDTH, alignSelf: 'flex-end' },
+  // The compact next action floats over the chart. Keeping it as a flex-row
+  // sibling reserved an empty full-height column that looked like a wall.
+  nextBarWide: {
+    position: 'absolute',
+    right: space.cell,
+    bottom: space.cell,
+    width: DOCK_WIDTH,
+    margin: 0,
+  },
   sheetScroll: { maxHeight: 260 },
   sheetScrollWide: { maxHeight: 460 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

@@ -66,3 +66,22 @@ test('a clean graph reports nothing', () => {
   assert.equal(result.isValid, true);
   assert.deepEqual(result.errors, []);
 });
+
+test('duplicate edges are rejected before saving', () => {
+  const edge = { nodeId: 'b', prereqId: 'a' };
+  const result = validateGraph([node('a'), node('b')], [edge, edge]);
+
+  assert.equal(result.isValid, false);
+  assert.equal(result.errors[0]!.type, 'duplicate_edge');
+});
+
+test('disconnected course components are rejected', () => {
+  const result = validateGraph(
+    [node('a'), node('b'), node('c')],
+    [{ nodeId: 'b', prereqId: 'a' }],
+  );
+
+  assert.equal(result.isValid, false);
+  assert.equal(result.errors[0]!.type, 'disconnected_graph');
+  assert.deepEqual(result.errors[0]!.nodeIds, ['c']);
+});

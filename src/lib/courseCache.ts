@@ -2,15 +2,28 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
 import type { TreeSnapshot } from '@/features/skilltree/queries';
-import { COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
+import { COURSE_ORDER_CACHE_KEY, COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
 
-export { COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
+export { COURSE_ORDER_CACHE_KEY, COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
 
 type CachedCourse = CourseOption;
 
 interface CachedTreeEnvelope {
   version: 1;
   snapshot: TreeSnapshot;
+}
+
+export interface CachedCourseOrder {
+  ids: string[];
+  pendingSync: boolean;
+}
+
+let courseOrderWrites: Promise<void> = Promise.resolve();
+
+function queueCourseOrderWrite(write: () => Promise<void>): Promise<void> {
+  const operation = courseOrderWrites.then(write);
+  courseOrderWrites = operation.catch(() => {});
+  return operation;
 }
 
 async function readCourses(): Promise<CachedCourse[]> {
@@ -24,7 +37,11 @@ async function readCourses(): Promise<CachedCourse[]> {
           && typeof (course as CachedCourse).title === 'string'
           && typeof (course as CachedCourse).canEdit === 'boolean'
           && typeof (course as CachedCourse).canDelete === 'boolean'
-        ))
+        )).map((course, index) => ({
+          ...course,
+          isFixture: false,
+          sortOrder: typeof course.sortOrder === 'number' ? course.sortOrder : index,
+        }))
       : [];
   } catch {
     return [];
@@ -39,19 +56,64 @@ export async function cacheCourseList(courses: readonly CourseOption[]): Promise
   await AsyncStorage.setItem(COURSES_CACHE_KEY, JSON.stringify(courses));
 }
 
+export async function loadCachedCourseOrder(): Promise<CachedCourseOrder> {
+  try {
+    const raw = await AsyncStorage.getItem(COURSE_ORDER_CACHE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== 'object') return { ids: [], pendingSync: false };
+    const candidate = parsed as Partial<{ version: number; ids: unknown; pendingSync: unknown }>;
+    return candidate.version === 1 && Array.isArray(candidate.ids)
+      ? {
+          ids: candidate.ids.filter((id): id is string => typeof id === 'string'),
+          pendingSync: candidate.pendingSync === true,
+        }
+      : { ids: [], pendingSync: false };
+  } catch {
+    return { ids: [], pendingSync: false };
+  }
+}
+
+export async function cacheCourseOrder(
+  ids: readonly string[],
+  pendingSync: boolean,
+): Promise<void> {
+  await queueCourseOrderWrite(() => AsyncStorage.setItem(COURSE_ORDER_CACHE_KEY, JSON.stringify({
+    version: 1,
+    ids: [...ids],
+    pendingSync,
+  })));
+}
+
+export async function markCourseOrderSynced(ids: readonly string[]): Promise<void> {
+  await queueCourseOrderWrite(async () => {
+    const current = await loadCachedCourseOrder();
+    if (
+      current.ids.length !== ids.length
+      || current.ids.some((id, index) => id !== ids[index])
+    ) return;
+    await AsyncStorage.setItem(COURSE_ORDER_CACHE_KEY, JSON.stringify({
+      version: 1,
+      ids: [...ids],
+      pendingSync: false,
+    }));
+  });
+}
+
 export async function cacheParsedCourse(
   course: Pick<CachedCourse, 'id' | 'courseCode' | 'title' | 'term'>,
   snapshot: TreeSnapshot,
 ): Promise<void> {
   const courses = await readCourses();
   const next: CachedCourse[] = [
-    { ...course, canEdit: true, canDelete: true, canRemove: false },
+    { ...course, canEdit: true, canDelete: true, canRemove: false, isFixture: false, sortOrder: 0 },
     ...courses.filter((item) => item.id !== course.id),
   ];
+  const order = await loadCachedCourseOrder();
   await AsyncStorage.multiSet([
     [COURSES_CACHE_KEY, JSON.stringify(next)],
     [courseTreeCacheKey(course.id), JSON.stringify({ version: 1, snapshot } satisfies CachedTreeEnvelope)],
   ]);
+  await cacheCourseOrder([course.id, ...order.ids.filter((id) => id !== course.id)], true);
 }
 
 export async function updateCachedCourse(courseId: string, metadata: CourseMetadata): Promise<void> {
@@ -86,9 +148,14 @@ export async function loadCachedTree(courseId: string): Promise<TreeSnapshot | n
 
 export async function removeCachedCourse(courseId: string): Promise<void> {
   const courses = await readCourses();
+  const order = await loadCachedCourseOrder();
   await AsyncStorage.setItem(
     COURSES_CACHE_KEY,
     JSON.stringify(courses.filter((course) => course.id !== courseId)),
+  );
+  await cacheCourseOrder(
+    order.ids.filter((id) => id !== courseId),
+    order.pendingSync,
   );
   await AsyncStorage.removeItem(courseTreeCacheKey(courseId));
 }
@@ -97,6 +164,7 @@ export async function clearCourseCaches(): Promise<void> {
   const keys = await AsyncStorage.getAllKeys();
   const courseKeys = keys.filter((key) => (
     key === COURSES_CACHE_KEY
+    || key === COURSE_ORDER_CACHE_KEY
     || key.startsWith('@cardinal_nodes_')
     || key.startsWith('@cardinal_layout_')
   ));

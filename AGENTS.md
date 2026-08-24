@@ -21,7 +21,7 @@ technical choices below — if a change works on only one platform, it is not do
 | Data & auth | Supabase (Postgres, Auth, Storage, Edge Functions) | Row Level Security is the FERPA boundary. |
 | Server state | TanStack Query | |
 | Charts | `react-native-svg` | Renders identically on all three platforms; no per-platform canvas code. |
-| AI | b.ai and OpenRouter via Supabase Edge Functions | Keeps provider keys server-side. |
+| AI | b.ai and Google Gemini via Supabase Edge Functions | Keeps provider keys server-side. |
 | Native builds | EAS Build | |
 
 ## Layout
@@ -57,7 +57,7 @@ These are the rules a change must not break. Everything else is a preference.
 
 **Secrets never reach the client.** `EXPO_PUBLIC_*` variables are compiled into
 the app bundle and readable by anyone who installs it. The Supabase anon key is
-fine there because RLS gates every table. `BAI_API_KEY`, `OPENROUTER_API_KEY`, and the service
+fine there because RLS gates every table. `BAI_API_KEY`, `GEMINI_API_KEY`, and the service
 role key are not — they belong in Edge Function secrets. Any code that calls an
 AI provider goes in `supabase/functions/`, never in `app/` or `src/`.
 

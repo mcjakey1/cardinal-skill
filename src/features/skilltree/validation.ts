@@ -12,7 +12,13 @@
 
 import type { Prereq, SkillNode } from './types';
 
-export type GraphErrorType = 'duplicate_id' | 'missing_prerequisite' | 'cycle_detected';
+export type GraphErrorType =
+  | 'duplicate_id'
+  | 'duplicate_edge'
+  | 'missing_node'
+  | 'missing_prerequisite'
+  | 'cycle_detected'
+  | 'disconnected_graph';
 
 export interface GraphError {
   type: GraphErrorType;
@@ -44,7 +50,25 @@ export function validateGraph(nodes: SkillNode[], prereqs: Prereq[]): GraphValid
     });
   }
 
+  const seenEdges = new Set<string>();
   for (const { nodeId, prereqId } of prereqs) {
+    const edgeKey = `${prereqId}\u0000${nodeId}`;
+    if (seenEdges.has(edgeKey)) {
+      errors.push({
+        type: 'duplicate_edge',
+        message: `"${prereqId}" is connected to "${nodeId}" more than once.`,
+        nodeIds: [prereqId, nodeId],
+      });
+    }
+    seenEdges.add(edgeKey);
+
+    if (!seen.has(nodeId)) {
+      errors.push({
+        type: 'missing_node',
+        message: `A prerequisite points to "${nodeId}", which is not on this chart.`,
+        nodeIds: [nodeId],
+      });
+    }
     if (!seen.has(prereqId)) {
       errors.push({
         type: 'missing_prerequisite',
@@ -61,6 +85,32 @@ export function validateGraph(nodes: SkillNode[], prereqs: Prereq[]): GraphValid
       message: `These nodes require each other in a loop, so none of them can ever unlock: ${onCycle.join(', ')}.`,
       nodeIds: onCycle,
     });
+  }
+
+  // Report connectivity only after structural errors are fixed. Otherwise a
+  // single dangling edge would create a second, less useful cascade error.
+  if (errors.length === 0 && seen.size > 1) {
+    const adjacency = new Map([...seen].map((id) => [id, new Set<string>()]));
+    for (const { nodeId, prereqId } of prereqs) {
+      adjacency.get(nodeId)!.add(prereqId);
+      adjacency.get(prereqId)!.add(nodeId);
+    }
+    const connected = new Set<string>();
+    const pending = [[...seen][0]!];
+    while (pending.length > 0) {
+      const id = pending.pop()!;
+      if (connected.has(id)) continue;
+      connected.add(id);
+      for (const next of adjacency.get(id)!) pending.push(next);
+    }
+    const orphaned = [...seen].filter((id) => !connected.has(id));
+    if (orphaned.length > 0) {
+      errors.push({
+        type: 'disconnected_graph',
+        message: `Connect every node to the course tree. These nodes are separated: ${orphaned.join(', ')}.`,
+        nodeIds: orphaned,
+      });
+    }
   }
 
   return { isValid: errors.length === 0, errors };

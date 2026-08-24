@@ -24,6 +24,66 @@ export interface TreeSnapshot {
   completedMissionIds: string[];
 }
 
+const NODE_COLUMNS =
+  'id, course_id, track_id, title, description, kind, icon_key, xp_reward, syllabus_topic, universal_skill, learning_objectives, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded, archived';
+const LEGACY_NODE_COLUMNS = NODE_COLUMNS.replace(', archived', '');
+
+interface CourseNodeRow {
+  id: string;
+  course_id: string;
+  track_id: string | null;
+  title: string;
+  description: string | null;
+  kind: SkillNode['kind'];
+  icon_key: SkillNode['iconKey'];
+  xp_reward: number;
+  syllabus_topic: string | null;
+  universal_skill: string | null;
+  learning_objectives: string[] | null;
+  x: number;
+  y: number;
+  sort_order: number;
+  quest_title: string | null;
+  quest_subtitle: string | null;
+  title_override: string | null;
+  achievement_title: string | null;
+  achievement_description: string | null;
+  parent_node_id: string | null;
+  graded: boolean;
+  archived: boolean;
+}
+
+interface CourseNodesResult {
+  data: CourseNodeRow[] | null;
+  error: { code: string; message: string } | null;
+}
+
+/** Keep charts readable while a deployed project is still waiting on migration 0014. */
+async function fetchCourseNodes(courseId: string): Promise<CourseNodesResult> {
+  const current = await supabase
+    .from('skill_nodes')
+    .select(NODE_COLUMNS)
+    .eq('course_id', courseId)
+    .order('sort_order');
+  if (!current.error || current.error.code !== '42703' || !current.error.message.includes('archived')) {
+    return { data: current.data as CourseNodeRow[] | null, error: current.error };
+  }
+
+  console.warn('The remote schema is missing skill_nodes.archived; using the pre-0014 chart reader.');
+  const legacy = await supabase
+    .from('skill_nodes')
+    .select(LEGACY_NODE_COLUMNS)
+    .eq('course_id', courseId)
+    .order('sort_order');
+  return {
+    error: legacy.error,
+    data: legacy.data?.map((row) => ({
+      ...(row as unknown as Omit<CourseNodeRow, 'archived'>),
+      archived: false,
+    })) ?? null,
+  };
+}
+
 /**
  * One chart plus the signed-in student's progress on it.
  *
@@ -58,13 +118,7 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
 
   const [nodesRes, prereqsRes, progressRes, xpRes, courseRes, missionsRes, missionProgressRes] =
     await Promise.all([
-      supabase
-        .from('skill_nodes')
-        .select(
-          'id, course_id, track_id, title, description, kind, icon_key, xp_reward, syllabus_topic, universal_skill, learning_objectives, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded, archived',
-        )
-        .eq('course_id', courseId)
-        .order('sort_order'),
+      fetchCourseNodes(courseId),
       supabase.from('node_prereqs').select('node_id, prereq_id').eq('course_id', courseId),
       supabase.from('node_progress').select('node_id').eq('status', 'mastered'),
       supabase.rpc('total_xp_for_course', { p_course_id: courseId }),

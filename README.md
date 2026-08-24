@@ -7,13 +7,15 @@ One Expo + React Native codebase ships to web, iOS, and Android. Expo Router own
 ## Current features
 
 - Unified student/instructor authentication and persisted sessions
-- Dynamic DAG skill trees with pan, pointer-centred zoom, minimap reset, and preserved viewport state
+- Left-to-right DAG skill trees with pan, smooth active-work focus, pointer-centred zoom, minimap reset, and preserved viewport state
 - Five persistent theme presets: Obsidian Blueprint, Cyber Neon, Emerald Terminal, Solar Warmth, and Nord Frost
 - Pixel-art node states, contextual subject icons, orthogonal connectors, and directional arrows
-- Course metadata editing, progress reset confirmation, and course deletion
+- Searchable course library with drag ordering, device-first persistence, rename, progress reset, duplicate/fork, and deletion
 - Mission editing with live node-XP totals
 - Contextual AI study companion with formatted Markdown responses
-- PDF/text syllabus upload that generates course metadata, nodes, prerequisites, missions, and Dagre positions
+- PDF/text/Markdown syllabus dropzone with simple milestones, live parser telemetry, and bounded logs
+- Deterministic Gemini syllabus parsing with adaptive node budgets, graph repair, DAG validation, and exactly one stored course tree
+- Blank-course creation that routes directly into chart edit mode
 - Cached primary tabs and a GPU-friendly pixel-wipe navigation transition
 
 ## Requirements
@@ -22,7 +24,7 @@ One Expo + React Native codebase ships to web, iOS, and Android. Expo Router own
 - npm
 - A Supabase project and Supabase CLI
 - A b.ai API key for the study companion, quest naming, and help-subtree generation
-- An OpenRouter API key for syllabus parsing
+- A Google AI Studio Gemini API key for syllabus parsing
 
 ## Run locally
 
@@ -71,14 +73,14 @@ Link the project, apply all forward-only migrations, configure server secrets, a
 ```bash
 npx supabase link --project-ref your-project-ref
 npx supabase db push --linked
-npx supabase secrets set BAI_API_KEY=your-b-ai-key OPENROUTER_API_KEY=your-openrouter-key
+npx supabase secrets set BAI_API_KEY=your-b-ai-key GEMINI_API_KEY=your-google-ai-studio-key
 npx supabase functions deploy study-companion
 npx supabase functions deploy name-quest
 npx supabase functions deploy suggest-subtree
 npx supabase functions deploy parse-syllabus
 ```
 
-`BAI_API_KEY`, `OPENROUTER_API_KEY`, and the Supabase service-role key must never use an `EXPO_PUBLIC_` name or appear in client code.
+`BAI_API_KEY`, `GEMINI_API_KEY`, and the Supabase service-role key must never use an `EXPO_PUBLIC_` name or appear in client code.
 
 ## AI pipeline
 
@@ -87,11 +89,11 @@ npx supabase functions deploy parse-syllabus
 | Study companion | b.ai / DeepSeek V4 Flash | `study-companion` Edge Function |
 | Quest naming | b.ai / DeepSeek V4 Flash | `name-quest` Edge Function |
 | Adaptive help subtree | b.ai / DeepSeek V4 Flash | `suggest-subtree` Edge Function |
-| Syllabus-to-DAG parsing | OpenRouter / NVIDIA Nemotron 3.5 Lightning | `parse-syllabus` Edge Function |
+| Syllabus-to-DAG parsing | Google Gemini 3.1 Flash-Lite | `parse-syllabus` Edge Function |
 
-PDFs are sent from the Edge Function as base64 file inputs through OpenRouter's free Cloudflare PDF parser. Generated graph JSON is validated and normalized before database writes. Course-owner RLS policies control node, mission, and prerequisite creation.
+PDFs are sent from the Edge Function to Gemini as native inline PDF inputs. Generated graph JSON is constrained by a response schema, normalized to one connected left-to-right DAG, and validated before database writes. Stable generation seeds and bounded repair passes reduce variation when the same syllabus is parsed again. Course-owner RLS policies control node, mission, and prerequisite creation.
 
-The parser status indicator validates the configured key without consuming inference tokens. OpenRouter usage begins only when an actual syllabus parse reaches the completion endpoint.
+The parser status indicator validates the configured key and model without consuming inference tokens. Gemini usage begins only when an actual syllabus parse reaches the generation endpoint.
 
 ## Project layout
 

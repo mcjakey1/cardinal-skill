@@ -121,6 +121,30 @@ export function fitTransform(bounds: Bounds, viewport: Viewport, pad = FIT_PAD):
 }
 
 /**
+ * Fit a local area without blowing a single node up to the global zoom ceiling.
+ * This is the entry camera for active work: one node is centred at a readable
+ * scale, while several concurrent nodes still zoom out enough to share a view.
+ */
+export function focusTransform(
+  bounds: Bounds,
+  viewport: Viewport,
+  maxScale = 1.15,
+  pad = FIT_PAD,
+): Transform {
+  const fitted = fitTransform(bounds, viewport, pad);
+  const scale = Math.min(fitted.scale, clampScale(maxScale));
+  const centreX = (num(bounds.minX) + num(bounds.maxX)) / 2;
+  const centreY = (num(bounds.minY) + num(bounds.maxY)) / 2;
+  const vw = Math.max(1, num(viewport?.width));
+  const vh = Math.max(1, num(viewport?.height));
+  return {
+    scale,
+    x: vw / 2 - centreX * scale,
+    y: vh / 2 - centreY * scale,
+  };
+}
+
+/**
  * Zoom by `factor` while holding one screen point still.
  *
  * The clamp is applied *before* the offset is solved. Doing it after is the

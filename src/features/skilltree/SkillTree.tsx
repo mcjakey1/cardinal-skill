@@ -43,6 +43,7 @@ import {
   MIN_SCALE,
   boundsOf,
   fitTransform,
+  focusTransform,
   toWorld,
   zoomAbout,
   type Transform,
@@ -51,6 +52,7 @@ import { deriveStatuses, nextQuests } from './progression';
 import type { Prereq, SkillNode, Tree } from './types';
 import { autoLayout } from './autoLayout';
 import { displayStatus, type DisplayStatus } from './nodeVisualState';
+import { currentFocusNodes } from './chartFocus';
 import { miniMapGeometry, projectToMiniMap } from './minimap';
 import { CanvasGestureSurface, type WheelPoint } from './CanvasGestureSurface';
 import { useCanvasViewport } from './CanvasViewportProvider';
@@ -92,9 +94,9 @@ const SCALE_Y = 1.3;
 /** The cell is the touch target: 44dp, so the mark and the hit area are one. */
 const CELL = touch;
 const HALF = CELL / 2;
-/** Two lines of label at 16dp line height, plus the gap under the cell. */
-const LABEL_BLOCK = 44;
-const LABEL_WIDTH = 108;
+/** Up to four syllabus words at 16dp line height, plus the gap under the cell. */
+const LABEL_BLOCK = 76;
+const LABEL_WIDTH = 132;
 
 /**
  * Open ground kept around the content on every side, in dp.
@@ -106,7 +108,15 @@ const LABEL_WIDTH = 108;
  */
 const CANVAS_PAD = 900;
 
-const CHART_ROUTING: Routing = { axis: 'horizontal', in: HALF + 6, out: HALF + 6, elbowMin: 8 };
+const CHART_ROUTING: Routing = {
+  axis: 'horizontal',
+  // The last point is the arrow tip, so HALF docks it on the cell perimeter.
+  // Extra clearance here is what used to leave a visible floating gap.
+  in: HALF,
+  out: HALF,
+  elbowMin: 8,
+  arrow: 11,
+};
 /** A drag that never leaves the touch target was a tap on the node. */
 const DRAG_SLOP = 4;
 
@@ -134,6 +144,8 @@ interface Props {
   onResetLayout?: () => void;
   /** Fraction of mission XP claimed for each node. Drives IN PROGRESS. */
   progressByNode?: Readonly<Record<string, number>>;
+  /** Changes whenever navigation returns to this chart and requests active-work focus. */
+  focusRequestKey?: number;
   editMode?: boolean;
   linkMode?: boolean;
   linkSourceId?: string | null;
@@ -293,6 +305,7 @@ function SkillTreeCanvas({
   onMoveNode,
   onResetLayout,
   progressByNode = {},
+  focusRequestKey = 0,
   editMode,
   linkMode,
   linkSourceId,
@@ -384,11 +397,12 @@ function SkillTreeCanvas({
   );
 
   const setCamera = useCallback(
-    (next: Transform, animated = true) => {
-      const duration = reduceMotion || !animated ? 0 : motion.flash;
-      cameraX.value = duration ? withTiming(next.x, { duration }) : next.x;
-      cameraY.value = duration ? withTiming(next.y, { duration }) : next.y;
-      cameraScale.value = duration ? withTiming(next.scale, { duration }) : next.scale;
+    (next: Transform, animated = true, animationDuration: number = motion.flash) => {
+      const duration = reduceMotion || !animated ? 0 : animationDuration;
+      const timing = { duration, easing: Easing.out(Easing.cubic) };
+      cameraX.value = duration ? withTiming(next.x, timing) : next.x;
+      cameraY.value = duration ? withTiming(next.y, timing) : next.y;
+      cameraScale.value = duration ? withTiming(next.scale, timing) : next.scale;
       setScaleReadout(next.scale);
       viewportStore.write(viewportKey, next);
     },
@@ -402,14 +416,37 @@ function SkillTreeCanvas({
     setCamera(fitTransform(boundsOf(marks, CELL + LABEL_BLOCK), viewport, FIT_PAD));
   }, [nodes, setCamera, viewport]);
 
-  // Open on the whole chart rather than its top-left corner, once there is a
-  // measured viewport to fit it into.
-  const fitted = useRef(Boolean(restoredViewport.current));
+  const focusCurrentWork = useCallback((animated: boolean) => {
+    if (editMode) {
+      fit();
+      return;
+    }
+    const focusNodes = currentFocusNodes(nodes, status, progressByNode, recommendedId);
+    if (focusNodes.length === 0) {
+      fit();
+      return;
+    }
+    const marks = focusNodes.map((node) => ({ x: node.px, y: node.py }));
+    setCamera(
+      focusTransform(boundsOf(marks, CELL + LABEL_BLOCK), viewport),
+      animated,
+      motion.unlock,
+    );
+  }, [editMode, fit, nodes, progressByNode, recommendedId, setCamera, status, viewport]);
+
+  // The route stays mounted behind other tabs. A navigation focus request must
+  // therefore move the camera again, not only when this component first mounts.
+  const focusedRequest = useRef<number | null>(null);
   useEffect(() => {
-    if (fitted.current || viewport.width === 0 || nodes.length === 0) return;
-    fitted.current = true;
-    fit();
-  }, [fit, viewport.width, nodes.length]);
+    if (
+      focusedRequest.current === focusRequestKey
+      || viewport.width === 0
+      || viewport.height === 0
+      || nodes.length === 0
+    ) return;
+    focusedRequest.current = focusRequestKey;
+    focusCurrentWork(true);
+  }, [focusCurrentWork, focusRequestKey, nodes.length, viewport.height, viewport.width]);
 
   /** Camera coordinates stay on the UI thread; React only receives the scale readout. */
   const panStartX = useSharedValue(0);
@@ -541,8 +578,6 @@ function SkillTreeCanvas({
         <Polygon
           points={arrowheadPoints(points, targetStatus === 'locked' ? 9 : 11)}
           fill={ink}
-          stroke={theme.background}
-          strokeWidth={1}
           strokeLinejoin="miter"
         />
         {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, index) => (
@@ -576,7 +611,11 @@ function SkillTreeCanvas({
           ]}
           pointerEvents="box-none"
         >
-          <Svg width={canvas.width} height={canvas.height} style={StyleSheet.absoluteFill}>
+          <Svg
+            width={canvas.width}
+            height={canvas.height}
+            style={[StyleSheet.absoluteFill, styles.edgeLayer]}
+          >
             <Defs>
               {([
                 ['completed', theme.edgeCompleted],
@@ -595,7 +634,7 @@ function SkillTreeCanvas({
                   orient="auto-start-reverse"
                   markerUnits="userSpaceOnUse"
                 >
-                  <Path d="M 0 1 L 8 5 L 0 9 Z" fill={colour} stroke={theme.background} strokeWidth={0.8} />
+                  <Path d="M 0 1 L 8 5 L 0 9 Z" fill={colour} />
                 </Marker>
               ))}
             </Defs>
@@ -655,45 +694,51 @@ function SkillTreeCanvas({
         </Bevel>
       ) : null}
 
-      <MiniMap
-        nodes={nodes}
-        prereqs={laidOutTree.prereqs}
-        cameraX={cameraX}
-        cameraY={cameraY}
-        cameraScale={cameraScale}
-        viewport={viewport}
-        onReset={fit}
-        theme={theme}
-      />
-
-      <View style={styles.toolDock} pointerEvents="box-none">
-        {editMode && onAddNode && onToggleLinkMode ? (
-          <EditToolbar
-            linkMode={Boolean(linkMode)}
-            linkSourceId={linkSourceId}
-            selected={Boolean(selectedId)}
-            reduceMotion={Boolean(reduceMotion)}
-            deleteLabel={deleteLabel}
-            onAdd={() => {
-              const world = toWorld(
-                { x: viewport.width / 2, y: viewport.height / 2 },
-                { x: cameraX.value, y: cameraY.value, scale: cameraScale.value },
-              );
-              onAddNode({ x: (world.x + origin.x) / SCALE_X, y: (world.y + origin.y) / SCALE_Y });
-            }}
-            onLink={onToggleLinkMode}
-            onDelete={onDeleteNode}
-            onReset={onResetLayout}
-            onExit={() => onToggleEditMode?.(false)}
+      <View style={styles.chartHud} pointerEvents="box-none">
+        <View style={styles.hudControls} pointerEvents="box-none">
+          {editMode && onAddNode && onToggleLinkMode ? (
+            <EditToolbar
+              linkMode={Boolean(linkMode)}
+              linkSourceId={linkSourceId}
+              selected={Boolean(selectedId)}
+              reduceMotion={Boolean(reduceMotion)}
+              deleteLabel={deleteLabel}
+              onAdd={() => {
+                if (nodes.length === 0) {
+                  focusedRequest.current = null;
+                  onAddNode({ x: 0, y: 0 });
+                  return;
+                }
+                const world = toWorld(
+                  { x: viewport.width / 2, y: viewport.height / 2 },
+                  { x: cameraX.value, y: cameraY.value, scale: cameraScale.value },
+                );
+                onAddNode({ x: (world.x + origin.x) / SCALE_X, y: (world.y + origin.y) / SCALE_Y });
+              }}
+              onLink={onToggleLinkMode}
+              onDelete={onDeleteNode}
+              onReset={onResetLayout}
+              onExit={() => onToggleEditMode?.(false)}
+            />
+          ) : null}
+          <ChartTools
+            editMode={editMode}
+            onToggleEditMode={onToggleEditMode}
+            onZoomIn={() => zoom(1.25)}
+            onZoomOut={() => zoom(0.8)}
+            onFit={fit}
+            scale={scaleReadout}
           />
-        ) : null}
-        <ChartTools
-          editMode={editMode}
-          onToggleEditMode={onToggleEditMode}
-          onZoomIn={() => zoom(1.25)}
-          onZoomOut={() => zoom(0.8)}
-          onFit={fit}
-          scale={scaleReadout}
+        </View>
+        <MiniMap
+          nodes={nodes}
+          prereqs={laidOutTree.prereqs}
+          cameraX={cameraX}
+          cameraY={cameraY}
+          cameraScale={cameraScale}
+          viewport={viewport}
+          onReset={fit}
+          theme={theme}
         />
       </View>
     </View>
@@ -1026,8 +1071,6 @@ function NodeCell({
       <PixelText
         variant="micro"
         colour={theme.textPrimary}
-        numberOfLines={2}
-        ellipsizeMode="tail"
         centred
         style={styles.label}
       >
@@ -1105,31 +1148,43 @@ const styles = StyleSheet.create({
   loadingGlyph: { width: 28, height: 28, borderWidth: 4 },
   fill: { flex: 1 },
   layer: { position: 'absolute', left: 0, top: 0 },
+  edgeLayer: { zIndex: 0 },
   miniMap: {
-    position: 'absolute',
-    right: space.cell,
-    top: space.cell,
     width: 132,
     height: 84,
+    flexShrink: 0,
     borderWidth: bevel,
     padding: 0,
     overflow: 'hidden',
   },
   miniMapFrustum: { position: 'absolute', borderWidth: 1 },
-  toolDock: {
+  chartHud: {
     position: 'absolute',
+    zIndex: 3,
+    top: space.cell,
+    left: space.cell,
     right: space.cell,
-    bottom: space.cell,
-    maxWidth: '96%',
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-end',
     gap: space.cell,
     overflow: 'visible',
   },
-  editToolbar: { flexShrink: 1, overflow: 'visible' },
+  hudControls: {
+    minWidth: 0,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: space.cell,
+  },
+  editToolbar: { maxWidth: '100%', flexShrink: 1, overflow: 'visible' },
   editToolbarInner: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
     gap: space.xs,
     padding: space.xs,
     overflow: 'visible',
@@ -1137,6 +1192,7 @@ const styles = StyleSheet.create({
   editAction: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
   linkBanner: {
     position: 'absolute',
+    zIndex: 2,
     top: space.cell,
     left: '20%',
     right: '20%',
@@ -1148,7 +1204,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.cell,
   },
   linkCancel: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
-  node: { position: 'absolute', width: LABEL_WIDTH, alignItems: 'center' },
+  node: { position: 'absolute', zIndex: 1, width: LABEL_WIDTH, alignItems: 'center' },
   halo: {
     position: 'absolute',
     left: LABEL_WIDTH / 2 - HALF,

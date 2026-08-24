@@ -76,6 +76,7 @@ export function useLocalProgress(courseId: string | undefined) {
 
   useEffect(() => {
     let live = true;
+    setReady(false);
     if (!courseId) {
       setReady(true);
       return;

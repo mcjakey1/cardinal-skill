@@ -407,11 +407,14 @@ work in the middle, a docked window or summary bar above the bottom edge, and th
 five-cell navigation bar at the edge itself. Reading surfaces cap at 560px and
 centre; the chart does not cap, because it is a map.
 
-The chart uses a Dagre-generated prerequisite layout with orthogonal, stepped
-connectors. It supports mouse-wheel and pinch zoom from 50% to 200%, pointer-
-centred zoom, direct pan without drag-end snapping, and minimap reset. Viewport
-state is stored above tab content so leaving Chart never recentres the graph or
-recomputes layout merely because navigation changed.
+The chart uses a Dagre-generated left-to-right prerequisite layout with
+orthogonal, stepped connectors. It supports mouse-wheel and pinch zoom from 50%
+to 200%, pointer-centred zoom, direct pan without drag-end snapping, and minimap
+reset. On arrival it eases toward the current in-progress section (or one
+recommended node), while reduced-motion mode applies the same destination
+without travel. Zoom, fit, edit-mode, and edit actions occupy one wrapping HUD
+rail immediately left of the fixed-size minimap so bottom mission chrome can
+never cover the controls.
 
 Touch targets are at least 44×44dp everywhere, chart nodes included — the node
 cell *is* 44dp, so the mark and the hit area are one object.
@@ -482,6 +485,22 @@ never reorder and never collapse into a menu. The bar is hidden on authenticatio
 and syllabus check-in screens. All tab changes go through the global pixel-wipe
 interceptor, while primary views remain mounted and inactive views use
 `display: none` so the chart keeps its camera without compositor overhead.
+
+### Course switching and library rows
+The navbar course switcher is a row-only popover: it has no duplicate heading or
+close bar, opens beneath the course trigger, and closes from the trigger or an
+outside press. Its short eased reveal communicates that attachment and is
+removed under reduced motion. Each course is one fixed-height outlined row; the
+title, metadata, active treatment, and borderless action trigger share that
+single surface. The active border encloses the whole row rather than stopping
+before the action target.
+
+The dedicated Courses screen uses the same unified-row rule and adds a drag grip
+and zero-padded position before the course identity. Only the grip starts a drag.
+The dots trigger opens the shared anchored action popover for rename, reset,
+duplicate/fork, and delete. Reordering updates indices immediately and saves to
+the device first; database synchronization may finish later without reverting
+the visible order.
 
 ### Window (signature component)
 A titled panel: a `cardinal` title bar in uppercase label type, a close box on the

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -11,6 +11,10 @@ import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree
 import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
 import { validateGraph } from '@/features/skilltree/validation';
+import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
+import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/features/skilltree/chartImpact';
+import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
+import { purgeCourseCache } from '@/lib/editedTree';
 import type { NodeKind, SkillNode } from '@/features/skilltree/types';
 import type { NodePatch } from '@/features/skilltree/chartDraft';
 import { useChartDraft } from '@/lib/useChartDraft';
@@ -26,6 +30,7 @@ import {
   Field,
   Icon,
   LButton,
+  LModal,
   LText,
   Meter,
   Notice,
@@ -644,7 +649,10 @@ function TreeSection({
     queryFn: () => fetchTree(course.id),
   });
 
-  const { draft, ready, edit, reset } = useChartDraft(canEdit ? course.id : undefined);
+  const queryClient = useQueryClient();
+  const { draft, ready, edit, undoEdit, redoEdit, reset, canUndo, canRedo } = useChartDraft(
+    canEdit ? course.id : undefined,
+  );
 
   // Seed once per course, and only from a fresh read. A draft already holding
   // edits must survive a refetch, or a background refresh silently discards
@@ -751,6 +759,65 @@ function TreeSection({
     edit({ t: 'move', nodeId, before: { x: before.x, y: before.y }, after: at });
   };
 
+  const liveState = useMemo(
+    () => ({
+      nodes: data?.tree.nodes ?? [],
+      prereqs: data?.tree.prereqs ?? [],
+      missions: data?.missions ?? [],
+    }),
+    [data],
+  );
+  const changes = useMemo(() => diffCharts(liveState, draft.working), [liveState, draft.working]);
+  const validation = useMemo(
+    () => validateGraph(draft.working.nodes.filter((n) => !n.archived), draft.working.prereqs),
+    [draft.working],
+  );
+
+  const [confirming, setConfirming] = useState(false);
+  const [impact, setImpact] = useState<ArchiveImpact[]>([]);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+
+  const openConfirm = async () => {
+    setPublishError(null);
+    const rows = await fetchArchiveImpact(course.id, changes.archiveNodes).catch(() => []);
+    setImpact(summariseImpact(changes, liveState, rows));
+    setConfirming(true);
+  };
+
+  const doPublish = async () => {
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      // Re-read before writing. Another instructor, or a syllabus re-parse, may
+      // have moved the chart since this draft started; publishing over that
+      // silently would be last-write-wins on someone else's work.
+      const fresh = await fetchTree(course.id);
+      const movedUnderneath =
+        JSON.stringify(fresh.tree.nodes.map((n) => n.id).sort())
+        !== JSON.stringify(draft.baseline.nodes.map((n) => n.id).sort());
+      if (movedUnderneath) {
+        setPublishError('This chart changed since you started editing. Reload before publishing.');
+        return;
+      }
+
+      await publishChart(course.id, changes);
+      await purgeCourseCache(course.id);
+      reset({ nodes: fresh.tree.nodes, prereqs: fresh.tree.prereqs, missions: fresh.missions });
+      setConfirming(false);
+      await Promise.all([
+        refetch(),
+        queryClient.invalidateQueries({ queryKey: ['instructor-cohort', course.id] }),
+        queryClient.invalidateQueries({ queryKey: ['instructor-roster', course.id] }),
+        queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
+      ]);
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : 'The publish did not go through.');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   const inspector = (
     <View style={[styles.inspector, wide ? styles.inspectorWide : null]}>
       <ScrollView contentContainerStyle={styles.inspectorScroll}>
@@ -823,13 +890,28 @@ function TreeSection({
   );
 
   return (
-    <View style={[styles.canvasLayout, wide ? styles.canvasLayoutWide : null]}>
+    <>
+      <View style={[styles.canvasLayout, wide ? styles.canvasLayoutWide : null]}>
       <View style={styles.canvasColumn}>
         <View style={styles.toolbar}>
           <LText variant="small" style={styles.strong} numberOfLines={1}>
             {data?.title ?? course.title}
           </LText>
           <View style={styles.spacer} />
+          {canEdit && countChanges(changes) > 0 ? (
+            <>
+              <Badge label={`${countChanges(changes)} unpublished`} tone="gold" />
+              <LButton label="Undo" icon="rotate-ccw" size="sm" disabled={!canUndo} onPress={undoEdit} />
+              <LButton label="Redo" icon="rotate-cw" size="sm" disabled={!canRedo} onPress={redoEdit} />
+              <LButton
+                label="Publish"
+                variant="primary"
+                size="sm"
+                disabled={!validation.isValid}
+                onPress={openConfirm}
+              />
+            </>
+          ) : null}
           <LButton label="Edit by hand" icon="edit-3" size="sm" onPress={onAuthor} />
           <LButton
             label="Open as a student"
@@ -895,7 +977,43 @@ function TreeSection({
       </View>
 
       {inspector}
-    </View>
+      </View>
+
+      {/* Outside the section's layout on purpose. Anything absolutely positioned
+          inside it renders below the nav drawer, a later sibling of `main`. */}
+      <LModal visible={confirming} title="Publish changes" onRequestClose={() => setConfirming(false)}>
+        <LText variant="small" tone="muted">
+          {countChanges(changes)} change{countChanges(changes) === 1 ? '' : 's'} will reach students.
+        </LText>
+
+        {impact.length > 0 ? (
+          <Notice tone="attention" title="Retiring work students have done">
+            {impact.map((row) => (
+              <LText key={row.nodeId} variant="small">
+                {row.title} — {row.studentsCompleted} student
+                {row.studentsCompleted === 1 ? '' : 's'} cleared it, {row.missionsHidden} mission
+                {row.missionsHidden === 1 ? '' : 's'} hidden, {row.danglingEdges} connection
+                {row.danglingEdges === 1 ? '' : 's'} dropped
+                {row.helpDescendants > 0 ? `, ${row.helpDescendants} help step${row.helpDescendants === 1 ? '' : 's'} hidden with it` : ''}.
+                Their XP stays banked, and you can restore it.
+              </LText>
+            ))}
+          </Notice>
+        ) : null}
+
+        {publishError ? <Notice tone="error" title="Not published">{publishError}</Notice> : null}
+
+        <View style={styles.rowWrap}>
+          <LButton
+            label={publishing ? 'Publishing…' : 'Publish'}
+            variant={hasDestructiveChanges(changes) ? 'danger' : 'primary'}
+            disabled={publishing}
+            onPress={doPublish}
+          />
+          <LButton label="Cancel" variant="quiet" disabled={publishing} onPress={() => setConfirming(false)} />
+        </View>
+      </LModal>
+    </>
   );
 }
 

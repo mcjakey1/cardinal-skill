@@ -10,7 +10,7 @@
  * runnable under `node --test`.
  */
 
-import type { Mission, Prereq, SkillNode } from './types.ts';
+import type { Mission, Prereq, SkillNode, Tree } from './types.ts';
 
 export interface ChartState {
   nodes: SkillNode[];
@@ -171,4 +171,29 @@ export function redo(draft: ChartDraft): ChartDraft {
 export function sameNodeIds(a: ChartState, b: ChartState): boolean {
   const ids = (s: ChartState) => s.nodes.map((n) => n.id).sort().join('\u0000');
   return ids(a) === ids(b);
+}
+
+/**
+ * The chart minus everything retired: archived nodes dropped, and every edge
+ * with a retired endpoint gone with them.
+ *
+ * Archiving only flips a flag — the reducer keeps the node, the RPC retires it
+ * with an UPDATE, and neither touches `prereqs`. So checking the surviving
+ * nodes against the whole edge list reports a missing prerequisite for every
+ * edge into a retired node, which would disable Publish for the one workflow
+ * that needs it. Everything that asks "what survives" goes through here.
+ *
+ * It lives beside the reducer rather than inside a screen because two screens
+ * need it and they must not disagree: the instructor's canvas draws the chart
+ * that survives, and so must the student preview opened from it. RLS hands
+ * retired rows to the course owner on purpose, so the owner is the one person
+ * the client has to filter.
+ */
+export function aliveSubgraph(state: Tree): Tree {
+  const nodes = state.nodes.filter((n) => !n.archived);
+  const ids = new Set(nodes.map((n) => n.id));
+  return {
+    nodes,
+    prereqs: state.prereqs.filter((p) => ids.has(p.nodeId) && ids.has(p.prereqId)),
+  };
 }

@@ -38,6 +38,7 @@ import {
   updateCourseMetadata,
   type CourseMetadata,
 } from '@/features/skilltree/courseQueries';
+import { aliveSubgraph } from '@/features/skilltree/chartDraft';
 import { nodeProgress, rollUpProgress } from '@/features/skilltree/rollup';
 import {
   finalizeMissionDrafts,
@@ -183,7 +184,15 @@ export default function TreeScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId]);
 
-  const sourceTree = edited?.tree ?? data?.tree;
+  // Retired nodes are hidden from students by RLS, so for a student this filter
+  // is a no-op. It is here for the one person RLS deliberately still shows them
+  // to: the course owner, arriving from "Open as a student" to check the chart
+  // as delivered. Without it they are shown the one chart that is not the
+  // chart — retired nodes drawn as live, and counted in the XP denominator.
+  const sourceTree = useMemo(() => {
+    const raw = edited?.tree ?? data?.tree;
+    return raw ? aliveSubgraph(raw) : raw;
+  }, [data?.tree, edited?.tree]);
   const sourceMissions = useMemo(
     () => edited?.missions ?? data?.missions ?? [],
     [data?.missions, edited?.missions],

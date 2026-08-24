@@ -25,7 +25,7 @@ import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishCh
 import { purgeCourseCache } from '@/lib/editedTree';
 import type { NodeKind, SkillNode, Tree } from '@/features/skilltree/types';
 import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
-import { sameNodeIds } from '@/features/skilltree/chartDraft';
+import { aliveSubgraph, sameNodeIds } from '@/features/skilltree/chartDraft';
 import { unmoved, useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
@@ -1687,24 +1687,6 @@ function PageHead({
   );
 }
 
-/**
- * The chart as a student will receive it: retired nodes gone, and every edge
- * with a retired endpoint gone with them.
- *
- * Archiving only flips a flag — the reducer keeps the node, the RPC retires it
- * with an UPDATE, and neither touches `prereqs`. So checking the surviving
- * nodes against the whole edge list reports a missing prerequisite for every
- * edge into a retired node, which would disable Publish for the one workflow
- * that needs it. Everything that asks "what survives" goes through here.
- */
-function aliveSubgraph(state: Tree): Tree {
-  const nodes = state.nodes.filter((n) => !n.archived);
-  const ids = new Set(nodes.map((n) => n.id));
-  return {
-    nodes,
-    prereqs: state.prereqs.filter((p) => ids.has(p.nodeId) && ids.has(p.prereqId)),
-  };
-}
 
 /**
  * A uuid for a node the instructor just added.

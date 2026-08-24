@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { applyOp, canRedo, emptyDraft, redo, undo, type ChartState } from './chartDraft.ts';
+import { aliveSubgraph, applyOp, canRedo, emptyDraft, redo, undo, type ChartState } from './chartDraft.ts';
 import type { SkillNode } from './types.ts';
 
 function node(id: string, extra: Partial<SkillNode> = {}): SkillNode {
@@ -58,4 +58,24 @@ test('redo after undo replays the same op', () => {
   const once = applyOp(emptyDraft(STATE), { t: 'archive', nodeId: 'a' });
 
   assert.equal(redo(undo(once)).working.nodes.find((n) => n.id === 'a')?.archived, true);
+});
+
+test('a retired node takes its edges out of the chart with it, not just itself', () => {
+  const tree = {
+    nodes: [node('a'), node('b'), { ...node('c'), archived: true }],
+    prereqs: [
+      { nodeId: 'b', prereqId: 'a' },
+      { nodeId: 'c', prereqId: 'a' },
+      { nodeId: 'b', prereqId: 'c' },
+    ],
+  };
+
+  const alive = aliveSubgraph(tree);
+
+  assert.deepEqual(alive.nodes.map((n) => n.id), ['a', 'b']);
+  assert.deepEqual(
+    alive.prereqs,
+    [{ nodeId: 'b', prereqId: 'a' }],
+    'an edge is dropped whichever end of it retired',
+  );
 });

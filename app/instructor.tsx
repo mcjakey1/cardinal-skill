@@ -677,19 +677,29 @@ function TreeSection({
     }
   }, [canEdit, course.id, data, draft.ops.length, draft.published, ready, reset]);
 
-  // `selected` is a snapshot from the moment of the click. Everything below
-  // reads the live row so an edit is never applied to a pre-publish copy.
-  const live = data?.tree.nodes.find((n) => n.id === selected?.id) ?? null;
+  const [editMode, setEditMode] = useState(false);
+  const [linkMode, setLinkMode] = useState(false);
+  const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
+
+  // `selected` is a snapshot from the moment of the click, so everything below
+  // re-derives the node instead of reading it.
+  //
+  // In edit mode that means the draft first: it is what the canvas draws, so
+  // reading the server row here would show pre-edit values for a node that has
+  // already been changed, record the wrong `before` on a second edit to the
+  // same node, and leave a just-added node with no inspector at all. Outside
+  // edit mode the server row is the truth, and it stays the fallback for a node
+  // the draft has not got.
+  const live =
+    (editMode && canEdit ? draft.working.nodes.find((n) => n.id === selected?.id) : undefined)
+    ?? data?.tree.nodes.find((n) => n.id === selected?.id)
+    ?? null;
 
   // A different node means a fresh form, never the previous node's half-typed one.
   useEffect(() => {
     setEditing(false);
   }, [selected?.id]);
-
-  const [editMode, setEditMode] = useState(false);
-  const [linkMode, setLinkMode] = useState(false);
-  const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
-  const [linkNotice, setLinkNotice] = useState<string | null>(null);
 
   // In edit mode the canvas draws the draft, so an unpublished change shows
   // where it was made. Archived nodes are already gone as far as a student goes.
@@ -917,7 +927,13 @@ function TreeSection({
   const inspectorBody = (
     <NodeInspector
       node={live}
-      prereqCount={data?.tree.prereqs.filter((p) => p.nodeId === live?.id).length ?? 0}
+      // Same graph the node itself came from, or a link added in the draft is
+      // drawn on the canvas and missing from the count beside it.
+      prereqCount={
+        (editMode && canEdit ? draft.working.prereqs : data?.tree.prereqs ?? []).filter(
+          (p) => p.nodeId === live?.id,
+        ).length
+      }
       canEdit={canEdit}
       editing={editing}
       onStartEdit={() => setEditing(true)}

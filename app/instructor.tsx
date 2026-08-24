@@ -23,7 +23,7 @@ import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
 import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/features/skilltree/chartImpact';
 import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
 import { purgeCourseCache } from '@/lib/editedTree';
-import type { NodeKind, SkillNode } from '@/features/skilltree/types';
+import type { NodeKind, SkillNode, Tree } from '@/features/skilltree/types';
 import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
 import { useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
@@ -693,13 +693,7 @@ function TreeSection({
 
   // In edit mode the canvas draws the draft, so an unpublished change shows
   // where it was made. Archived nodes are already gone as far as a student goes.
-  const shown = useMemo(
-    () => ({
-      nodes: draft.working.nodes.filter((n) => !n.archived),
-      prereqs: draft.working.prereqs,
-    }),
-    [draft.working],
-  );
+  const shown = useMemo(() => aliveSubgraph(draft.working), [draft.working]);
 
   const notice = (text: string) => {
     setLinkNotice(text);
@@ -746,8 +740,13 @@ function TreeSection({
       notice('A node cannot require itself');
       return;
     }
-    const next = [...draft.working.prereqs, { nodeId: node.id, prereqId: linkSourceId }];
-    const check = validateGraph(draft.working.nodes, next);
+    // Same basis as the publish gate, or the two disagree about which chart is
+    // being checked and a link can pass here only to block Publish later.
+    const alive = aliveSubgraph({
+      ...draft.working,
+      prereqs: [...draft.working.prereqs, { nodeId: node.id, prereqId: linkSourceId }],
+    });
+    const check = validateGraph(alive.nodes, alive.prereqs);
     if (!check.isValid) {
       notice(check.errors[0]?.message ?? 'That link would create a loop');
       cancelLink();
@@ -778,10 +777,10 @@ function TreeSection({
     [data],
   );
   const changes = useMemo(() => diffCharts(liveState, draft.working), [liveState, draft.working]);
-  const validation = useMemo(
-    () => validateGraph(draft.working.nodes.filter((n) => !n.archived), draft.working.prereqs),
-    [draft.working],
-  );
+  const validation = useMemo(() => {
+    const alive = aliveSubgraph(draft.working);
+    return validateGraph(alive.nodes, alive.prereqs);
+  }, [draft.working]);
 
   const [confirming, setConfirming] = useState(false);
   const [impact, setImpact] = useState<ArchiveImpact[]>([]);
@@ -1566,6 +1565,25 @@ function PageHead({
       {action}
     </View>
   );
+}
+
+/**
+ * The chart as a student will receive it: retired nodes gone, and every edge
+ * with a retired endpoint gone with them.
+ *
+ * Archiving only flips a flag — the reducer keeps the node, the RPC retires it
+ * with an UPDATE, and neither touches `prereqs`. So checking the surviving
+ * nodes against the whole edge list reports a missing prerequisite for every
+ * edge into a retired node, which would disable Publish for the one workflow
+ * that needs it. Everything that asks "what survives" goes through here.
+ */
+function aliveSubgraph(state: ChartState): Tree {
+  const nodes = state.nodes.filter((n) => !n.archived);
+  const ids = new Set(nodes.map((n) => n.id));
+  return {
+    nodes,
+    prereqs: state.prereqs.filter((p) => ids.has(p.nodeId) && ids.has(p.prereqId)),
+  };
 }
 
 const KINDS: { value: NodeKind; label: string }[] = [

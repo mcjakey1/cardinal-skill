@@ -250,9 +250,12 @@ begin
   get diagnostics v_n = row_count; missions_upserted := v_n;
 
   -- 10. xp_reward LAST. It is a cache of the mission sum, asserted by
-  -- request_help_subtree at 0004:137-140. Only nodes this batch touched, and
-  -- only nodes that actually have missions — a node with none keeps its own
-  -- authored value.
+  -- request_help_subtree at 0004:137-140. Every node in the course that has
+  -- missions and is currently out of step, not only the ones this batch
+  -- touched — the subquery filters on course_id alone. That is deliberate: it
+  -- repairs drift from any source in the same pass, and the `xp_reward <>
+  -- s.total` guard means an already-correct node is not rewritten. A node with
+  -- no missions is never joined, so it keeps its own authored value.
   update skill_nodes n set xp_reward = s.total
   from (
     select m.node_id, sum(m.xp_reward)::integer as total

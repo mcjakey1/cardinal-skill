@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  applyOp, canRedo as canRedoDraft, canUndo as canUndoDraft, emptyDraft, redo, undo,
+  applyOp, canRedo as canRedoDraft, canUndo as canUndoDraft, emptyDraft, redo, sameNodeIds, undo,
   type ChartDraft, type ChartOp, type ChartState,
 } from '@/features/skilltree/chartDraft';
 
@@ -91,10 +91,26 @@ export function useChartDraft(courseId: string | undefined) {
    * while skipping the re-seed to protect it pins the draft to a baseline that
    * never catches up with the server again — so every later change by anyone
    * else comes back as this instructor's unpublished edits.
+   *
+   * It survives only while it still describes something real. If the server has
+   * moved past the state our publish left behind, someone else has published
+   * since, and restoring our baseline would revert their work — so the undo is
+   * withdrawn here and the button disappears.
    */
   const reseed = useCallback(
-    (state: ChartState) =>
-      commit({ ...emptyDraft(state), published: latest.current.published }),
+    (state: ChartState) => {
+      const { published, publishedAt } = latest.current;
+      // Loosely: is this still the chart our publish left behind? A draft
+      // persisted before publishedAt existed reads undefined, which != null
+      // catches alongside null.
+      const stillOurs =
+        published != null && publishedAt != null && sameNodeIds(publishedAt, state);
+      return commit({
+        ...emptyDraft(state),
+        published: stillOurs ? published : null,
+        publishedAt: stillOurs ? publishedAt : null,
+      });
+    },
     [commit],
   );
 
@@ -104,7 +120,7 @@ export function useChartDraft(courseId: string | undefined) {
    */
   const markPublished = useCallback(
     (before: ChartState, after: ChartState) =>
-      commit({ ...emptyDraft(after), published: before }),
+      commit({ ...emptyDraft(after), published: before, publishedAt: after }),
     [commit],
   );
 

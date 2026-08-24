@@ -25,6 +25,7 @@ import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishCh
 import { purgeCourseCache } from '@/lib/editedTree';
 import type { NodeKind, SkillNode, Tree } from '@/features/skilltree/types';
 import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
+import { sameNodeIds } from '@/features/skilltree/chartDraft';
 import { useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
@@ -665,7 +666,7 @@ function TreeSection({
   });
 
   const queryClient = useQueryClient();
-  const { draft, ready, edit, undoEdit, redoEdit, reseed, markPublished, canUndo, canRedo } =
+  const { draft, ready, edit, undoEdit, redoEdit, reset, reseed, markPublished, canUndo, canRedo } =
     useChartDraft(canEdit ? course.id : undefined);
 
   // Seed once per course, and only from a fresh read. A draft already holding
@@ -853,10 +854,12 @@ function TreeSection({
       // have moved the chart since this draft started; publishing over that
       // silently would be last-write-wins on someone else's work.
       const fresh = await fetchTree(course.id);
-      const movedUnderneath =
-        JSON.stringify(fresh.tree.nodes.map((n) => n.id).sort())
-        !== JSON.stringify(draft.baseline.nodes.map((n) => n.id).sort());
-      if (movedUnderneath) {
+      const freshState: ChartState = {
+        nodes: fresh.tree.nodes,
+        prereqs: fresh.tree.prereqs,
+        missions: fresh.missions,
+      };
+      if (!sameNodeIds(freshState, draft.baseline)) {
         setPublishError('This chart changed since you started editing. Reload before publishing.');
         return;
       }
@@ -921,13 +924,11 @@ function TreeSection({
       await publishChart(course.id, inverse);
       await purgeCourseCache(course.id);
       const after = await fetchTree(course.id);
-      // `before` here is the chart as it stood ahead of this undo, the same
-      // relationship `doPublish` records, so the undo itself stays reversible.
-      markPublished(before, {
-        nodes: after.tree.nodes,
-        prereqs: after.tree.prereqs,
-        missions: after.missions,
-      });
+      // One-shot on purpose. The chart is back where it was, so there is
+      // nothing left to undo: `reset` re-seeds from the fresh read and clears
+      // the baseline, so the button goes away instead of becoming a redo
+      // wearing an Undo label.
+      reset({ nodes: after.tree.nodes, prereqs: after.tree.prereqs, missions: after.missions });
       await refetch();
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : 'The undo did not go through.');

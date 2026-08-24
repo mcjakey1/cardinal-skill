@@ -48,6 +48,15 @@ export interface ChartDraft {
    * of the diff taken the other way round.
    */
   published: ChartState | null;
+  /**
+   * The chart as that same publish left it.
+   *
+   * Re-seeding compares the fresh server read against this. If they differ,
+   * someone has published since, `published` describes a chart that no longer
+   * exists, and offering to restore it would revert their work — so the undo is
+   * withdrawn rather than aimed at the wrong target.
+   */
+  publishedAt: ChartState | null;
 }
 
 const clone = (state: ChartState): ChartState => ({
@@ -57,7 +66,14 @@ const clone = (state: ChartState): ChartState => ({
 });
 
 export function emptyDraft(state: ChartState): ChartDraft {
-  return { baseline: clone(state), working: clone(state), ops: [], cursor: 0, published: null };
+  return {
+    baseline: clone(state),
+    working: clone(state),
+    ops: [],
+    cursor: 0,
+    published: null,
+    publishedAt: null,
+  };
 }
 
 const patchNode = (node: SkillNode, patch: NodePatch): SkillNode => ({ ...node, ...patch });
@@ -142,4 +158,17 @@ export function redo(draft: ChartDraft): ChartDraft {
   if (!canRedo(draft)) return draft;
   const op = draft.ops[draft.cursor]!;
   return { ...draft, working: forward(draft.working, op), cursor: draft.cursor + 1 };
+}
+
+/**
+ * Do two charts hold the same set of nodes?
+ *
+ * The narrowing heuristic the pre-publish staleness check has always used, kept
+ * here so the re-seed check shares it literally rather than agreeing by
+ * coincidence. It is deliberately blind to field and mission drift: it answers
+ * "is this recognisably the same chart", not "is it unchanged".
+ */
+export function sameNodeIds(a: ChartState, b: ChartState): boolean {
+  const ids = (s: ChartState) => s.nodes.map((n) => n.id).sort().join('\u0000');
+  return ids(a) === ids(b);
 }

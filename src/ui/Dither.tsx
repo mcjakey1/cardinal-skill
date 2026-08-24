@@ -12,6 +12,7 @@
  * texture, fine enough not to read as a checkerboard.
  */
 
+import { useId } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 
@@ -21,6 +22,7 @@ import {
   ditherFill,
   ditherId,
   fieldLevels,
+  instanceNamespace,
   litCells,
   type DitherLevel,
 } from '@/theme/dither';
@@ -30,6 +32,19 @@ import { useTheme } from '@/theme/useTheme';
 // instructor workspace started drawing the same field on the web. Re-exported
 // here so every existing import keeps working.
 export { ditherFill, ditherId, litCells };
+
+/**
+ * A namespace of this component's own.
+ *
+ * Every caller needs one. On the web these definitions are document-wide, and
+ * this app leaves inactive routes mounted, so a shared name means one screen
+ * draws another screen's colours and loses its own the moment that screen goes
+ * away. See `instanceNamespace` for the whole story.
+ */
+function useDitherNamespace(prefix: string): string {
+  const id = useId();
+  return instanceNamespace(prefix, id);
+}
 export type { DitherLevel };
 
 interface DefsProps {
@@ -91,6 +106,7 @@ interface FieldProps {
  */
 export function DitherField({ variant = 'chart', from, to, bands = 9, flat = false }: FieldProps) {
   const theme = useTheme();
+  const name = useDitherNamespace('field');
   const [baseColour, overColour] = variant === 'quiet' ? theme.quietField : theme.field;
   const base = from ?? baseColour;
   const over = to ?? overColour;
@@ -99,7 +115,7 @@ export function DitherField({ variant = 'chart', from, to, bands = 9, flat = fal
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <Svg width="100%" height="100%" preserveAspectRatio="none">
-        {flat ? null : <DitherDefs name="field" colour={over} levels={levels} />}
+        {flat ? null : <DitherDefs name={name} colour={over} levels={levels} />}
         {/* Flat mode keeps the dominant colour, not the base one: the field
             should still read as itself when the texture is gone. */}
         <Rect x="0" y="0" width="100%" height="100%" fill={flat ? over : base} />
@@ -112,7 +128,7 @@ export function DitherField({ variant = 'chart', from, to, bands = 9, flat = fal
                 y={`${(i * 100) / bands}%`}
                 width="100%"
                 height={`${100 / bands + 0.5}%`}
-                fill={ditherFill('field', level)}
+                fill={ditherFill(name, level)}
               />
             ))}
       </Svg>

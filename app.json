@@ -34,7 +34,17 @@
       "output": "static",
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-router", "expo-font", "expo-secure-store"],
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Cardinal Skill uses a photo you pick as the background of your skill tree. It stays on this device."
+        }
+      ]
+    ],
     "experiments": {
       "typedRoutes": true
     },

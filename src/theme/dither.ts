@@ -36,6 +36,25 @@ export function litCells(level: DitherLevel): { x: number; y: number }[] {
   return cells;
 }
 
+/**
+ * A namespace unique to one mounted component, from React's `useId`.
+ *
+ * This exists because of a bug worth remembering. On the web these patterns
+ * become real DOM, `fill="url(#id)"` resolves to the *first* matching id in the
+ * document, and this app keeps inactive routes mounted on purpose — see the
+ * `freezeOnBlur` note in `app/_layout.tsx`. Every field used to declare itself
+ * as `csk-field-N`, so a screen drew whichever screen mounted first, and the
+ * moment that screen unmounted every other screen's fill pointed at nothing and
+ * its background vanished.
+ *
+ * `useId` returns `:r3:` or `«r3»` depending on the renderer, and an XML id is
+ * an NCName: no colons, and it may not start with a digit. Hence the scrub.
+ */
+export function instanceNamespace(prefix: string, instanceId: string): string {
+  const scrubbed = instanceId.replace(/[^A-Za-z0-9]/g, '');
+  return `${prefix}-${scrubbed || 'x'}`;
+}
+
 /** Stable id for one dither pattern, so a fill can reference it by name. */
 export function ditherId(name: string, level: DitherLevel): string {
   return `csk-${name}-${level}`;

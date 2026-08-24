@@ -9,23 +9,9 @@ import {
   toLegacyTheme,
 } from './themes.ts';
 
+import { contrast } from './contrast.ts';
+
 const HEX = /^#[0-9A-F]{6}$/i;
-
-function luminance(hex: string): number {
-  const channels = hex
-    .slice(1)
-    .match(/../g)!
-    .map((channel) => Number.parseInt(channel, 16) / 255)
-    .map((channel) =>
-      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
-    );
-  return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
-}
-
-function contrast(a: string, b: string): number {
-  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (light! + 0.05) / (dark! + 0.05);
-}
 
 test('ships five unique, complete theme presets', () => {
   assert.equal(availableThemes.length, 5);

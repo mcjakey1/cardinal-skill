@@ -343,6 +343,17 @@ app.
 intermediate value is a 4×4 ordered (Bayer) dither of two palette entries on a
 2dp cell. A CSS or SVG gradient anywhere in this product is a bug.
 
+**The canvas backdrop is the student's, and still obeys the rule.** The chart
+alone lets a student change what it is drawn on — a dither gradient, a blueprint
+grid, dots, scanlines, a diagonal weave, or a photo of their own
+(`src/theme/backdrops.ts`, drawn by `src/ui/Backdrop.tsx`). Every pattern is
+whole palette entries on the 2dp cell, so none of them is the gradient the rule
+forbids. A photo arrives with tones of its own and is the one exception; it is
+dimmed with a Bayer scrim rather than an alpha ramp, and the scrim is there so
+node labels keep their contrast over whatever the student chose. The choice
+lives on the account, not the device, which is why a picked photo is stored
+inline rather than as the `file://` URI the picker returns.
+
 **The Slate-Is-Not-Ink Rule — on a dark ground.** `slate` draws lines there. The
 moment it sets text on `void` the screen fails contrast at 2.46:1: use `haze` for
 secondary text, `bone` for anything that matters.

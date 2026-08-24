@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   type LayoutChangeEvent,
@@ -25,6 +25,7 @@ import { ChartTools } from '@/ui/ChartTools';
 import { Bevel, PixelText, bevelStyle, type PressState } from '@/ui/pixel';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { useTheme } from '@/theme/useTheme';
+import { instanceNamespace } from '@/theme/dither';
 import { bevel, motion, space, touch } from '@/theme/tokens';
 import type { ThemePalette } from '@/theme/themes';
 import type { NodePosition, PositionMap } from '@/lib/nodeLayout';
@@ -297,6 +298,11 @@ function SkillTreeCanvas({
 }: Props) {
   const { theme } = useAppTheme();
   const t = useTheme();
+  // Arrowheads are document-wide definitions on the web, and two charts can be
+  // mounted at once — the student's tree and the instructor's authoring canvas.
+  // A shared name means the second chart points its edges at the first chart's
+  // markers, in the first chart's colours. See `instanceNamespace`.
+  const markerNs = instanceNamespace('arrow', useId());
   const viewportStore = useCanvasViewport();
   const restoredViewport = useRef(viewportStore.read(viewportKey));
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -518,7 +524,7 @@ function SkillTreeCanvas({
           strokeLinejoin="miter"
           strokeDasharray={targetStatus === 'locked' ? '6 6' : drawing < 1 ? '4 6' : undefined}
           opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
-          markerEnd={`url(#arrow-${markerName})`}
+          markerEnd={`url(#${markerNs}-${markerName})`}
         />
         {/* SVG markers are retained for browser semantics, while this matching
             polygon guarantees the direction cue survives react-native-svg on
@@ -536,7 +542,7 @@ function SkillTreeCanvas({
         ))}
       </G>
     );
-  }), [activeCrossbars, byId, dragging, progressByNode, recentlyMasteredId, status, theme, tree.prereqs, wipe]);
+  }), [activeCrossbars, byId, dragging, markerNs, progressByNode, recentlyMasteredId, status, theme, tree.prereqs, wipe]);
 
   return (
     <View style={styles.chart} onLayout={onLayout}>
@@ -572,7 +578,7 @@ function SkillTreeCanvas({
               ] as const).map(([name, colour]) => (
                 <Marker
                   key={name}
-                  id={`arrow-${name}`}
+                  id={`${markerNs}-${name}`}
                   viewBox="0 0 10 10"
                   markerWidth={name === 'locked' ? 7 : 8}
                   markerHeight={name === 'locked' ? 7 : 8}

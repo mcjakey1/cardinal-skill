@@ -821,7 +821,18 @@ function TreeSection({
     }),
     [data],
   );
-  const changes = useMemo(() => diffCharts(liveState, draft.working), [liveState, draft.working]);
+  // Against the baseline, never against `liveState`. The query has no staleTime
+  // and refetches on window focus, while the seed effect deliberately does not
+  // re-seed once this course is seeded — so with ops pending, tabbing away and
+  // back moves `liveState` past `draft.baseline` while `working` still holds
+  // seed-time values. Diffing against it would turn every field, mission and
+  // edge a colleague changed in between into one of ours and revert it on
+  // publish, as well as inflating the count with edits nobody here made.
+  // `liveState` stays for `summariseImpact`, which only wants titles.
+  const changes = useMemo(
+    () => diffCharts(draft.baseline, draft.working),
+    [draft.baseline, draft.working],
+  );
   const validation = useMemo(() => {
     const alive = aliveSubgraph(draft.working);
     return validateGraph(alive.nodes, alive.prereqs);

@@ -18,6 +18,14 @@ export function useEditedTree(
   const [edited, setEdited] = useState<EditedCourse | null>(null);
   const [ready, setReady] = useState(false);
 
+  // Callers pass this straight from a query result, so it is a new array on
+  // every render and cannot be an effect dependency: the effect would re-run,
+  // JSON.parse would return a fresh object, setEdited would never be
+  // reference-equal, and the render would loop forever on one AsyncStorage read
+  // per turn. A string of the ids is stable by value. Derived here rather than
+  // asked of the caller, who should not have to know any of this.
+  const idKey = serverNodeIds?.join(' ');
+
   useEffect(() => {
     let live = true;
     if (!courseId) {
@@ -32,8 +40,8 @@ export function useEditedTree(
         // A local edit shadows the server read, so a stale one hides a node the
         // owner retired. If the server no longer knows every node this draft
         // names, the draft is describing a chart that no longer exists.
-        if (stored && serverNodeIds) {
-          const known = new Set(serverNodeIds);
+        if (stored && idKey !== undefined) {
+          const known = new Set(idKey === '' ? [] : idKey.split(' '));
           const orphaned = stored.tree.nodes.some((n) => !known.has(n.id) && !n.id.startsWith('local-'));
           if (orphaned) {
             AsyncStorage.removeItem(editedTreeKey(courseId!)).catch(() => {});
@@ -50,7 +58,7 @@ export function useEditedTree(
         if (live) setReady(true);
       });
     return () => { live = false; };
-  }, [courseId, serverNodeIds]);
+  }, [courseId, idKey]);
 
   const save = useCallback(async (next: EditedCourse) => {
     if (!courseId) return;

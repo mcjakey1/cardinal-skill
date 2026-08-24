@@ -729,7 +729,7 @@ function TreeSection({
 
   const addNode = (at: { x: number; y: number }) => {
     const node: SkillNode = {
-      id: crypto.randomUUID(),
+      id: mintNodeId(),
       courseId: course.id,
       trackId: null,
       title: 'New node',
@@ -1617,6 +1617,28 @@ function aliveSubgraph(state: ChartState): Tree {
     nodes,
     prereqs: state.prereqs.filter((p) => ids.has(p.nodeId) && ids.has(p.prereqId)),
   };
+}
+
+/**
+ * A uuid for a node the instructor just added.
+ *
+ * `crypto.randomUUID` is there on web, but `app.json` targets ios and android
+ * and this repo carries no `react-native-get-random-values` or `expo-crypto`
+ * polyfill, so calling it unguarded crashes ADD NODE on Hermes.
+ * `subtree.ts:82` takes its generator as a parameter to dodge the same global.
+ * `skill_nodes.id` is a `uuid`, so the fallback has to be v4-shaped rather than
+ * merely unique.
+ *
+ * ponytail: Math.random fallback, not cryptographic. Fine for a row id nobody
+ * has to guess; reach for expo-crypto only if an id ever has to be unguessable.
+ */
+function mintNodeId(): string {
+  const g = globalThis as { crypto?: { randomUUID?: () => string } };
+  if (typeof g.crypto?.randomUUID === 'function') return g.crypto.randomUUID();
+  return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (ch) => {
+    const n = Number(ch);
+    return (n ^ (Math.floor(Math.random() * 256) & (15 >> (n / 4)))).toString(16);
+  });
 }
 
 const KINDS: { value: NodeKind; label: string }[] = [

@@ -8,7 +8,7 @@ import { achievements, streakDays, type Achievement } from '@/features/skilltree
 import { learnerMode, paceTarget, personalXpPerLevel } from '@/features/skilltree/adaptive';
 import { learnerSignals } from '@/features/skilltree/observed';
 import { XP_PER_LEVEL, levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
-import { fetchTree } from '@/features/skilltree/queries';
+import { fetchLiveTree } from '@/features/skilltree/queries';
 import { rollUpProgress } from '@/features/skilltree/rollup';
 import { usePrefs } from '@/lib/prefs';
 import { useLocalProgress } from '@/lib/progress';
@@ -39,7 +39,7 @@ export default function Record() {
 
   const { data, isPending } = useQuery({
     queryKey: ['tree', lastCourseId],
-    queryFn: () => fetchTree(lastCourseId!),
+    queryFn: () => fetchLiveTree(lastCourseId!),
     enabled: Boolean(lastCourseId),
   });
 

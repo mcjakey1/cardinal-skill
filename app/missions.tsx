@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { missionStates, type MissionState } from '@/features/skilltree/missions';
 import { deriveStatuses } from '@/features/skilltree/progression';
-import { fetchTree } from '@/features/skilltree/queries';
+import { fetchLiveTree } from '@/features/skilltree/queries';
 import { rollUpProgress } from '@/features/skilltree/rollup';
 import type { Mission } from '@/features/skilltree/types';
 import { usePrefs } from '@/lib/prefs';
@@ -46,7 +46,7 @@ export default function Missions() {
 
   const { data, isPending } = useQuery({
     queryKey: ['tree', lastCourseId],
-    queryFn: () => fetchTree(lastCourseId!),
+    queryFn: () => fetchLiveTree(lastCourseId!),
     enabled: Boolean(lastCourseId),
   });
 

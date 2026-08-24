@@ -9,6 +9,7 @@ import {
 import { demoMissions } from './demoMissions';
 import { findMockCourse } from './mockCourses';
 import { loadCachedTree } from '@/lib/courseCache';
+import { aliveSubgraph } from './chartDraft';
 import type { Mission, Prereq, SkillNode, Tree } from './types';
 
 export interface TreeSnapshot {
@@ -145,4 +146,22 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
       })),
     completedMissionIds: (missionProgressRes.data ?? []).map((r) => r.mission_id),
   };
+}
+
+/**
+ * One chart as a *student* receives it, with retired nodes already gone.
+ *
+ * `fetchTree` has to keep returning archived rows, because the course owner is
+ * shown them by RLS on purpose and `undoPublish` reads the flag off a fresh
+ * read to work out what to restore. Every student-facing screen wants the
+ * opposite, and the owner previewing their own course wants it too — which is
+ * the whole bug this exists to close. Filtering here rather than in `fetchTree`
+ * keeps the two audiences apart at the one place they differ.
+ *
+ * The instructor's authoring surfaces and the publish path call `fetchTree`.
+ * Anything that draws a chart to be worked through calls this.
+ */
+export async function fetchLiveTree(courseId: string): Promise<TreeSnapshot> {
+  const snapshot = await fetchTree(courseId);
+  return { ...snapshot, tree: aliveSubgraph(snapshot.tree) };
 }

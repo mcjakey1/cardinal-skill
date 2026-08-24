@@ -62,7 +62,7 @@ test('redo after undo replays the same op', () => {
 
 test('a retired node takes its edges out of the chart with it, not just itself', () => {
   const tree = {
-    nodes: [node('a'), node('b'), { ...node('c'), archived: true }],
+    nodes: [node('a'), node('b'), node('c', { archived: true })],
     prereqs: [
       { nodeId: 'b', prereqId: 'a' },
       { nodeId: 'c', prereqId: 'a' },

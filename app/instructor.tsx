@@ -23,7 +23,7 @@ import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
 import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/features/skilltree/chartImpact';
 import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
 import { purgeCourseCache } from '@/lib/editedTree';
-import type { NodeKind, SkillNode, Tree } from '@/features/skilltree/types';
+import type { NodeKind, SkillNode } from '@/features/skilltree/types';
 import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
 import { aliveSubgraph, sameNodeIds } from '@/features/skilltree/chartDraft';
 import { unmoved, useChartDraft } from '@/lib/useChartDraft';
@@ -1686,7 +1686,6 @@ function PageHead({
     </View>
   );
 }
-
 
 /**
  * A uuid for a node the instructor just added.

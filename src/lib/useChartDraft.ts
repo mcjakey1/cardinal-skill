@@ -13,11 +13,34 @@ import {
   type ChartDraft, type ChartOp, type ChartState,
 } from '@/features/skilltree/chartDraft';
 
+import { diffCharts, isEmptyChangeSet } from '@/features/skilltree/chartDiff';
+
 import { chartDraftStorageKey } from './chartDraftKey';
 import { createStore } from './store';
 
 const EMPTY_STATE: ChartState = { nodes: [], prereqs: [], missions: [] };
 const EMPTY: ChartDraft = emptyDraft(EMPTY_STATE);
+
+/**
+ * Is the server still exactly where our publish left it?
+ *
+ * Deliberately stricter than the pre-publish staleness check, because the two
+ * operations want opposite strictness. Publish writes a targeted diff: a
+ * colleague renaming a node I never touched is not in my payload and cannot be
+ * clobbered by my write, so refusing over it is friction with no safety benefit
+ * — `sameNodeIds` is right there. Undo publish reverts the *whole* chart to a
+ * baseline, so any drift at all is work my write would overwrite.
+ *
+ * `diffCharts` answers "what would publishing this take", and is the same function
+ * the undo itself runs, so the withdrawal and the undo cannot disagree about
+ * what counts as changed. It is not sufficient alone: it walks the target's
+ * nodes, so a node the server gained since our publish is invisible to it
+ * (verified — a bare added node yields an empty change set). `sameNodeIds`
+ * covers exactly that gap, which is why both are here.
+ */
+function unmoved(publishedAt: ChartState, server: ChartState): boolean {
+  return sameNodeIds(publishedAt, server) && isEmptyChangeSet(diffCharts(server, publishedAt));
+}
 
 export function useChartDraft(courseId: string | undefined) {
   const store = useMemo(
@@ -100,11 +123,12 @@ export function useChartDraft(courseId: string | undefined) {
   const reseed = useCallback(
     (state: ChartState) => {
       const { published, publishedAt } = latest.current;
-      // Loosely: is this still the chart our publish left behind? A draft
-      // persisted before publishedAt existed reads undefined, which != null
-      // catches alongside null.
+      // A draft persisted before publishedAt existed reads undefined, which
+      // != null catches alongside null. Withdrawing too eagerly is the safe
+      // direction: the edits are still in the draft, so the cost is re-making a
+      // publish, not losing work.
       const stillOurs =
-        published != null && publishedAt != null && sameNodeIds(publishedAt, state);
+        published != null && publishedAt != null && unmoved(publishedAt, state);
       return commit({
         ...emptyDraft(state),
         published: stillOurs ? published : null,

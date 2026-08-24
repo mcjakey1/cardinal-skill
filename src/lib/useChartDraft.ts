@@ -38,7 +38,7 @@ const EMPTY: ChartDraft = emptyDraft(EMPTY_STATE);
  * (verified — a bare added node yields an empty change set). `sameNodeIds`
  * covers exactly that gap, which is why both are here.
  */
-function unmoved(publishedAt: ChartState, server: ChartState): boolean {
+export function unmoved(publishedAt: ChartState, server: ChartState): boolean {
   return sameNodeIds(publishedAt, server) && isEmptyChangeSet(diffCharts(server, publishedAt));
 }
 

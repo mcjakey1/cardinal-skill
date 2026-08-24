@@ -26,7 +26,7 @@ import { purgeCourseCache } from '@/lib/editedTree';
 import type { NodeKind, SkillNode, Tree } from '@/features/skilltree/types';
 import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
 import { sameNodeIds } from '@/features/skilltree/chartDraft';
-import { useChartDraft } from '@/lib/useChartDraft';
+import { unmoved, useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
@@ -926,6 +926,18 @@ function TreeSection({
         prereqs: current.tree.prereqs,
         missions: current.missions,
       };
+      // The mount-time withdrawal cannot see a colleague who publishes while
+      // this instructor stays on the section, and this button reverts the whole
+      // chart rather than a targeted diff. Re-check against the read just taken,
+      // on the same predicate, so the two cannot disagree. A draft with no
+      // `publishedAt` cannot be verified at all, which is equally a refusal.
+      if (!draft.publishedAt || !unmoved(draft.publishedAt, before)) {
+        setPublishError(
+          'This chart has changed since you published, so undoing it would revert someone else’s work too. Nothing has been undone. Reload to see where the chart stands.',
+        );
+        return;
+      }
+
       const inverse = diffCharts(before, draft.published);
       // `mission_progress.mission_id` cascades, so this would take every
       // student's record of finishing them — and unlike the publish path there

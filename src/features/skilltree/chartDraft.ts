@@ -42,6 +42,12 @@ export interface ChartDraft {
   ops: ChartOp[];
   /** How many of `ops` are applied. Everything past it is redoable. */
   cursor: number;
+  /**
+   * The chart as it stood immediately before the last publish, or null if
+   * nothing has been published from this draft. Undoing a publish is a publish
+   * of the diff taken the other way round.
+   */
+  published: ChartState | null;
 }
 
 const clone = (state: ChartState): ChartState => ({
@@ -51,7 +57,7 @@ const clone = (state: ChartState): ChartState => ({
 });
 
 export function emptyDraft(state: ChartState): ChartDraft {
-  return { baseline: clone(state), working: clone(state), ops: [], cursor: 0 };
+  return { baseline: clone(state), working: clone(state), ops: [], cursor: 0, published: null };
 }
 
 const patchNode = (node: SkillNode, patch: NodePatch): SkillNode => ({ ...node, ...patch });

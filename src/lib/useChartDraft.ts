@@ -69,6 +69,16 @@ export function useChartDraft(courseId: string | undefined) {
   /** Seed from a fresh server read. Discards the working copy and the stack. */
   const reset = useCallback((state: ChartState) => commit(emptyDraft(state)), [commit]);
 
+  /**
+   * Seed from what a publish just wrote, keeping what it replaced. `before` is
+   * what Undo publish diffs back towards.
+   */
+  const markPublished = useCallback(
+    (before: ChartState, after: ChartState) =>
+      commit({ ...emptyDraft(after), published: before }),
+    [commit],
+  );
+
   return {
     draft,
     ready,
@@ -76,6 +86,7 @@ export function useChartDraft(courseId: string | undefined) {
     undoEdit,
     redoEdit,
     reset,
+    markPublished,
     canUndo: canUndoDraft(draft),
     canRedo: canRedoDraft(draft),
   };

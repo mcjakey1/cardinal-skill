@@ -24,7 +24,7 @@ import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/fe
 import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
 import { purgeCourseCache } from '@/lib/editedTree';
 import type { NodeKind, SkillNode } from '@/features/skilltree/types';
-import type { NodePatch } from '@/features/skilltree/chartDraft';
+import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
 import { useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
@@ -658,9 +658,8 @@ function TreeSection({
   });
 
   const queryClient = useQueryClient();
-  const { draft, ready, edit, undoEdit, redoEdit, reset, canUndo, canRedo } = useChartDraft(
-    canEdit ? course.id : undefined,
-  );
+  const { draft, ready, edit, undoEdit, redoEdit, reset, markPublished, canUndo, canRedo } =
+    useChartDraft(canEdit ? course.id : undefined);
 
   // Seed once per course, and only from a fresh read. A draft already holding
   // edits must survive a refetch, or a background refresh silently discards
@@ -809,9 +808,15 @@ function TreeSection({
         return;
       }
 
+      const before = draft.baseline;
       await publishChart(course.id, changes);
       await purgeCourseCache(course.id);
-      reset({ nodes: fresh.tree.nodes, prereqs: fresh.tree.prereqs, missions: fresh.missions });
+      const after = await fetchTree(course.id);
+      markPublished(before, {
+        nodes: after.tree.nodes,
+        prereqs: after.tree.prereqs,
+        missions: after.missions,
+      });
       setConfirming(false);
       await Promise.all([
         refetch(),
@@ -821,6 +826,44 @@ function TreeSection({
       ]);
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : 'The publish did not go through.');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  /**
+   * A publish is reversible because nothing it does is destructive: archiving is
+   * a flag, node uuids are stable, and edges are re-insertable. The inverse of a
+   * change set is the diff taken the other way round.
+   *
+   * A node the publish *added* comes back as an archive, not a removal, because
+   * publish never deletes a node. Everything else inverts exactly.
+   */
+  const undoPublish = async () => {
+    if (!draft.published) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      const current = await fetchTree(course.id);
+      const before: ChartState = {
+        nodes: current.tree.nodes,
+        prereqs: current.tree.prereqs,
+        missions: current.missions,
+      };
+      const inverse = diffCharts(before, draft.published);
+      await publishChart(course.id, inverse);
+      await purgeCourseCache(course.id);
+      const after = await fetchTree(course.id);
+      // `before` here is the chart as it stood ahead of this undo, the same
+      // relationship `doPublish` records, so the undo itself stays reversible.
+      markPublished(before, {
+        nodes: after.tree.nodes,
+        prereqs: after.tree.prereqs,
+        missions: after.missions,
+      });
+      await refetch();
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : 'The undo did not go through.');
     } finally {
       setPublishing(false);
     }
@@ -876,6 +919,16 @@ function TreeSection({
                 onPress={openConfirm}
               />
             </>
+          ) : null}
+          {/* Only with nothing unpublished pending: an undo on top of a
+              half-made new draft would publish both at once. */}
+          {canEdit && draft.published && countChanges(changes) === 0 ? (
+            <LButton
+              label="Undo publish"
+              icon="rotate-ccw"
+              size="sm"
+              onPress={undoPublish}
+            />
           ) : null}
           <LButton label="Edit by hand" icon="edit-3" size="sm" onPress={onAuthor} />
           <LButton
@@ -988,6 +1041,15 @@ function TreeSection({
         ) : null}
 
         {publishError ? <Notice tone="error" title="Not published">{publishError}</Notice> : null}
+
+        {changes.deleteMissions.length > 0 ? (
+          <Notice tone="error" title="Deleting missions cannot be undone">
+            {changes.deleteMissions.length} mission
+            {changes.deleteMissions.length === 1 ? '' : 's'} will be removed. Every student&rsquo;s record
+            of completing them goes with it, and Undo publish cannot bring those records back.
+            Retiring the whole node instead keeps them.
+          </Notice>
+        ) : null}
 
         <View style={styles.rowWrap}>
           <LButton

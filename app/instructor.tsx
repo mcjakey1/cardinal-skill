@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -664,18 +664,35 @@ function TreeSection({
   // Seed once per course, and only from a fresh read. A draft already holding
   // edits must survive a refetch, or a background refresh silently discards
   // work in progress.
-  const seeded = useRef<string | null>(null);
+  //
+  // State rather than a ref because the toolbar gates on it: a draft that loads
+  // from storage with ops already on it seeds without changing any other state,
+  // and a ref would leave the tray hidden with nothing left to trigger a
+  // re-render.
+  const [seededFor, setSeededFor] = useState<string | null>(null);
   useEffect(() => {
     if (!canEdit || !data || !ready) return;
-    if (seeded.current === course.id) return;
-    seeded.current = course.id;
+    if (seededFor === course.id) return;
+    setSeededFor(course.id);
     // `reset` is `emptyDraft`, which clears `published`. A draft that has just
     // published has no ops either, so reseeding it here would drop the undo
     // baseline every time this section remounts.
     if (draft.ops.length === 0 && !draft.published) {
       reset({ nodes: data.tree.nodes, prereqs: data.tree.prereqs, missions: data.missions });
     }
-  }, [canEdit, course.id, data, draft.ops.length, draft.published, ready, reset]);
+  }, [canEdit, course.id, data, draft.ops.length, draft.published, ready, reset, seededFor]);
+
+  /**
+   * Whether the draft on screen is this course's, loaded and seeded.
+   *
+   * `useChartDraft` starts at an empty draft while `data` arrives instantly from
+   * the react-query cache, so without this the toolbar flashes "N unpublished"
+   * on every remount — N counting every mission and edge, because the diff is
+   * against an empty chart — with Publish live and a confirm dialog offering to
+   * delete every mission. `movedUnderneath` refuses the write, but it must
+   * never be offered.
+   */
+  const draftReady = canEdit && ready && seededFor === course.id;
 
   const [editMode, setEditMode] = useState(false);
   const [linkMode, setLinkMode] = useState(false);
@@ -951,7 +968,7 @@ function TreeSection({
             {data?.title ?? course.title}
           </LText>
           <View style={styles.spacer} />
-          {canEdit && countChanges(changes) > 0 ? (
+          {draftReady && countChanges(changes) > 0 ? (
             <>
               <Badge label={`${countChanges(changes)} unpublished`} tone="gold" />
               <LButton label="Undo" icon="rotate-ccw" size="sm" disabled={!canUndo} onPress={undoEdit} />
@@ -967,7 +984,7 @@ function TreeSection({
           ) : null}
           {/* Only with nothing unpublished pending: an undo on top of a
               half-made new draft would publish both at once. */}
-          {canEdit && draft.published && countChanges(changes) === 0 ? (
+          {draftReady && draft.published && countChanges(changes) === 0 ? (
             <LButton
               label={publishing ? 'Undoing…' : 'Undo publish'}
               icon="rotate-ccw"

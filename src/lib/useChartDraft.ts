@@ -31,6 +31,19 @@ export function useChartDraft(courseId: string | undefined) {
   const [draft, setDraft] = useState<ChartDraft>(EMPTY);
   const [ready, setReady] = useState(false);
 
+  // `store` flips synchronously with `courseId`, but the effect that reloads it
+  // runs after commit. Without this, one render of a course switch returns the
+  // *previous* course's draft with `ready: true` — a stale draft presented as
+  // loaded, which callers gate real decisions on. React's documented
+  // adjust-state-while-rendering pattern, not an effect, because the correct
+  // value is knowable now and a frame of the wrong one is the whole bug.
+  const loadedFor = useRef(store);
+  if (loadedFor.current !== store) {
+    loadedFor.current = store;
+    setDraft(EMPTY);
+    setReady(false);
+  }
+
   // Mutators fire in quick succession from canvas gestures, so they read the
   // latest draft from a ref rather than closing over a stale render.
   const latest = useRef(draft);

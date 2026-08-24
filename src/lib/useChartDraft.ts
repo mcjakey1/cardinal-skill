@@ -83,6 +83,22 @@ export function useChartDraft(courseId: string | undefined) {
   const reset = useCallback((state: ChartState) => commit(emptyDraft(state)), [commit]);
 
   /**
+   * Re-seed from a fresh server read, keeping the undo baseline.
+   *
+   * This is what the mount-time seed runs, and it runs only with no ops pending,
+   * so there is never work in progress to lose. `published` has to survive it,
+   * and the two obvious options are both wrong: clearing it drops Undo publish,
+   * while skipping the re-seed to protect it pins the draft to a baseline that
+   * never catches up with the server again — so every later change by anyone
+   * else comes back as this instructor's unpublished edits.
+   */
+  const reseed = useCallback(
+    (state: ChartState) =>
+      commit({ ...emptyDraft(state), published: latest.current.published }),
+    [commit],
+  );
+
+  /**
    * Seed from what a publish just wrote, keeping what it replaced. `before` is
    * what Undo publish diffs back towards.
    */
@@ -99,6 +115,7 @@ export function useChartDraft(courseId: string | undefined) {
     undoEdit,
     redoEdit,
     reset,
+    reseed,
     markPublished,
     canUndo: canUndoDraft(draft),
     canRedo: canRedoDraft(draft),

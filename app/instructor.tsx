@@ -658,14 +658,14 @@ function TreeSection({
   // phone that puts Save out of reach — the exact failure the sheet exists to
   // avoid. Bound it here rather than in `lms.tsx`, which is not ours to change.
   const { height } = useWindowDimensions();
-  const modalScroll = { maxHeight: Math.round(height * 0.7) };
+  const modalScroll = useMemo(() => ({ maxHeight: Math.round(height * 0.7) }), [height]);
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['instructor-tree', course.id],
     queryFn: () => fetchTree(course.id),
   });
 
   const queryClient = useQueryClient();
-  const { draft, ready, edit, undoEdit, redoEdit, reset, markPublished, canUndo, canRedo } =
+  const { draft, ready, edit, undoEdit, redoEdit, reseed, markPublished, canUndo, canRedo } =
     useChartDraft(canEdit ? course.id : undefined);
 
   // Seed once per course, and only from a fresh read. A draft already holding
@@ -681,13 +681,17 @@ function TreeSection({
     if (!canEdit || !data || !ready) return;
     if (seededFor === course.id) return;
     setSeededFor(course.id);
-    // `reset` is `emptyDraft`, which clears `published`. A draft that has just
-    // published has no ops either, so reseeding it here would drop the undo
-    // baseline every time this section remounts.
-    if (draft.ops.length === 0 && !draft.published) {
-      reset({ nodes: data.tree.nodes, prereqs: data.tree.prereqs, missions: data.missions });
+    // Unconditional, because `reseed` carries `published` across. Gating this on
+    // `!draft.published` to save the undo baseline pinned the draft to a
+    // baseline it could never leave: `published` is persisted and nothing else
+    // clears it, so after one publish every later server-side change — another
+    // instructor, a re-parse, a student's help subtree — came back as this
+    // instructor's own unpublished edits, and server missions missing from the
+    // pinned draft landed in `deleteMissions`.
+    if (draft.ops.length === 0) {
+      reseed({ nodes: data.tree.nodes, prereqs: data.tree.prereqs, missions: data.missions });
     }
-  }, [canEdit, course.id, data, draft.ops.length, draft.published, ready, reset, seededFor]);
+  }, [canEdit, course.id, data, draft.ops.length, ready, reseed, seededFor]);
 
   /**
    * Whether the draft on screen is this course's, loaded and seeded.
@@ -835,8 +839,8 @@ function TreeSection({
       // would print a confident "0 students cleared it" we cannot stand behind.
       setPublishError(
         `The impact counts could not be read${
-          err instanceof Error ? `: ${err.message}` : '.'
-        } Retiring still works, but this dialog cannot say what it costs.`,
+          err instanceof Error ? `: ${err.message.replace(/\.$/, '')}` : ''
+        }. Retiring still works, but this dialog cannot say what it costs.`,
       );
     }
   };
@@ -941,6 +945,18 @@ function TreeSection({
     return mine.length > 0 ? mine.reduce((sum, m) => sum + m.xpReward, 0) : null;
   }, [canEdit, data?.missions, draft.working.missions, editMode, live?.id]);
 
+  /**
+   * Editing is offered only from inside edit mode.
+   *
+   * `live` prefers the draft row only when `editMode` is on; outside it the
+   * inspector reads the server row, because that is what the canvas is drawing.
+   * Offering Edit there let a `field` op record a `before` the draft never held
+   * — rename in edit mode, leave it, rename again, and undo restores a state
+   * that never existed. Publishing is unaffected either way, since the diff is
+   * state-based, but the undo stack is not.
+   */
+  const canEditNode = editMode && canEdit;
+
   const saveNodePatch = (patch: NodePatch) => {
     if (!live) return;
     edit({
@@ -968,7 +984,7 @@ function TreeSection({
         ).length
       }
       missionXp={missionXp}
-      canEdit={canEdit}
+      canEdit={canEditNode}
       editing={editing}
       onStartEdit={() => setEditing(true)}
       onCancelEdit={() => setEditing(false)}
@@ -1071,7 +1087,14 @@ function TreeSection({
                 canEdit
                   ? (next) => {
                       setEditMode(next);
-                      if (!next) cancelLink();
+                      if (!next) {
+                        cancelLink();
+                        // Leaving edit mode flips `live` back to the server row.
+                        // An open form would keep editing against it and record
+                        // a `before` the draft never held — the same corruption
+                        // gating the button closes, arriving the other way.
+                        setEditing(false);
+                      }
                     }
                   : undefined
               }

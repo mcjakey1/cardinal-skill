@@ -54,7 +54,8 @@ Granularity:
 - For a 1 to 4 week workshop, return 6 to 10 nodes. For a 12 to 16 week academic term, return 16 to 26 nodes, aiming for roughly 1 to 2 nodes per course week. For other durations, scale proportionally within the schema limits.
 - Keep labels to exactly 2 to 4 concise words. Use stable lowercase kebab-case ids based on the competency, never a week number.
 - Format every course title, node label, unit, and mission title in proper Title Case. Preserve established acronyms in uppercase.
-- Copy each node's unit exactly from one topic string in the cleaned syllabus outline. Every cleaned topic must be represented by at least one node.
+- Copy each node's unit exactly from one primary topic string in the cleaned syllabus outline.
+- Every cleaned topic must be represented explicitly in at least one node's unit, label, description, or mission. Closely related subtopics may share a node when the node names each one; never silently drop a subtopic merely to stay within the node limit.
 
 Four-tier topology:
 - Use exactly four integer tiers. Tier 1 contains 1 or 2 genuine foundational roots. Tier 2 contains core mechanisms, techniques, and standard methods. Tier 3 contains advanced applications, specialized analysis, and multi-step problem solving. Tier 4 contains cumulative synthesis, integrated review, design, evaluation, or capstone outcomes supported by the syllabus.
@@ -128,7 +129,7 @@ export function requireSyllabusScaledSkillCount<T>(
 }
 
 export function requireSyllabusCoverage(
-  nodes: readonly { unit: unknown }[],
+  nodes: readonly SyllabusCoverageNode[],
   coverage: readonly AcademicCoverageRow[],
 ): void {
   const expected = new Map<string, { label: string; weeks: Set<number> }>();
@@ -143,9 +144,9 @@ export function requireSyllabusCoverage(
   }
 
   const actual = new Map<string, number>();
-  for (const node of nodes) {
-    const key = comparableTopic(node.unit);
-    if (key) actual.set(key, (actual.get(key) ?? 0) + 1);
+  for (const [key] of expected) {
+    const matches = nodes.filter((node) => nodeCoversTopic(node, key));
+    if (matches.length > 0) actual.set(key, matches.length);
   }
 
   const missing = [...expected.entries()]
@@ -186,7 +187,7 @@ export function syllabusGraphRepairPrompt({
 
 The candidate failed validation: ${failure}
 
-Return exactly ${exactCount} nodes. Count the final nodes array before responding. Preserve valid competencies, split broad competencies into distinct progressive skills, and add only skills supported by the outline. Do not satisfy the count with duplicates, administrative material, exams, or invented subject matter. Every node unit must exactly match one topic string from the cleaned outline. Return the entire repaired JSON object, not a patch.
+Return exactly ${exactCount} nodes. Count the final nodes array before responding. Preserve valid competencies, split broad competencies into distinct progressive skills, and add only skills supported by the outline. Do not satisfy the count with duplicates, administrative material, exams, or invented subject matter. Every node unit must exactly match one primary topic string from the cleaned outline. Every other outline topic must be named explicitly in a node label, description, or mission when related topics share a node. Return the entire repaired JSON object, not a patch.
 
 <cleanedSyllabus>
 ${JSON.stringify(outline)}
@@ -195,6 +196,52 @@ ${JSON.stringify(outline)}
 <candidateGraph>
 ${JSON.stringify(candidate)}
 </candidateGraph>`;
+}
+
+export function repairNodeTarget(
+  range: SkillCountRange,
+  candidateCount: number,
+  failure: string,
+): number {
+  const boundedCandidate = Math.max(range.min, Math.min(range.max, Math.round(candidateCount) || 0));
+  const omitted = failure.match(/graph omitted syllabus coverage:\s*([^.]*)/i)?.[1]
+    ?.split(';')
+    .filter((topic) => topic.trim()).length ?? 0;
+  const repeated = failure.match(/requires at least\s+(\d+)\s+progressive skills;.*returned\s+(\d+)/i);
+  const repeatedShortfall = repeated
+    ? Math.max(0, Number(repeated[1]) - Number(repeated[2]))
+    : 0;
+  return Math.min(range.max, Math.max(range.min, boundedCandidate + omitted + repeatedShortfall));
+}
+
+interface SyllabusCoverageNode {
+  unit: unknown;
+  label?: unknown;
+  description?: unknown;
+  mission?: { title?: unknown; description?: unknown } | null;
+}
+
+function nodeCoversTopic(node: SyllabusCoverageNode, topicKey: string): boolean {
+  if (comparableTopic(node.unit) === topicKey) return true;
+  const expectedTokens = meaningfulTopicTokens(topicKey);
+  if (expectedTokens.length === 0) return false;
+  const searchable = [
+    node.unit,
+    node.label,
+    node.description,
+    node.mission?.title,
+    node.mission?.description,
+  ].map(comparableTopic).join(' ');
+  const actualTokens = new Set(meaningfulTopicTokens(searchable));
+  return expectedTokens.every((token) => actualTokens.has(token));
+}
+
+function meaningfulTopicTokens(value: string): string[] {
+  const ignored = new Set(['a', 'an', 'and', 'for', 'in', 'of', 'on', 'the', 'to', 'with']);
+  return comparableTopic(value)
+    .split(' ')
+    .filter((token) => token && !ignored.has(token))
+    .map((token) => token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token);
 }
 
 function comparableTopic(value: unknown): string {

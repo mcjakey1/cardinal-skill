@@ -8,6 +8,7 @@ import {
   MIN_PARSED_SKILLS,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
+  repairNodeTarget,
   scaleMission,
   syllabusGraphRepairPrompt,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
@@ -287,7 +288,7 @@ Deno.serve(async (req) => {
     const firstValidationFailure = validationMessage(firstCause);
     const candidate = tryParseCourseGraph(responseText);
     const candidateCount = candidate?.nodes.length ?? 0;
-    const repairTarget = Math.max(skillRange.min, Math.min(skillRange.max, candidateCount));
+    const repairTarget = repairNodeTarget(skillRange, candidateCount, firstValidationFailure);
     const repairSchema = treeSchemaForRange(repairTarget, repairTarget);
     console.info(JSON.stringify({
       event: 'parser.stage',

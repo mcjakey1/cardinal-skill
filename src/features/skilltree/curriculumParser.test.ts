@@ -7,6 +7,7 @@ import {
   requireGranularSkillCount,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
+  repairNodeTarget,
   scaleMission,
   syllabusGraphRepairPrompt,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
@@ -55,6 +56,54 @@ test('multi-week DSP filter coverage must expand and cannot disappear behind pad
     { unit: 'Design of Digital Filter: FIR and IIR' },
     { unit: 'Design of Digital Filter: FIR and IIR' },
   ], coverage));
+});
+
+test('dense syllabus subtopics may share a node only when their content names each topic', () => {
+  const coverage = [
+    { week: 1, topics: ['Truth Tables', 'Rules of Inference'] },
+    { week: 3, topics: ['Well-Ordering Principle'] },
+    { week: 5, topics: ['Venn Diagrams'] },
+  ];
+  const grouped = [
+    {
+      unit: 'Propositions & Logical Connectives',
+      label: 'Logic Foundations',
+      description: 'Construct truth tables and validate arguments with inference rules.',
+    },
+    {
+      unit: 'Mathematical Induction',
+      description: 'Relate induction proofs to the well-ordering principle.',
+    },
+    {
+      unit: 'Set Notation & Operations',
+      mission: { description: 'Use Venn diagrams to visualize set operations.' },
+    },
+  ];
+
+  assert.doesNotThrow(() => requireSyllabusCoverage(grouped, coverage));
+  assert.throws(
+    () => requireSyllabusCoverage(grouped.slice(0, 2), coverage),
+    /graph omitted syllabus coverage: Venn Diagrams/i,
+  );
+});
+
+test('coverage repair can add room for omitted syllabus concepts', () => {
+  assert.equal(
+    repairNodeTarget(
+      { min: 20, max: 26 },
+      20,
+      'The graph omitted syllabus coverage: Truth Tables; Rules Of Inference; Venn Diagrams.',
+    ),
+    23,
+  );
+  assert.equal(
+    repairNodeTarget(
+      { min: 20, max: 26 },
+      25,
+      'The graph omitted syllabus coverage: A; B; C; D.',
+    ),
+    26,
+  );
 });
 
 test('an undersized graph repair targets an exact count and keeps the candidate', () => {

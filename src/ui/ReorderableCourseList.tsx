@@ -9,6 +9,8 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
+import type { CommunityVisibility } from '@/features/skilltree/courseCatalog';
+import { courseKindLabel } from '@/features/skilltree/courseDistribution';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -26,6 +28,8 @@ interface Props {
   onReorder: (courses: CourseOption[]) => void;
   onRename: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;
   empty?: React.ReactElement | null;
@@ -39,6 +43,8 @@ export function ReorderableCourseList({
   onReorder,
   onRename,
   onReset,
+  onShare,
+  onArchive,
   onDuplicate,
   onDelete,
   empty,
@@ -120,6 +126,8 @@ export function ReorderableCourseList({
           onOpen={onOpen}
           onRename={onRename}
           onReset={onReset}
+          onShare={onShare}
+          onArchive={onArchive}
           onDuplicate={onDuplicate}
           onDelete={onDelete}
         />
@@ -145,6 +153,8 @@ function CourseLibraryRow({
   onOpen,
   onRename,
   onReset,
+  onShare,
+  onArchive,
   onDuplicate,
   onDelete,
 }: {
@@ -164,6 +174,8 @@ function CourseLibraryRow({
   onOpen: (courseId: string) => void;
   onRename: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;
 }) {
@@ -210,6 +222,7 @@ function CourseLibraryRow({
   });
 
   const metadata = [course.courseCode, course.term].filter(Boolean).join(' · ');
+  const kindColour = course.kind === 'official' ? t.warning : course.kind === 'community' ? t.locate : t.info;
 
   return (
     <Animated.View
@@ -261,6 +274,9 @@ function CourseLibraryRow({
       >
         <View style={styles.titleLine}>
           <PixelText variant="body" numberOfLines={1} style={styles.title}>{course.title}</PixelText>
+          <View style={[styles.kindBadge, { borderColor: kindColour }]}>
+            <PixelText variant="micro" colour={kindColour}>{courseKindLabel(course.kind).toUpperCase()}</PixelText>
+          </View>
           {active ? (
             <View style={[styles.badge, { borderColor: t.brand, shadowColor: t.brand }]}>
               <PixelText variant="micro" colour={t.brand}>[ACTIVE]</PixelText>
@@ -280,6 +296,8 @@ function CourseLibraryRow({
         embedded
         onRename={onRename}
         onReset={onReset}
+        onShare={onShare}
+        onArchive={onArchive}
         onDuplicate={onDuplicate}
         onDelete={onDelete}
       />
@@ -308,6 +326,12 @@ const styles = StyleSheet.create({
   identity: { minWidth: 0, flex: 1, height: '100%', justifyContent: 'center', paddingHorizontal: space.cell },
   titleLine: { minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: space.cell },
   title: { minWidth: 0, flexShrink: 1 },
+  kindBadge: {
+    flexShrink: 0,
+    borderWidth: bevel,
+    paddingHorizontal: space.cell,
+    paddingVertical: space.hair,
+  },
   badge: {
     borderWidth: bevel,
     paddingHorizontal: space.cell,

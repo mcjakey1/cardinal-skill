@@ -507,6 +507,22 @@ duplicate/fork, and delete. Reordering updates indices immediately and saves to
 the device first; database synchronization may finish later without reverting
 the visible order.
 
+Every course identity carries its authority label: Practice, Official, or
+Student made. Official and student-made shared courses remain read-only to a
+learner. An edit attempt opens a focused explanation with one recovery action:
+create an attributed private practice copy with zero progress. The copy enters
+edit mode; the shared original and its leaderboard remain unchanged.
+
+The Courses screen separates My courses, Official, and Community as equal-width
+tabs. Catalog rows name the author, learner count, and authority before the join
+action. Community publishing is explicit: Link only keeps a course out of browse
+results, while Public community lists it with an always-visible Student made
+label. Archiving removes discovery and new joins without deleting learner work.
+Official catalog publication is a separate instructor action and requires a
+server-managed `verified_instructors` record; a Supabase dashboard team role or
+editable auth metadata never grants that authority. Course authors stay outside
+their learner ladder.
+
 ### Window (signature component)
 A titled panel: a `cardinal` title bar in uppercase label type, a close box on the
 right, and an `abyss` body inset inside the frame. On a phone it docks to the
@@ -529,11 +545,24 @@ level progress and `cardinal` on an unearned stamp. Sixteen colours cannot draw 
 smooth bar, and a segmented meter reads faster anyway.
 
 ### Record
-The scope selector and the equal-weight Leaderboard / Dossier & stamps toggle
-own the first viewport, ahead of either view's content. The leaderboard follows
-with an opt-in visibility control, a top-three podium that wraps rather than
-shrinks on narrow screens, ranks 4–50, and a docked self row above bottom chrome
-when the student's rank falls outside the first 50.
+The scope selector and the equal-weight Dossier & stamps / Leaderboard toggle
+own the first viewport, ahead of either view's content. Dossier & stamps is the
+left-hand default, and every entry from another bottom-navigation tab resets to
+it. The leaderboard is centred at a 680dp maximum width and follows with an
+opt-in visibility control and a fixed three-column podium: rank 2 at left, rank 1
+in the centre, and rank 3 at right. Missing peers remain labelled dashed open
+slots rather than fabricated students. Narrow screens keep that topology and
+wrap copy inside each place. Immediately below, compact ladder rows run
+continuously from rank 04 through at least rank 10, expand to the class size up
+to rank 50, and keep a dashed open row wherever no real participant occupies a
+rank. A docked self row sits above bottom chrome whenever the student ranks
+outside the top three.
+
+Every ladder belongs to exactly one published Official or Student made course.
+The all-courses dossier may total a student's personal work, but it never
+produces a combined rank. Practice charts have no ladder. XP is snapshotted by
+the database at completion time, so later author edits affect future rewards
+without rewriting points students already earned.
 
 The dossier reads as terminal telemetry: personal totals, a 14-day activity
 punch card, pace, and progress-only stamps. Switching the two views uses one

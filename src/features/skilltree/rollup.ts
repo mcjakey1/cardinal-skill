@@ -22,6 +22,8 @@ export interface RollUpInput {
   tree: Tree;
   missions: readonly MissionLike[];
   completedMissionIds: Iterable<string>;
+  /** Missions already included in serverXp. Excluded from the offline delta. */
+  serverCompletedMissionIds: Iterable<string>;
   /** Nodes marked complete outright. Only honoured for nodes with no missions. */
   directlyCompletedIds: Iterable<string>;
   /** What the backend already recorded, if there is one. */
@@ -37,6 +39,7 @@ export interface RollUp {
 
 export function rollUpProgress(input: RollUpInput): RollUp {
   const done = new Set(input.completedMissionIds);
+  const serverDone = new Set(input.serverCompletedMissionIds);
   const direct = new Set(input.directlyCompletedIds);
   const server = new Set(input.serverMasteredIds);
 
@@ -48,8 +51,12 @@ export function rollUpProgress(input: RollUpInput): RollUp {
 
     if (own.length > 0) {
       if (isNodeMastered(input.missions, node.id, done)) mastered.push(node.id);
-      // Only count XP the server has not already banked.
-      if (!server.has(node.id)) localXp += nodeXpEarned(input.missions, node.id, done);
+      // serverXp uses immutable completion-time snapshots. Only locally queued
+      // missions belong in the optimistic delta.
+      localXp += own.reduce(
+        (sum, mission) => sum + (done.has(mission.id) && !serverDone.has(mission.id) ? mission.xpReward : 0),
+        0,
+      );
       continue;
     }
 

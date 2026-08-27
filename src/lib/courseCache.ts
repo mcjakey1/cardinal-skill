@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
+import { normalizeCourseDistribution, PRIVATE_PRACTICE_DISTRIBUTION } from '@/features/skilltree/courseDistribution';
 import type { TreeSnapshot } from '@/features/skilltree/queries';
 import { COURSE_ORDER_CACHE_KEY, COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
 
@@ -39,6 +40,12 @@ async function readCourses(): Promise<CachedCourse[]> {
           && typeof (course as CachedCourse).canDelete === 'boolean'
         )).map((course, index) => ({
           ...course,
+          ...normalizeCourseDistribution({
+            course_kind: course.kind,
+            publication_status: course.publicationStatus,
+            discoverability: course.discoverability,
+            source_course_id: course.sourceCourseId,
+          }),
           isFixture: false,
           sortOrder: typeof course.sortOrder === 'number' ? course.sortOrder : index,
         }))
@@ -105,7 +112,7 @@ export async function cacheParsedCourse(
 ): Promise<void> {
   const courses = await readCourses();
   const next: CachedCourse[] = [
-    { ...course, canEdit: true, canDelete: true, canRemove: false, isFixture: false, sortOrder: 0 },
+    { ...course, ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: true, canDelete: true, canRemove: false, isFixture: false, sortOrder: 0 },
     ...courses.filter((item) => item.id !== course.id),
   ];
   const order = await loadCachedCourseOrder();

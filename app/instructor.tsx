@@ -20,6 +20,11 @@ import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
 import { validateGraph } from '@/features/skilltree/validation';
 import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
+import {
+  fetchInstructorVerification,
+  publishOfficialCourse,
+} from '@/features/skilltree/courseCatalog';
+import type { CourseKind, CoursePublicationStatus } from '@/features/skilltree/courseDistribution';
 import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/features/skilltree/chartImpact';
 import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
 import { purgeCourseCache } from '@/lib/editedTree';
@@ -99,6 +104,8 @@ interface CourseRow {
   term: string | null;
   /** True only for the signed-in owner. Publishing is owner-gated in RLS too. */
   canEdit: boolean;
+  kind: CourseKind;
+  publicationStatus: CoursePublicationStatus;
 }
 
 // --------------------------------------------------------------- cohort query
@@ -287,20 +294,35 @@ export default function Instructor() {
   const courses = useQuery({
     queryKey: ['instructor-courses'],
     queryFn: async (): Promise<CourseRow[]> => {
-      const [{ data, error }, { data: auth }] = await Promise.all([
+      const [{ data: auth }, current] = await Promise.all([
+        supabase.auth.getUser(),
         supabase
           .from('courses')
-          .select('id, title, term, owner_id')
+          .select('id, title, term, owner_id, course_kind, publication_status')
           .order('created_at', { ascending: false }),
-        supabase.auth.getUser(),
       ]);
+      const result = current.error?.code === '42703' || current.error?.code === 'PGRST204'
+        ? await supabase
+            .from('courses')
+            .select('id, title, term, owner_id')
+            .order('created_at', { ascending: false })
+        : current;
+      const { data, error } = result;
       if (error) throw error;
-      return (data ?? []).map(({ id, title, term, owner_id }) => ({
-        id,
-        title,
-        term,
-        canEdit: Boolean(auth.user?.id) && owner_id === auth.user?.id,
-      }));
+      return (data ?? []).map((row) => {
+        const distribution = row as typeof row & {
+          course_kind?: CourseKind;
+          publication_status?: CoursePublicationStatus;
+        };
+        return {
+          id: row.id,
+          title: row.title,
+          term: row.term,
+          canEdit: Boolean(auth.user?.id) && row.owner_id === auth.user?.id,
+          kind: distribution.course_kind ?? 'practice',
+          publicationStatus: distribution.publication_status ?? 'draft',
+        };
+      });
     },
   });
 
@@ -309,7 +331,14 @@ export default function Instructor() {
   // empty on a laptop is a workspace nobody can look at.
   const rows: CourseRow[] = [
     ...(courses.data ?? []),
-    { id: DEMO_COURSE_ID, title: DEMO_COURSE_TITLE, term: 'Example chart', canEdit: false },
+    {
+      id: DEMO_COURSE_ID,
+      title: DEMO_COURSE_TITLE,
+      term: 'Example chart',
+      canEdit: false,
+      kind: 'practice',
+      publicationStatus: 'draft',
+    },
   ];
   const courseId = chosen ?? lastCourseId ?? DEMO_COURSE_ID;
   const course = rows.find((r) => r.id === courseId) ?? rows[rows.length - 1]!;
@@ -666,6 +695,11 @@ function TreeSection({
   });
 
   const queryClient = useQueryClient();
+  const verification = useQuery({
+    queryKey: ['instructor-verification'],
+    queryFn: fetchInstructorVerification,
+    enabled: canEdit && course.id !== DEMO_COURSE_ID,
+  });
   const { draft, ready, edit, undoEdit, redoEdit, reset, reseed, markPublished, canUndo, canRedo } =
     useChartDraft(canEdit ? course.id : undefined);
 
@@ -842,6 +876,27 @@ function TreeSection({
   const [impact, setImpact] = useState<ArchiveImpact[]>([]);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [catalogConfirming, setCatalogConfirming] = useState(false);
+  const [catalogPublishing, setCatalogPublishing] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+
+  const doPublishOfficial = async () => {
+    setCatalogPublishing(true);
+    setCatalogError(null);
+    try {
+      await publishOfficialCourse(course.id);
+      setCatalogConfirming(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['course-catalog', 'official'] }),
+      ]);
+    } catch (err) {
+      setCatalogError(err instanceof Error ? err.message : 'The course was not published to the catalog.');
+    } finally {
+      setCatalogPublishing(false);
+    }
+  };
 
   const openConfirm = async () => {
     setPublishError(null);
@@ -1063,6 +1118,22 @@ function TreeSection({
               onPress={undoPublish}
             />
           ) : null}
+          {canEdit && course.id !== DEMO_COURSE_ID ? (
+            course.kind === 'official' && course.publicationStatus === 'published' ? (
+              <Badge label="Official catalog" tone="ok" />
+            ) : (
+              <LButton
+                label="Publish to official catalog"
+                icon="globe"
+                size="sm"
+                disabled={verification.isPending}
+                onPress={() => {
+                  setCatalogError(null);
+                  setCatalogConfirming(true);
+                }}
+              />
+            )
+          ) : null}
           <LButton label="Edit by hand" icon="edit-3" size="sm" onPress={onAuthor} />
           <LButton
             label="Open as a student"
@@ -1223,6 +1294,52 @@ function TreeSection({
             onPress={doPublish}
           />
           <LButton label="Cancel" variant="quiet" disabled={publishing} onPress={() => setConfirming(false)} />
+        </View>
+      </LModal>
+
+      <LModal
+        visible={catalogConfirming}
+        title="Publish to the official catalog"
+        onRequestClose={() => !catalogPublishing && setCatalogConfirming(false)}
+      >
+        {verification.data ? (
+          <>
+            <LText variant="small" tone="muted">
+              Every signed-in student will be able to discover and join {course.title}. Its learner
+              leaderboard stays separate from every other course, and you will not appear in it.
+            </LText>
+            <Notice tone="attention" title="Review the chart first">
+              Catalog publication exposes the currently saved chart. Publish any pending chart edits before continuing.
+            </Notice>
+          </>
+        ) : verification.isError ? (
+          <Notice tone="error" title="Verification could not be checked">
+            Check the database connection and try again. No course has been published.
+          </Notice>
+        ) : (
+          <Notice tone="attention" title="Instructor verification required">
+            A Supabase project role grants dashboard access, not permission to publish official courses.
+            An administrator must add this account to verified_instructors first.
+          </Notice>
+        )}
+        {catalogError ? <Notice tone="error" title="Not published">{catalogError}</Notice> : null}
+        <View style={styles.rowWrap}>
+          {verification.data ? (
+            <LButton
+              label={catalogPublishing ? 'Publishing…' : 'Publish official course'}
+              variant="primary"
+              disabled={catalogPublishing}
+              onPress={doPublishOfficial}
+            />
+          ) : verification.isError ? (
+            <LButton label="Retry verification" onPress={() => void verification.refetch()} />
+          ) : null}
+          <LButton
+            label="Cancel"
+            variant="quiet"
+            disabled={catalogPublishing}
+            onPress={() => setCatalogConfirming(false)}
+          />
         </View>
       </LModal>
     </>

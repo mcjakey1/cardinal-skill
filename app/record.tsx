@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -9,7 +9,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { achievements, streakDays } from '@/features/skilltree/achievements';
 import { fetchCourseOptions } from '@/features/skilltree/courseQueries';
-import { LeaderboardStickyBar, LeaderboardView } from '@/features/skilltree/LeaderboardView';
+import { LeaderboardStickyBar } from '@/features/skilltree/LeaderboardList';
+import { LeaderboardView } from '@/features/skilltree/LeaderboardView';
 import { effectiveMissionCompletionIds } from '@/features/skilltree/missions';
 import { PlayerStats } from '@/features/skilltree/PlayerStats';
 import {
@@ -48,8 +49,13 @@ export default function Record() {
   const { session } = useAuth();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
+  const { view: requestedView, reset: viewReset } = useLocalSearchParams<{ view?: string; reset?: string }>();
   const [scopeId, setScopeId] = useState(prefs.lastCourseId ?? 'all');
-  const [view, setView] = useState<RecordView>('leaderboard');
+  const [view, setView] = useState<RecordView>('dossier');
+
+  useEffect(() => {
+    if (requestedView === 'dossier') setView('dossier');
+  }, [requestedView, viewReset]);
 
   const { data: courses = [], isPending: coursesPending } = useQuery({
     queryKey: ['courses'],
@@ -80,18 +86,50 @@ export default function Record() {
   const { logs, ready: progressReady } = useMultiCourseProgress(activeCourseIds);
   const signedInLive = session?.source === 'supabase';
   const liveScope = scopeId === 'all' || Boolean(selectedCourse && !selectedCourse.isFixture);
-  const remoteEnabled = signedInLive && liveScope;
+  const recordRemoteEnabled = signedInLive && liveScope;
   const remoteCourseId = scopeId === 'all' ? null : scopeId;
+  const leaderboardAvailable = Boolean(
+    signedInLive
+      && scopeId !== 'all'
+      && selectedCourse
+      && !selectedCourse.isFixture
+      && !selectedCourse.canEdit
+      && (selectedCourse.kind === 'official' || selectedCourse.kind === 'community')
+      && (selectedCourse.publicationStatus === 'published'
+        || selectedCourse.publicationStatus === 'archived'),
+  );
+  const leaderboardUnavailable = useMemo(() => {
+    if (!signedInLive) return {
+      title: 'Sign in for live rankings',
+      message: 'Leaderboards use your signed-in student account and never invent classmates.',
+    };
+    if (scopeId === 'all') return {
+      title: 'Choose one course leaderboard',
+      message: 'XP from different courses is never combined. Select an official or student-made course above.',
+    };
+    if (selectedCourse?.isFixture || selectedCourse?.kind === 'practice') return {
+      title: 'No live ladder for practice charts',
+      message: 'Private practice progress stays personal and never enters a competitive ranking.',
+    };
+    if (selectedCourse?.canEdit) return {
+      title: 'Authors do not enter learner rankings',
+      message: 'Course authors can edit content and inspect participation, but cannot compete against their learners.',
+    };
+    return {
+      title: 'Leaderboard opens after publication',
+      message: 'This course needs to be published before enrolled students can join its isolated ladder.',
+    };
+  }, [scopeId, selectedCourse, signedInLive]);
 
   const leaderboardQuery = useQuery({
     queryKey: ['student-leaderboard', remoteCourseId],
     queryFn: () => fetchLeaderboard(remoteCourseId),
-    enabled: remoteEnabled,
+    enabled: leaderboardAvailable,
   });
   const eventsQuery = useQuery({
     queryKey: ['record-events', remoteCourseId],
     queryFn: () => fetchRecordEvents(remoteCourseId),
-    enabled: remoteEnabled,
+    enabled: recordRemoteEnabled,
   });
   const visibilityQuery = useQuery({
     queryKey: ['leaderboard-visibility'],
@@ -126,6 +164,7 @@ export default function Record() {
           Object.keys(local.missions),
           Object.keys(local.missionUnmarks),
         ),
+        serverCompletedMissionIds: data.completedMissionIds,
         directlyCompletedIds: Object.keys(local.nodes),
         serverMasteredIds: data.masteredIds,
         serverXp: data.xp,
@@ -200,7 +239,7 @@ export default function Record() {
       flat={prefs.lowBandwidth}
       title={`${scopeTitle} · Cardinal Skill`}
       description={`${dossier.masteredIds.length} of ${dossier.totalNodes} nodes cleared across ${scopeTitle}.`}
-      overlay={view === 'leaderboard' && currentRank && currentRank.rank > 50
+      overlay={view === 'leaderboard' && currentRank && currentRank.rank > 3
         ? <LeaderboardStickyBar entry={currentRank} />
         : null}
     >
@@ -234,7 +273,7 @@ export default function Record() {
         </Window>
       ) : (
         <>
-          {remoteEnabled && eventsQuery.isError ? (
+          {recordRemoteEnabled && eventsQuery.isError ? (
             <Bevel tone="panel" style={[styles.syncError, { borderColor: t.alarm }]}>
               <View style={styles.syncErrorCopy}>
                 <PixelText variant="label" colour={t.alarm}>Activity sync unavailable</PixelText>
@@ -249,9 +288,12 @@ export default function Record() {
             {view === 'leaderboard' ? (
               <LeaderboardView
                 entries={leaderboardQuery.data ?? []}
-                pending={leaderboardQuery.isPending && remoteEnabled}
+                pending={leaderboardQuery.isPending && leaderboardAvailable}
                 error={leaderboardQuery.isError}
-                available={remoteEnabled}
+                available={leaderboardAvailable}
+                courseKind={selectedCourse?.kind ?? null}
+                unavailableTitle={leaderboardUnavailable.title}
+                unavailableMessage={leaderboardUnavailable.message}
                 visibility={signedInLive ? visibilityQuery.data : null}
                 visibilityPending={visibilityMutation.isPending || visibilityQuery.isPending}
                 visibilityError={visibilityQuery.isError}

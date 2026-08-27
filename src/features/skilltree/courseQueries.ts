@@ -13,8 +13,13 @@ import { clearLocal } from '@/lib/progress';
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from './demoTree';
 import { MOCK_COURSES } from './mockCourses';
 import { applySavedCourseOrder } from './courseOrdering';
+import {
+  normalizeCourseDistribution,
+  PRIVATE_PRACTICE_DISTRIBUTION,
+  type CourseDistribution,
+} from './courseDistribution';
 
-export interface CourseOption {
+export interface CourseOption extends CourseDistribution {
   id: string;
   courseCode: string | null;
   title: string;
@@ -35,14 +40,14 @@ export interface CourseMetadata {
 /** Courses visible to the caller. Supabase RLS owns the enrolment boundary. */
 export async function fetchCourseOptions(): Promise<CourseOption[]> {
   const [{ data, error }, { data: auth }, { data: preferences }, localOrder] = await Promise.all([
-    supabase.from('courses').select('id, course_code, title, term, owner_id, created_at').order('created_at', { ascending: false }),
+    fetchCourseRows(),
     supabase.auth.getUser(),
     supabase.from('course_preferences').select('course_id, sort_order'),
     loadCachedCourseOrder(),
   ]);
   const fixtures: CourseOption[] = [
-    { id: DEMO_COURSE_ID, courseCode: null, title: DEMO_COURSE_TITLE, term: 'Example chart', canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_000 },
-    ...MOCK_COURSES.map(({ id, title, term }, index) => ({ id, courseCode: null, title, term, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_001 + index })),
+    { id: DEMO_COURSE_ID, courseCode: null, title: DEMO_COURSE_TITLE, term: 'Example chart', ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_000 },
+    ...MOCK_COURSES.map(({ id, title, term }, index) => ({ id, courseCode: null, title, term, ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_001 + index })),
   ];
   if (error) {
     return auth.user
@@ -51,13 +56,19 @@ export async function fetchCourseOptions(): Promise<CourseOption[]> {
   }
 
   const orderByCourse = new Map((preferences ?? []).map((row) => [row.course_id, row.sort_order]));
-  const liveCourses = applySavedCourseOrder((data ?? []).map(({ id, course_code, title, term, owner_id }, index) => ({
-      id, courseCode: course_code, title, term,
-      canEdit: owner_id === auth.user?.id,
-      canDelete: owner_id === auth.user?.id,
-      canRemove: Boolean(auth.user?.id) && owner_id !== auth.user?.id,
+  const liveCourses = applySavedCourseOrder((data ?? []).map((row, index) => ({
+      ...normalizeCourseDistribution(row as {
+        course_kind?: unknown;
+        publication_status?: unknown;
+        discoverability?: unknown;
+        source_course_id?: unknown;
+      }),
+      id: row.id, courseCode: row.course_code, title: row.title, term: row.term,
+      canEdit: row.owner_id === auth.user?.id,
+      canDelete: row.owner_id === auth.user?.id,
+      canRemove: Boolean(auth.user?.id) && row.owner_id !== auth.user?.id,
       isFixture: false,
-      sortOrder: orderByCourse.get(id) ?? 1_000 + index,
+      sortOrder: orderByCourse.get(row.id) ?? 1_000 + index,
     })), localOrder.ids);
   await cacheCourseList(liveCourses).catch(() => {});
   if (localOrder.pendingSync && auth.user) {
@@ -66,6 +77,22 @@ export async function fetchCourseOptions(): Promise<CourseOption[]> {
       .catch(() => {});
   }
   return [...liveCourses, ...fixtures];
+}
+
+async function fetchCourseRows() {
+  const current = await supabase
+    .from('courses')
+    .select('id, course_code, title, term, owner_id, created_at, course_kind, publication_status, discoverability, source_course_id')
+    .order('created_at', { ascending: false });
+  if (!current.error) return current;
+  if (current.error.code !== '42703' && current.error.code !== 'PGRST204') return current;
+
+  // The app and migration can roll out independently. Legacy rows normalize to
+  // private practice without broadening the selected course metadata.
+  return supabase
+    .from('courses')
+    .select('id, course_code, title, term, owner_id, created_at')
+    .order('created_at', { ascending: false });
 }
 
 export async function updateCourseMetadata(courseId: string, metadata: CourseMetadata): Promise<void> {
@@ -127,7 +154,13 @@ export async function resetCourseProgress(courseId: string): Promise<void> {
 }
 
 export async function duplicateCourse(courseId: string): Promise<string> {
-  const { data, error } = await supabase.rpc('fork_course', { p_course_id: courseId });
+  let result = await supabase.rpc('fork_course_as_practice', { p_course_id: courseId });
+  // During the staged rollout, older databases do not have the wrapper yet.
+  // The established fork still creates a private owner-only copy.
+  if (result.error?.code === 'PGRST202' || result.error?.code === '42883') {
+    result = await supabase.rpc('fork_course', { p_course_id: courseId });
+  }
+  const { data, error } = result;
   if (error) throw error;
   if (typeof data !== 'string') throw new Error('The duplicated chart did not return a course id.');
   return data;

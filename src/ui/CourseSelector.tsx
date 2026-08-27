@@ -8,6 +8,8 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
+import type { CommunityVisibility } from '@/features/skilltree/courseCatalog';
+import { courseKindLabel } from '@/features/skilltree/courseDistribution';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, motion, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -26,6 +28,8 @@ interface Props {
   onSelect: (courseId: string) => void;
   onUpdate: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;
 }
@@ -50,6 +54,8 @@ export function CourseSelector({
   onSelect,
   onUpdate,
   onReset,
+  onShare,
+  onArchive,
   onDuplicate,
   onDelete,
 }: Props) {
@@ -153,6 +159,7 @@ export function CourseSelector({
               {courses.map((course) => {
                 const active = course.id === currentCourseId;
                 const metadata = [
+                  courseKindLabel(course.kind).toUpperCase(),
                   course.courseCode?.toUpperCase(),
                   active && currentProgress
                     ? `${currentProgress.cleared}/${currentProgress.total} CLEARED`
@@ -203,6 +210,8 @@ export function CourseSelector({
                       embedded
                       onRename={onUpdate}
                       onReset={onReset}
+                      onShare={onShare}
+                      onArchive={onArchive}
                       onDuplicate={onDuplicate}
                       onDelete={onDelete}
                     />

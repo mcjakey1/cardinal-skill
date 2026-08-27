@@ -41,6 +41,8 @@ import {
   type CourseMetadata,
   type CourseOption,
 } from '@/features/skilltree/courseQueries';
+import { PRIVATE_PRACTICE_DISTRIBUTION } from '@/features/skilltree/courseDistribution';
+import { archiveSharedCourse, publishCommunityCourse, type CommunityVisibility } from '@/features/skilltree/courseCatalog';
 import { aliveSubgraph } from '@/features/skilltree/chartDraft';
 import { nodeProgress, rollUpProgress } from '@/features/skilltree/rollup';
 import {
@@ -63,6 +65,7 @@ import { useQuestNames } from '@/lib/questNames';
 import { useSignals } from '@/lib/signals';
 import { supabase } from '@/lib/supabase';
 import { findMockCourse } from '@/features/skilltree/mockCourses';
+import { PracticeCopyPrompt } from '@/ui/PracticeCopyPrompt';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -122,6 +125,9 @@ export default function TreeScreen() {
   const [companionOpen, setCompanionOpen] = useState(false);
   const [claimedMissionId, setClaimedMissionId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(edit === '1');
+  const [practiceCopyOpen, setPracticeCopyOpen] = useState(false);
+  const [practiceCopyBusy, setPracticeCopyBusy] = useState(false);
+  const [practiceCopyError, setPracticeCopyError] = useState<string | null>(null);
   const [cameraFocusRequest, setCameraFocusRequest] = useState(0);
   const [locatedNodeId, setLocatedNodeId] = useState<string | null>(null);
   const [linkMode, setLinkMode] = useState(false);
@@ -165,6 +171,15 @@ export default function TreeScreen() {
     queryKey: ['courses'],
     queryFn: fetchCourseOptions,
   });
+  const currentCourse = courseOptions.find((course) => course.id === courseId) ?? null;
+
+  useEffect(() => {
+    if (!currentCourse || currentCourse.isFixture || currentCourse.canEdit || edit !== '1') return;
+    setEditMode(false);
+    setPracticeCopyError(null);
+    setPracticeCopyOpen(true);
+    router.replace({ pathname: '/tree/[courseId]', params: { courseId } });
+  }, [courseId, currentCourse, edit, router]);
 
   const {
     log,
@@ -260,8 +275,9 @@ export default function TreeScreen() {
   // after a reload, when transient query parameters are no longer present.
   useEffect(() => {
     if (!editedTreeReady || !data || !sourceTree || sourceTree.nodes.length > 0) return;
+    if (currentCourse && !currentCourse.isFixture && !currentCourse.canEdit) return;
     setEditMode(true);
-  }, [data, editedTreeReady, sourceTree]);
+  }, [currentCourse, data, editedTreeReady, sourceTree]);
 
   const merged = useMemo(() => {
     if (!data || !sourceTree) return null;
@@ -275,6 +291,7 @@ export default function TreeScreen() {
         Object.keys(missionLog),
         Object.keys(missionUnmarks),
       ),
+      serverCompletedMissionIds: data.completedMissionIds,
       directlyCompletedIds: Object.keys(log),
       serverMasteredIds: data.masteredIds,
       serverXp: data.xp,
@@ -343,6 +360,7 @@ export default function TreeScreen() {
         courseCode: null,
         title,
         term: null,
+        ...PRIVATE_PRACTICE_DISTRIBUTION,
         canEdit: false,
         canDelete: false,
         canRemove: false,
@@ -711,6 +729,48 @@ export default function TreeScreen() {
     }
   };
 
+  const shareCourse = async (targetCourseId: string, visibility: CommunityVisibility) => {
+    try {
+      const shareCode = await publishCommunityCourse(targetCourseId, visibility);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
+      ]);
+      AccessibilityInfo.announceForAccessibility('Community sharing updated.');
+      return shareCode;
+    } catch {
+      throw new Error('Sharing could not be updated. Check your connection and try again.');
+    }
+  };
+
+  const archiveCourse = async (targetCourseId: string) => {
+    try {
+      await archiveSharedCourse(targetCourseId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
+      ]);
+      AccessibilityInfo.announceForAccessibility('Shared course archived. Existing learner progress was preserved.');
+    } catch {
+      throw new Error('The shared course could not be archived. Check your connection and try again.');
+    }
+  };
+
+  const createPracticeCopy = async () => {
+    setPracticeCopyBusy(true);
+    setPracticeCopyError(null);
+    try {
+      await duplicateTree(courseId);
+      setPracticeCopyOpen(false);
+    } catch (cause) {
+      setPracticeCopyError(cause instanceof Error
+        ? cause.message
+        : 'The practice copy could not be created. Check your connection and try again.');
+    } finally {
+      setPracticeCopyBusy(false);
+    }
+  };
+
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
       <Backdrop flat={prefs.lowBandwidth} />
@@ -737,6 +797,8 @@ export default function TreeScreen() {
             onToggle={() => setCourseMenuOpen((open) => !open)}
             onUpdate={saveCourseMetadata}
             onReset={resetProgress}
+            onShare={shareCourse}
+            onArchive={archiveCourse}
             onDuplicate={duplicateTree}
             onDelete={deleteTree}
             onSelect={(nextCourseId) => {
@@ -807,6 +869,11 @@ export default function TreeScreen() {
         linkSourceId={linkSourceId}
         linkNotice={linkNotice}
         onToggleEditMode={(next) => {
+          if (next && currentCourse && !currentCourse.isFixture && !currentCourse.canEdit) {
+            setPracticeCopyError(null);
+            setPracticeCopyOpen(true);
+            return;
+          }
           setEditMode(next);
           if (!next) {
             setLinkMode(false);
@@ -1351,6 +1418,20 @@ export default function TreeScreen() {
         </Bevel>
       )}
       </View>
+      <PracticeCopyPrompt
+        visible={practiceCopyOpen}
+        courseTitle={title}
+        courseKind={currentCourse?.kind ?? 'practice'}
+        busy={practiceCopyBusy}
+        error={practiceCopyError}
+        reduceMotion={prefs.motionOff}
+        onCancel={() => {
+          if (practiceCopyBusy) return;
+          setPracticeCopyOpen(false);
+          setPracticeCopyError(null);
+        }}
+        onConfirm={createPracticeCopy}
+      />
     </View>
   );
 }
@@ -1549,6 +1630,8 @@ function Failed({
           }}
           onUpdate={unavailableCourseManagement}
           onReset={unavailableCourseManagement}
+          onShare={unavailableCourseManagement}
+          onArchive={unavailableCourseManagement}
           onDuplicate={unavailableCourseManagement}
           onDelete={unavailableCourseManagement}
         />

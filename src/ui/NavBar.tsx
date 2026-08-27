@@ -82,8 +82,15 @@ export function NavBar() {
       }
       return;
     }
+    if (cell.key === 'record') {
+      router.navigate({
+        pathname: '/record',
+        params: { view: 'dossier', reset: String(Date.now()) },
+      });
+      return;
+    }
     router.navigate(
-      cell.match as '/missions' | '/courses' | '/record' | '/system' | '/instructor',
+      cell.match as '/missions' | '/courses' | '/system' | '/instructor',
     );
     });
   };

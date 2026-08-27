@@ -31,16 +31,16 @@ export function RecordHeader({ scopeId, courses, view, onScopeChange, onViewChan
       <ScopePicker value={selected} selectedValue={scopeId} options={options} onChange={onScopeChange} />
       <View style={styles.views} accessibilityRole="radiogroup" accessibilityLabel="Record view">
         <ViewButton
-          label="Leaderboard"
-          icon="crown"
-          active={view === 'leaderboard'}
-          onPress={() => onViewChange('leaderboard')}
-        />
-        <ViewButton
           label="Dossier & stamps"
           icon="stamp"
           active={view === 'dossier'}
           onPress={() => onViewChange('dossier')}
+        />
+        <ViewButton
+          label="Leaderboard"
+          icon="crown"
+          active={view === 'leaderboard'}
+          onPress={() => onViewChange('leaderboard')}
         />
       </View>
     </View>

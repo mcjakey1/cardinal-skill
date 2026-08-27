@@ -103,6 +103,7 @@ export default function Missions() {
         Object.keys(local.missions),
         Object.keys(local.missionUnmarks),
       ),
+      serverCompletedMissionIds: data.completedMissionIds,
       directlyCompletedIds: Object.keys(local.nodes),
       serverMasteredIds: data.masteredIds,
       serverXp: data.xp,

@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Modal, Pressable, Share, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Linking from 'expo-linking';
 
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
+import type { CommunityVisibility } from '@/features/skilltree/courseCatalog';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { PixelButton, PixelIcon, PixelInput, PixelText, bevelStyle, type IconName } from './pixel';
+import { PracticeCopyPrompt } from './PracticeCopyPrompt';
 
-type ActionKind = 'rename' | 'reset' | 'duplicate' | 'delete';
+type ActionKind = 'rename' | 'share' | 'reset' | 'duplicate' | 'copyToEdit' | 'delete';
 
 interface Props {
   course: CourseOption;
@@ -18,6 +21,8 @@ interface Props {
   embedded?: boolean;
   onRename: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;
 }
@@ -38,6 +43,8 @@ export function CourseActionMenu({
   embedded = false,
   onRename,
   onReset,
+  onShare,
+  onArchive,
   onDuplicate,
   onDelete,
 }: Props) {
@@ -52,6 +59,8 @@ export function CourseActionMenu({
   const [courseCode, setCourseCode] = useState(course.courseCode ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shareVisibility, setShareVisibility] = useState<CommunityVisibility>('unlisted');
+  const [shareCode, setShareCode] = useState<string | null>(null);
 
   useEffect(() => {
     setTitle(course.title);
@@ -69,12 +78,14 @@ export function CourseActionMenu({
     if (busy) return;
     setAction(null);
     setError(null);
+    setShareCode(null);
   };
 
   const choose = (next: ActionKind) => {
     setMenuOpen(false);
     setAction(next);
     setError(null);
+    setShareCode(null);
   };
 
   const submit = async () => {
@@ -89,10 +100,15 @@ export function CourseActionMenu({
           title: title.trim(),
           term: course.term ?? '',
         });
+      } else if (action === 'share') {
+        setShareCode(await onShare(course.id, shareVisibility));
+        return;
       } else if (action === 'reset') {
         await onReset(course.id);
-      } else if (action === 'duplicate') {
+      } else if (action === 'duplicate' || action === 'copyToEdit') {
         await onDuplicate(course.id);
+      } else if (course.kind !== 'practice') {
+        await onArchive(course.id);
       } else {
         await onDelete(course.id);
       }
@@ -104,14 +120,27 @@ export function CourseActionMenu({
     }
   };
 
+  const shareInvite = async () => {
+    if (!shareCode) return;
+    setError(null);
+    try {
+      await Share.share({
+        title: course.title,
+        message: `Join ${course.title} on Cardinal Skill: ${Linking.createURL('/courses', { queryParams: { share: shareCode } })}`,
+      });
+    } catch {
+      setError('The system share sheet could not open. Copy the invite code above and try again.');
+    }
+  };
+
   const popoverWidth = Math.min(280, viewportWidth - space.md);
-  const popoverHeight = touch * 4 + space.cell * 2;
+  const popoverHeight = touch * 5 + space.cell * 2;
   const popoverRight = Math.max(space.cell, viewportWidth - anchor.x - anchor.width);
   const belowTop = anchor.y + anchor.height + space.xs;
   const popoverTop = belowTop + popoverHeight <= viewportHeight - space.cell
     ? belowTop
     : Math.max(space.cell, anchor.y - popoverHeight - space.xs);
-  const destructive = action === 'delete';
+  const destructive = action === 'delete' && course.kind === 'practice';
 
   return (
     <>
@@ -169,10 +198,10 @@ export function CourseActionMenu({
           >
             <PopoverAction
               icon="edit"
-              label="Rename course"
+              label={course.canEdit ? 'Rename course' : 'Edit course'}
               colour={t.ink}
-              disabled={!course.canEdit}
-              onPress={() => choose('rename')}
+              disabled={course.isFixture}
+              onPress={() => choose(course.canEdit ? 'rename' : 'copyToEdit')}
             />
             <PopoverAction
               icon="undo"
@@ -180,6 +209,13 @@ export function CourseActionMenu({
               colour={t.ink}
               disabled={course.isFixture}
               onPress={() => choose('reset')}
+            />
+            <PopoverAction
+              icon="link"
+              label={course.kind === 'community' ? 'Sharing settings' : 'Share as community course'}
+              colour={t.info}
+              disabled={!course.canEdit || course.isFixture || course.kind === 'official'}
+              onPress={() => choose('share')}
             />
             <PopoverAction
               icon="stack"
@@ -190,8 +226,8 @@ export function CourseActionMenu({
             />
             <PopoverAction
               icon="trash"
-              label="Delete course"
-              colour={t.alarm}
+              label={course.kind === 'practice' ? 'Delete course' : 'Archive shared course'}
+              colour={course.kind === 'practice' ? t.alarm : t.warning}
               disabled={!course.canDelete}
               onPress={() => choose('delete')}
             />
@@ -200,7 +236,7 @@ export function CourseActionMenu({
       </Modal>
 
       <Modal
-        visible={Boolean(action)}
+        visible={Boolean(action && action !== 'copyToEdit')}
         animationType={reduceMotion ? 'none' : 'fade'}
         presentationStyle="fullScreen"
         onRequestClose={closeDialog}
@@ -221,7 +257,7 @@ export function CourseActionMenu({
             <View style={styles.header}>
               <View style={styles.headerCopy}>
                 <PixelText variant="title" colour={destructive ? t.alarm : t.ink} numberOfLines={2}>
-                  {action ? headingFor(action, course.title) : ''}
+                  {action ? headingFor(action, course.title, course.kind !== 'practice') : ''}
                 </PixelText>
               </View>
               <Pressable
@@ -253,17 +289,62 @@ export function CourseActionMenu({
                   placeholder="CPE 122-4"
                 />
               </View>
+            ) : action === 'share' ? (
+              <View style={styles.confirmCopy}>
+                {shareCode ? (
+                  <>
+                    <PixelText variant="body" colour={t.ink}>
+                      {shareVisibility === 'public'
+                        ? 'This student-made course is now listed in Community.'
+                        : 'This student-made course is available to anyone with its invite link.'}
+                    </PixelText>
+                    <View style={[styles.shareCode, { borderColor: t.line, backgroundColor: t.well }]}>
+                      <PixelText variant="micro" colour={t.info} selectable>{shareCode}</PixelText>
+                    </View>
+                    <PixelButton
+                      label="Share invite"
+                      grow={false}
+                      onPress={shareInvite}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <PixelText variant="body" colour={t.ink}>
+                      Publish an instructor-independent student-made course. Learners join the shared original; their leaderboard stays separate from official and private practice XP.
+                    </PixelText>
+                    <View style={styles.visibility} accessibilityRole="radiogroup" accessibilityLabel="Community course visibility">
+                      <VisibilityChoice
+                        label="Link only"
+                        detail="Only people with the invite can find it."
+                        active={shareVisibility === 'unlisted'}
+                        onPress={() => setShareVisibility('unlisted')}
+                      />
+                      <VisibilityChoice
+                        label="Public community"
+                        detail="List it for every signed-in learner."
+                        active={shareVisibility === 'public'}
+                        onPress={() => setShareVisibility('public')}
+                      />
+                    </View>
+                    <PixelText variant="micro" colour={t.warning}>
+                      STUDENT MADE · UNOFFICIAL SCORING · AUTHOR EXCLUDED FROM LADDER
+                    </PixelText>
+                  </>
+                )}
+              </View>
             ) : action ? (
               <View style={styles.confirmCopy}>
                 <PixelText variant="body" colour={t.ink}>
-                  {confirmationFor(action, course.title)}
+                  {confirmationFor(action, course.title, course.kind !== 'practice')}
                 </PixelText>
                 <PixelText
                   variant="micro"
-                  colour={action === 'delete' ? t.alarm : action === 'reset' ? t.warning : t.info}
+                  colour={action === 'delete' ? (course.kind === 'practice' ? t.alarm : t.warning) : action === 'reset' ? t.warning : t.info}
                 >
                   {action === 'delete'
-                    ? `DELETE ${course.title.toUpperCase()}? THIS CANNOT BE UNDONE`
+                    ? course.kind === 'practice'
+                      ? `DELETE ${course.title.toUpperCase()}? THIS CANNOT BE UNDONE`
+                      : 'NEW LEARNERS CANNOT JOIN. EXISTING PROGRESS STAYS INTACT.'
                     : action === 'reset'
                       ? 'THE SKILL TREE STRUCTURE WILL STAY IN PLACE.'
                       : 'THE COPY STARTS WITH ZERO PROGRESS AND CAN BE EDITED.'}
@@ -275,28 +356,45 @@ export function CourseActionMenu({
 
             {action ? (
               <View style={styles.footer}>
-                <PixelButton label="Cancel" tone="panel" grow={false} disabled={busy} onPress={closeDialog} />
-                <ConfirmButton action={action} busy={busy} onPress={submit} />
+                <PixelButton label={shareCode ? 'Done' : 'Cancel'} tone="panel" grow={false} disabled={busy} onPress={closeDialog} />
+                {shareCode ? null : <ConfirmButton action={action} archive={course.kind !== 'practice'} busy={busy} onPress={submit} />}
               </View>
             ) : null}
           </View>
         </SafeAreaView>
       </Modal>
+
+      <PracticeCopyPrompt
+        visible={action === 'copyToEdit'}
+        courseTitle={course.title}
+        courseKind={course.kind}
+        busy={busy}
+        error={error}
+        reduceMotion={reduceMotion}
+        onCancel={closeDialog}
+        onConfirm={submit}
+      />
     </>
   );
 }
 
-function headingFor(action: ActionKind, title: string): string {
+function headingFor(action: ActionKind, title: string, archive: boolean): string {
   if (action === 'rename') return 'Rename course';
+  if (action === 'share') return 'Share student-made course';
   if (action === 'reset') return 'Reset progress?';
   if (action === 'duplicate') return 'Duplicate chart?';
-  return `Delete ${title}?`;
+  if (action === 'copyToEdit') return 'Create a practice copy?';
+  return archive ? `Archive ${title}?` : `Delete ${title}?`;
 }
 
-function confirmationFor(action: Exclude<ActionKind, 'rename'>, title: string): string {
+function confirmationFor(action: Exclude<ActionKind, 'rename'>, title: string, archive: boolean): string {
+  if (action === 'share') return `Share ${title} as a student-made community course?`;
   if (action === 'reset') return `Clear completed nodes and course XP for ${title}?`;
   if (action === 'duplicate') return `Create an independent editable copy of ${title}?`;
-  return `Permanently remove ${title}, its nodes, missions, and saved progress?`;
+  if (action === 'copyToEdit') return `Create a private editable copy of ${title}?`;
+  return archive
+    ? `Remove ${title} from discovery while preserving its learners and progress?`
+    : `Permanently remove ${title}, its nodes, missions, and saved progress?`;
 }
 
 function PopoverAction({ icon, label, colour, disabled, onPress }: {
@@ -327,8 +425,33 @@ function PopoverAction({ icon, label, colour, disabled, onPress }: {
   );
 }
 
-function ConfirmButton({ action, busy, onPress }: {
+function VisibilityChoice({ label, detail, active, onPress }: {
+  label: string;
+  detail: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: active }}
+      accessibilityLabel={`${label}. ${detail}`}
+      style={({ pressed }) => [
+        styles.visibilityChoice,
+        bevelStyle(t, active ? 'brand' : 'panel', pressed || active ? 'inset' : 'raised'),
+      ]}
+    >
+      <PixelText variant="body" colour={active ? t.brandInk : t.ink}>{label}</PixelText>
+      <PixelText variant="micro" colour={active ? t.brandInk : t.inkMuted}>{detail}</PixelText>
+    </Pressable>
+  );
+}
+
+function ConfirmButton({ action, archive, busy, onPress }: {
   action: ActionKind;
+  archive: boolean;
   busy: boolean;
   onPress: () => void;
 }) {
@@ -341,9 +464,13 @@ function ConfirmButton({ action, busy, onPress }: {
         ? 'Reset progress'
         : action === 'duplicate'
           ? 'Create copy'
-          : 'Delete course';
+          : action === 'copyToEdit'
+            ? 'Create practice copy'
+            : action === 'share'
+              ? 'Publish sharing'
+          : archive ? 'Archive course' : 'Delete course';
 
-  if (action !== 'delete') {
+  if (action !== 'delete' || archive) {
     return <PixelButton label={label} grow={false} disabled={busy} onPress={onPress} />;
   }
   return (
@@ -404,6 +531,9 @@ const styles = StyleSheet.create({
   close: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
   fields: { gap: space.md },
   confirmCopy: { gap: space.cell },
+  visibility: { gap: space.cell },
+  visibilityChoice: { minHeight: touch, justifyContent: 'center', padding: space.cell },
+  shareCode: { borderWidth: bevel, padding: space.md },
   footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: space.cell, flexWrap: 'wrap' },
   deleteButton: {
     minHeight: touch,

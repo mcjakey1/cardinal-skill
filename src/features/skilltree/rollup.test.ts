@@ -18,6 +18,7 @@ test('a mission node is never auto-mastered by an initial node status alone', ()
     tree: { nodes: [node], prereqs: [] },
     missions,
     completedMissionIds: [],
+    serverCompletedMissionIds: [],
     directlyCompletedIds: [],
     serverMasteredIds: ['root'],
     serverXp: 0,
@@ -31,10 +32,24 @@ test('a mission node masters only after every mission is complete', () => {
     tree: { nodes: [node], prereqs: [] },
     missions,
     completedMissionIds: ['m1', 'm2'],
+    serverCompletedMissionIds: [],
     directlyCompletedIds: [],
     serverMasteredIds: [],
     serverXp: 0,
   });
   assert.deepEqual(result.masteredIds, ['root']);
   assert.equal(result.xp, 50);
+});
+
+test('server mission snapshots are not counted again at the editable current reward', () => {
+  const result = rollUpProgress({
+    tree: { nodes: [node], prereqs: [] },
+    missions,
+    completedMissionIds: ['m1', 'm2'],
+    serverCompletedMissionIds: ['m1'],
+    directlyCompletedIds: [],
+    serverMasteredIds: [],
+    serverXp: 10,
+  });
+  assert.equal(result.xp, 35);
 });

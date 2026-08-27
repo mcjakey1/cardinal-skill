@@ -19,6 +19,11 @@ import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree
 import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
 import { validateGraph } from '@/features/skilltree/validation';
+import {
+  importedCourseTitle,
+  instructorImportError,
+  syllabusFileAccepted,
+} from '@/features/skilltree/instructorCourseImport';
 import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
 import {
   fetchInstructorVerification,
@@ -36,8 +41,12 @@ import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
 import { supabase } from '@/lib/supabase';
+import { bytesToBase64 } from '@/lib/base64';
+import { callEdgeFunction } from '@/lib/edgeFunctions';
+import { extractTextFromPDF } from '@/lib/pdfTextExtraction';
 import { lms } from '@/theme/lms';
 import { DitherField } from '@/ui/Dither';
+import { LmsFileDropzone, type LmsFileSelection } from '@/ui/LmsFileDropzone';
 import {
   Badge,
   DataTable,
@@ -72,11 +81,8 @@ import {
  * toward this surface would make it unable to answer the only question it is
  * there for.
  *
- * What this build genuinely has is stated where it matters rather than papered
- * over: the cohort figures come from two security-definer functions that have
- * never run against a live database in this project, and the parser is an Edge
- * Function that has never been deployed from this repository. Both say so on
- * screen instead of showing a number or a progress bar that is not true.
+ * Protected writes require a real Supabase session. The local demo remains a
+ * read-only example workspace and names that boundary at the action itself.
  */
 
 type Section = 'courses' | 'tree' | 'students' | 'insights' | 'import' | 'settings';
@@ -280,7 +286,7 @@ const SAMPLE_READOUT: Extract<CohortReadout, { kind: 'ready' }> = {
 
 export default function Instructor() {
   const router = useRouter();
-  const { logout } = useAuth();
+  const { logout, session } = useAuth();
   const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -290,6 +296,7 @@ export default function Instructor() {
   const [section, setSection] = useState<Section>('courses');
   const [drawer, setDrawer] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
+  const liveSession = session?.source === 'supabase';
 
   const courses = useQuery({
     queryKey: ['instructor-courses'],
@@ -449,13 +456,22 @@ export default function Instructor() {
                 error={courses.error}
                 onOpen={open}
                 onImport={() => go('import')}
+                liveSession={liveSession}
+                onSignIn={signOut}
               />
             )}
             {section === 'students' && <Students course={course} />}
             {section === 'insights' && <Insights course={course} />}
-            {section === 'import' && <ImportSyllabus onDrawn={open} />}
+            {section === 'import' && (
+              <ImportSyllabus
+                liveSession={liveSession}
+                onDrawn={open}
+                onSignIn={signOut}
+              />
+            )}
             {section === 'settings' && (
               <Settings
+                liveSession={liveSession}
                 onSignOut={signOut}
               />
             )}
@@ -601,6 +617,8 @@ function Courses({
   error,
   onOpen,
   onImport,
+  liveSession,
+  onSignIn,
 }: {
   rows: CourseRow[];
   activeId: string;
@@ -608,7 +626,54 @@ function Courses({
   error: unknown;
   onOpen: (id: string) => void;
   onImport: () => void;
+  liveSession: boolean;
+  onSignIn: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const [blankOpen, setBlankOpen] = useState(false);
+  const [blankTitle, setBlankTitle] = useState('');
+  const [blankCode, setBlankCode] = useState('');
+  const [blankBusy, setBlankBusy] = useState(false);
+  const [blankError, setBlankError] = useState<string | null>(null);
+
+  const openBlank = () => {
+    setBlankError(null);
+    setBlankOpen(true);
+  };
+
+  const createBlank = async () => {
+    setBlankBusy(true);
+    setBlankError(null);
+    try {
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth.user) throw new Error('Your session expired. Sign in again to create a course.');
+      const { data: course, error: createError } = await supabase
+        .from('courses')
+        .insert({
+          title: blankTitle.trim(),
+          course_code: blankCode.trim() || null,
+          owner_id: auth.user.id,
+        })
+        .select('id')
+        .single();
+      if (createError || !course) {
+        throw createError ?? new Error('The blank course was not created.');
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['courses'] }),
+      ]);
+      setBlankOpen(false);
+      setBlankTitle('');
+      setBlankCode('');
+      onOpen(course.id);
+    } catch (cause) {
+      setBlankError(instructorImportError(cause));
+    } finally {
+      setBlankBusy(false);
+    }
+  };
+
   const tableRows: TableRow[] = loading
     ? [0, 1, 2].map((i) => ({
         key: `skeleton-${i}`,
@@ -637,9 +702,26 @@ function Courses({
     <>
       <PageHead
         title="Courses"
-        lede="Every course on this device. Opening one loads its tree, its class figures, and the import that drew it."
-        action={<LButton label="Import a syllabus" icon="upload" onPress={onImport} />}
+        lede="Create a course from a syllabus, or start with an empty skill tree and build it yourself."
+        action={(
+          <View style={styles.rowWrap}>
+            <LButton label="Create blank course" icon="plus" onPress={openBlank} />
+            <LButton label="Import syllabus" icon="upload" variant="primary" onPress={onImport} />
+          </View>
+        )}
       />
+
+      {!liveSession ? (
+        <Notice tone="attention" title="Sign in to create and save courses">
+          <View style={styles.noticeActions}>
+            <LText variant="small">
+              The local instructor demo is read-only. Use a Supabase instructor account to upload
+              syllabi, create course trees, and publish them to students.
+            </LText>
+            <LButton label="Go to sign in" icon="log-in" size="sm" onPress={onSignIn} />
+          </View>
+        </Notice>
+      ) : null}
 
       {error ? (
         <Notice tone="error" title="Your courses did not load">
@@ -655,6 +737,51 @@ function Courses({
           rows={tableRows}
         />
       </Panel>
+
+      <LModal visible={blankOpen} title="Create a blank course" onRequestClose={() => setBlankOpen(false)}>
+        {liveSession ? (
+          <>
+            <LText variant="small" tone="muted">
+              Start with an empty chart, then add topics, prerequisites, missions, and XP in the skill-tree editor.
+            </LText>
+            <Field
+              label="Course name"
+              value={blankTitle}
+              onChangeText={setBlankTitle}
+              placeholder="Statistics 101"
+              maxLength={120}
+              autoFocus
+            />
+            <Field
+              label="Course code (optional)"
+              value={blankCode}
+              onChangeText={setBlankCode}
+              placeholder="STAT 101"
+              maxLength={32}
+            />
+            {blankError ? <Notice tone="error" title="Course not created">{blankError}</Notice> : null}
+            <View style={styles.rowWrap}>
+              <LButton
+                label={blankBusy ? 'Creating…' : 'Create course'}
+                variant="primary"
+                disabled={blankBusy || !blankTitle.trim()}
+                onPress={createBlank}
+              />
+              <LButton label="Cancel" variant="quiet" disabled={blankBusy} onPress={() => setBlankOpen(false)} />
+            </View>
+          </>
+        ) : (
+          <>
+            <Notice tone="attention" title="A live account is required">
+              The local demo cannot own or save a course. Sign in with your Supabase instructor account, then create the blank course.
+            </Notice>
+            <View style={styles.rowWrap}>
+              <LButton label="Go to sign in" icon="log-in" variant="primary" onPress={onSignIn} />
+              <LButton label="Cancel" variant="quiet" onPress={() => setBlankOpen(false)} />
+            </View>
+          </>
+        )}
+      </LModal>
     </>
   );
 }
@@ -1645,37 +1772,132 @@ function Insights({ course }: { course: CourseRow }) {
 
 // -------------------------------------------------------------------- import
 
-function ImportSyllabus({ onDrawn }: { onDrawn: (courseId: string) => void }) {
+type SelectedSyllabusDocument = {
+  name: string;
+  mediaType: 'application/pdf';
+  base64: string;
+};
+
+interface InstructorParseResult {
+  course_id: string;
+  node_count: number;
+  mission_count: number;
+  edge_count: number;
+}
+
+function ImportSyllabus({
+  liveSession,
+  onDrawn,
+  onSignIn,
+}: {
+  liveSession: boolean;
+  onDrawn: (courseId: string) => void;
+  onSignIn: () => void;
+}) {
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
+  const [document, setDocument] = useState<SelectedSyllabusDocument | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileStatus, setFileStatus] = useState('No file selected');
+  const [fileTone, setFileTone] = useState<'idle' | 'ok' | 'bad'>('idle');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
-  const ready = title.trim().length > 0 && text.trim().length > 0 && !busy;
+  const ready = liveSession && (text.trim().length > 0 || Boolean(document)) && !busy;
 
-  // ponytail: the same two calls `app/upload.tsx` makes, written out again
-  // rather than shared, because the two screens report them completely
-  // differently — a pixel log there, a notice here. Extract if a third caller
-  // turns up.
+  const readFile = async (file: LmsFileSelection) => {
+    setFailure(null);
+    if (!syllabusFileAccepted(file.name)) {
+      setDocument(null);
+      setFileName(null);
+      setFileStatus('Choose a PDF, TXT, or Markdown file.');
+      setFileTone('bad');
+      return;
+    }
+
+    setFileName(file.name);
+    setFileStatus('Reading file…');
+    setFileTone('idle');
+    try {
+      const response = await fetch(file.uri);
+      if (!response.ok) throw new Error(`The file could not be read (HTTP ${response.status}).`);
+      if (/\.pdf$/i.test(file.name) || file.mimeType === 'application/pdf') {
+        const buffer = await response.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        if (bytes.byteLength > 15_000_000) throw new Error('That PDF is larger than 15 MB.');
+        setDocument({ name: file.name, mediaType: 'application/pdf', base64: bytesToBase64(bytes) });
+        try {
+          const extracted = await extractTextFromPDF(buffer);
+          setText(extracted?.text ?? '');
+        } catch {
+          // Scanned and native PDFs remain usable through the server parser.
+          setText('');
+        }
+        setFileStatus(`${Math.ceil(bytes.byteLength / 1024)} KB PDF ready to import`);
+      } else {
+        const body = await response.text();
+        if (!body.trim()) throw new Error('That file does not contain any syllabus text.');
+        setText(body);
+        setDocument(null);
+        setFileStatus(`${body.length.toLocaleString()} characters ready to import`);
+      }
+      setFileTone('ok');
+    } catch (cause) {
+      setDocument(null);
+      setFileName(null);
+      setFileStatus('The file could not be read. Paste the syllabus text instead.');
+      setFileTone('bad');
+      setFailure(instructorImportError(cause));
+    }
+  };
+
   const submit = async () => {
+    if (!liveSession) return;
     setBusy(true);
     setFailure(null);
+    let createdCourseId: string | null = null;
+    let parsed = false;
     try {
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth.user) throw new Error('Your session expired. Sign in again to import a syllabus.');
+      const provisionalTitle = importedCourseTitle(title, fileName);
       const { data: course, error: courseError } = await supabase
         .from('courses')
-        .insert({ title: title.trim() })
+        .insert({ title: provisionalTitle, owner_id: auth.user.id })
         .select('id')
         .single();
       if (courseError || !course) throw courseError ?? new Error('No course was returned.');
+      createdCourseId = course.id;
 
-      const { error } = await supabase.functions.invoke('parse-syllabus', {
-        body: { courseId: course.id, syllabusText: text },
-      });
-      if (error) throw error;
+      const extractedText = text.trim();
+      const result = await callEdgeFunction<InstructorParseResult>(
+        'parse-syllabus',
+        {
+          courseId: course.id,
+          syllabusText: extractedText || undefined,
+          documentBase64: extractedText ? undefined : document?.base64,
+          documentMediaType: extractedText ? undefined : document?.mediaType,
+          documentName: extractedText ? undefined : document?.name,
+        },
+        140_000,
+      );
+      if (typeof result.node_count !== 'number') {
+        throw new Error('The parser did not return a saved course tree.');
+      }
+      parsed = true;
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['courses'] }),
+      ]);
 
       onDrawn(course.id);
-    } catch (err) {
-      setFailure(err instanceof Error ? err.message : String(err));
+    } catch (cause) {
+      if (createdCourseId && !parsed) {
+        await supabase.from('courses').delete().eq('id', createdCourseId);
+      }
+      setFailure(instructorImportError(cause));
     } finally {
       setBusy(false);
     }
@@ -1685,43 +1907,72 @@ function ImportSyllabus({ onDrawn }: { onDrawn: (courseId: string) => void }) {
     <>
       <PageHead
         title="Import a syllabus"
-        lede="Paste the syllabus text and the parser reads it into a tree of what depends on what. You review the result before any student sees it."
+        lede="Upload a PDF, text, or Markdown syllabus. Cardinal reads its topics and prerequisites into a draft tree for you to review."
       />
+
+      {!liveSession ? (
+        <Notice tone="attention" title="Sign in to import a live course">
+          <View style={styles.noticeActions}>
+            <LText variant="small">
+              You are using the local instructor demo. Syllabus parsing and saved courses require a
+              Supabase instructor account so the new course has a verified owner.
+            </LText>
+            <LButton label="Go to sign in" icon="log-in" size="sm" onPress={onSignIn} />
+          </View>
+        </Notice>
+      ) : null}
 
       <Panel>
         <View style={styles.panelBody}>
+          <LmsFileDropzone
+            fileName={fileName}
+            status={fileStatus}
+            statusTone={fileTone}
+            disabled={busy || !liveSession}
+            onSelect={readFile}
+          />
+
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <LText variant="micro" tone="muted">or paste text</LText>
+            <View style={styles.divider} />
+          </View>
+
           <Field
-            label="Course name"
+            label="Course name (optional)"
             value={title}
             onChangeText={setTitle}
             placeholder="Statistics 101"
+            hint="If left blank, the uploaded file name becomes the course name."
+            maxLength={120}
+            editable={!busy && liveSession}
           />
           <Field
             label="Syllabus text"
             value={text}
             onChangeText={setText}
             tall
+            editable={!busy && liveSession}
             placeholder="Week 1 — Describing data…"
-            hint="PDF and DOCX text is extracted server-side, which is not wired in this build. Paste the text for now."
+            hint="Paste text instead of uploading a file, or review text extracted from an uploaded document."
           />
 
           {failure ? (
             <Notice tone="error" title="Nothing was saved">
-              {failure} The parser is a Supabase Edge Function that has not been deployed from this
-              repository, so this is the expected result on a machine with no backend.
+              {failure}
             </Notice>
           ) : null}
 
           <View style={styles.rowWrap}>
             <LButton
-              label={busy ? 'Reading…' : 'Draw the tree'}
+              label={busy ? 'Generating course tree…' : 'Generate course tree'}
               variant="primary"
               icon="git-branch"
               disabled={!ready}
               onPress={submit}
             />
             <LText variant="small" tone="muted">
-              You review the tree before publishing it.
+              The course stays a private draft until you publish it to My courses.
             </LText>
           </View>
         </View>
@@ -1732,7 +1983,7 @@ function ImportSyllabus({ onDrawn }: { onDrawn: (courseId: string) => void }) {
 
 // ------------------------------------------------------------------ settings
 
-function Settings({ onSignOut }: { onSignOut: () => void }) {
+function Settings({ liveSession, onSignOut }: { liveSession: boolean; onSignOut: () => void }) {
   return (
     <>
       <PageHead title="Settings" lede="What this build can actually do, and the way out." />
@@ -1741,21 +1992,17 @@ function Settings({ onSignOut }: { onSignOut: () => void }) {
         <PanelHead title="This build" />
         <View style={styles.panelBody}>
           <LText variant="small" style={styles.prose}>
-            Authentication is not wired. The workspace sign-in chooses which surface you see and
-            unlocks nothing — every class figure still comes from a database function gated on the
-            signed-in account, and there is no account.
+            {liveSession
+              ? 'This workspace is connected to a Supabase account. Courses you create are saved to your instructor account and protected by row-level security.'
+              : 'This is a local demo session. It can explore the example workspace, but it cannot create courses, import syllabi, or read a live roster.'}
           </LText>
           <LText variant="small" style={styles.prose}>
-            The syllabus parser is a Supabase Edge Function that has not been deployed from this
-            repository. Class figures come from course_cohort_summary and course_mission_summary,
-            and the roster from course_student_progress — three database functions that have never
-            run against a live database in this project. Until 0005_instructor_reads is applied,
-            Students has nothing to read and says so rather than showing anyone.
+            Syllabus imports run through the authenticated Supabase parser. PDF, text, and Markdown
+            files become private draft trees that you review before publishing to students.
           </LText>
           <LText variant="small" style={styles.prose}>
-            When it is applied, you can read the progress of students on courses you own, by name.
-            You cannot change it: those policies grant reads only, and a student&apos;s record stays
-            theirs to write.
+            You can read progress only for students enrolled in courses you own. Those instructor
+            policies grant reads only; each student remains the only writer of their progress.
           </LText>
           <LText variant="small" style={styles.prose}>
             Students use the rest of this app. Nothing here changes what a student sees until a tree
@@ -2057,6 +2304,13 @@ const styles = StyleSheet.create({
   prose: { maxWidth: 620 },
   sectionHeading: { marginTop: lms.space.sm },
   panelBody: { padding: lms.space.lg, gap: lms.space.md },
+  noticeActions: { gap: lms.space.md, alignItems: 'flex-start' },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: lms.space.md,
+  },
+  divider: { flex: 1, height: 1, backgroundColor: c.line },
   rowStack: { gap: 2, minWidth: 0, flex: 1 },
   rowInline: { flexDirection: 'row', alignItems: 'center', gap: lms.space.md, minWidth: 0 },
   rowWrap: { flexDirection: 'row', alignItems: 'center', gap: lms.space.sm, flexWrap: 'wrap' },

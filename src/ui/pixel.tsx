@@ -514,6 +514,36 @@ const ICONS = {
     '##......',
     '........',
   ],
+  crown: [
+    '........',
+    '#..##..#',
+    '##.##.##',
+    '########',
+    '.######.',
+    '.######.',
+    '.######.',
+    '........',
+  ],
+  user: [
+    '..####..',
+    '.######.',
+    '.######.',
+    '..####..',
+    '.######.',
+    '##....##',
+    '########',
+    '........',
+  ],
+  flame: [
+    '....#...',
+    '...##...',
+    '..####..',
+    '.######.',
+    '.######.',
+    '..####..',
+    '...##...',
+    '........',
+  ],
   link: [
     '.###....',
     '##.##...',
@@ -570,7 +600,7 @@ export function StatusTag({ status, compact }: { status: DisplayStatus; compact?
   const visualStatus = status === 'in_progress' ? 'available' : status;
   const s = t.node[visualStatus];
   const ink =
-    visualStatus === 'locked' ? t.inkMuted : visualStatus === 'mastered' ? t.earnedText : t.ink;
+    visualStatus === 'locked' ? t.inkMuted : visualStatus === 'mastered' ? t.success : t.ink;
   return (
     <View style={styles.status}>
       <PixelIcon name={s.glyph as IconName} size={12} colour={ink} />

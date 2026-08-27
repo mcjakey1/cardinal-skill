@@ -55,6 +55,9 @@ export interface Achievement {
   earned: boolean;
   /** Progress toward it, 0–1. Drives the meter on an unearned stamp. */
   progress: number;
+  /** Human-readable numerator and denominator for the locked stamp. */
+  current: number;
+  target: number;
 }
 
 const STREAK_TARGET = 7;
@@ -115,13 +118,15 @@ function stamp(
 ): Achievement {
   // A target of zero means the chart cannot offer this one at all (no
   // assessments, no nodes). Unreachable is not earned.
-  if (need <= 0) return { id, title, detail, earned: false, progress: 0 };
+  if (need <= 0) return { id, title, detail, earned: false, progress: 0, current: 0, target: 0 };
   return {
     id,
     title,
     detail,
     earned: have >= need,
     progress: Math.max(0, Math.min(1, have / need)),
+    current: Math.max(0, have),
+    target: need,
   };
 }
 

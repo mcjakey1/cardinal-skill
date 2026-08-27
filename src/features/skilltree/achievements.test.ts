@@ -81,6 +81,13 @@ test('progress is clamped to 0..1', () => {
   }
 });
 
+test('locked stamps expose an exact progress count for the dossier', () => {
+  const sample: Tree = { nodes: [node('a'), node('b')], prereqs: [] };
+  const path = achievements(sample, [], 0).find((item) => item.id === 'path-opener');
+  assert.equal(path?.current, 2);
+  assert.equal(path?.target, 3);
+});
+
 test('help nodes are worth XP but never count toward the graded total', () => {
   const graded = node('a');
   const help: SkillNode = { ...node('help'), graded: false, parentNodeId: 'a' };

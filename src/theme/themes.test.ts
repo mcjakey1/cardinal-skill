@@ -29,6 +29,8 @@ test('ships five unique, complete theme presets', () => {
       theme.textMuted,
       theme.success,
       theme.warning,
+      theme.locate,
+      theme.locateInk,
       theme.danger,
       ...Object.values(theme.nodeCompleted),
       ...Object.values(theme.nodeActive),
@@ -54,6 +56,14 @@ test('primary and secondary text pass AA on canvas and surface roles', () => {
   }
 });
 
+test('mission reward, navigation, and mastered roles pass AA', () => {
+  for (const theme of availableThemes) {
+    assert.ok(contrast(theme.warning, theme.surface) >= 4.5, `${theme.id} XP badge`);
+    assert.ok(contrast(theme.locateInk, theme.locate) >= 4.5, `${theme.id} start action`);
+    assert.ok(contrast(theme.success, theme.surface) >= 4.5, `${theme.id} mastered status`);
+  }
+});
+
 test('validates persisted IDs and maps node semantics without changing colours', () => {
   assert.equal(isThemePresetId('cyber-neon'), true);
   assert.equal(isThemePresetId('cardinal-old'), false);
@@ -63,6 +73,8 @@ test('validates persisted IDs and maps node semantics without changing colours',
     const resolved = toLegacyTheme(preset);
     assert.equal(resolved.ground, preset.background);
     assert.equal(resolved.panel, preset.surface);
+    assert.equal(resolved.locate, preset.locate);
+    assert.equal(resolved.locateInk, preset.locateInk);
     assert.equal(resolved.node.mastered.fill, preset.nodeCompleted.background);
     assert.equal(resolved.node.available.fill, preset.nodeActive.background);
     assert.equal(resolved.node.locked.fill, preset.nodeLocked.background);

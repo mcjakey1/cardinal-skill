@@ -76,7 +76,11 @@ export interface Mission {
   kind: NodeKind;
   xpReward: number;
   estimatedMinutes?: number;
+  /** Authored on the mission; older rows inherit a safe value from their node. */
+  difficulty?: MissionDifficulty;
 }
+
+export type MissionDifficulty = 'easy' | 'medium' | 'hard';
 
 /** Directed edge: `nodeId` requires `prereqId` to be mastered first. */
 export interface Prereq {

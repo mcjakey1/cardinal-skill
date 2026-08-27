@@ -58,6 +58,44 @@ interface CourseNodesResult {
   error: { code: string; message: string } | null;
 }
 
+interface MissionRow {
+  id: string;
+  node_id: string;
+  title: string;
+  description: string | null;
+  kind: Mission['kind'];
+  xp_reward: number;
+  estimated_minutes: number | null;
+  difficulty: Mission['difficulty'] | null;
+}
+
+interface MissionsResult {
+  data: MissionRow[] | null;
+  error: { code: string; message: string } | null;
+}
+
+/** Keeps older deployed databases readable until migration 0018 lands. */
+async function fetchMissions(courseId: string): Promise<MissionsResult> {
+  const current = await supabase
+    .from('missions')
+    .select('id, node_id, title, description, kind, xp_reward, estimated_minutes, difficulty')
+    .eq('course_id', courseId)
+    .order('sort_order');
+  if (!current.error || current.error.code !== '42703' || !current.error.message.includes('difficulty')) {
+    return { data: current.data as MissionRow[] | null, error: current.error };
+  }
+
+  const legacy = await supabase
+    .from('missions')
+    .select('id, node_id, title, description, kind, xp_reward, estimated_minutes')
+    .eq('course_id', courseId)
+    .order('sort_order');
+  return {
+    error: legacy.error,
+    data: legacy.data?.map((row) => ({ ...row, difficulty: null } as MissionRow)) ?? null,
+  };
+}
+
 /** Keep charts readable while a deployed project is still waiting on migration 0014. */
 async function fetchCourseNodes(courseId: string): Promise<CourseNodesResult> {
   const current = await supabase
@@ -91,7 +129,7 @@ async function fetchCourseNodes(courseId: string): Promise<CourseNodesResult> {
  * id in these queries — the database applies it. Do not add one; a client-side
  * filter would look like the security control and isn't.
  */
-export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
+export async function fetchTree(courseId: string, strictMissionData = false): Promise<TreeSnapshot> {
   const mock = findMockCourse(courseId);
   if (mock) {
     return {
@@ -123,17 +161,17 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
       supabase.from('node_progress').select('node_id').eq('status', 'mastered'),
       supabase.rpc('total_xp_for_course', { p_course_id: courseId }),
       supabase.from('courses').select('title').eq('id', courseId).maybeSingle(),
-      supabase
-        .from('missions')
-        .select('id, node_id, title, description, kind, xp_reward, estimated_minutes')
-        .eq('course_id', courseId)
-        .order('sort_order'),
+      fetchMissions(courseId),
       // No user id: RLS scopes mission_progress to the caller. Adding one here
       // would look like the control and isn't.
       supabase.from('mission_progress').select('mission_id'),
     ]);
 
-  const firstError = nodesRes.error ?? prereqsRes.error ?? progressRes.error ?? xpRes.error;
+  const firstError = nodesRes.error
+    ?? prereqsRes.error
+    ?? progressRes.error
+    ?? xpRes.error
+    ?? (strictMissionData ? missionsRes.error ?? missionProgressRes.error ?? courseRes.error : null);
   if (firstError) {
     const cached = await loadCachedTree(courseId);
     if (cached) return cached;
@@ -197,6 +235,7 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
         kind: r.kind,
         xpReward: r.xp_reward,
         estimatedMinutes: r.estimated_minutes ?? undefined,
+        difficulty: r.difficulty ?? undefined,
       })),
     completedMissionIds: (missionProgressRes.data ?? []).map((r) => r.mission_id),
   };
@@ -217,5 +256,11 @@ export async function fetchTree(courseId: string): Promise<TreeSnapshot> {
  */
 export async function fetchLiveTree(courseId: string): Promise<TreeSnapshot> {
   const snapshot = await fetchTree(courseId);
+  return { ...snapshot, tree: aliveSubgraph(snapshot.tree) };
+}
+
+/** Missions must never turn a failed content/progress read into a plausible empty list. */
+export async function fetchMissionBoardTree(courseId: string): Promise<TreeSnapshot> {
+  const snapshot = await fetchTree(courseId, true);
   return { ...snapshot, tree: aliveSubgraph(snapshot.tree) };
 }

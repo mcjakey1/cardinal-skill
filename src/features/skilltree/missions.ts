@@ -32,6 +32,16 @@ export function missionsForNode<T extends MissionLike>(missions: readonly T[], n
   return (missions ?? []).filter((m) => m && m.skillId === nodeId);
 }
 
+/** Local completions add to the server record; local unmarks deliberately override stale server rows. */
+export function effectiveMissionCompletionIds(
+  serverIds: Iterable<string>,
+  localIds: Iterable<string>,
+  locallyUnmarkedIds: Iterable<string>,
+): string[] {
+  const unmarked = new Set(locallyUnmarkedIds);
+  return [...new Set([...serverIds, ...localIds])].filter((id) => !unmarked.has(id));
+}
+
 /**
  * A node's XP: the sum of its missions.
  *

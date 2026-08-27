@@ -80,6 +80,9 @@ const BOOT_CSS = `
 html, body, #root {
   background-color: var(--csk-ground);
 }
+html, body {
+  scrollbar-gutter: stable;
+}
 body {
   color: var(--csk-ink);
   /* The face is loaded by expo-font at runtime; this is what the first paint
@@ -130,7 +133,16 @@ body {
   animation: cardinal-node-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   will-change: opacity;
 }
+@keyframes cardinal-locate-pulse {
+  0%, 33%, 66%, 100% { opacity: 1; }
+  16%, 50%, 83% { opacity: 0.2; }
+}
+.cardinal-locate-pulse {
+  animation: cardinal-locate-pulse 1.5s steps(1, end) 1;
+  will-change: opacity;
+}
 @media (prefers-reduced-motion: reduce) {
   .cardinal-node-pulse { animation: none; opacity: 1; }
+  .cardinal-locate-pulse { animation: none; opacity: 1; }
 }
 `;

@@ -22,7 +22,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SkillTree } from '@/features/skilltree/SkillTree';
 import { streakDays } from '@/features/skilltree/achievements';
 import { rankNextQuests, shouldOfferHelp } from '@/features/skilltree/adaptive';
-import { missionStates, nodeXpEarned, nodeXpFromMissions } from '@/features/skilltree/missions';
+import { effectiveMissionCompletionIds, missionStates, nodeXpEarned, nodeXpFromMissions } from '@/features/skilltree/missions';
+import { missionDifficulty } from '@/features/skilltree/missionBoard';
 import { MAX_NAME, resolveQuestName, type NameSource } from '@/features/skilltree/naming';
 import { learnerSignals, nodeSignal } from '@/features/skilltree/observed';
 import {
@@ -98,7 +99,12 @@ const unavailableCourseManagement = async () => {
 export default function TreeScreen() {
   const t = useTheme();
   const { theme } = useAppTheme();
-  const { courseId, edit } = useLocalSearchParams<{ courseId: string; edit?: string }>();
+  const { courseId, edit, focusNodeId, focusRequest } = useLocalSearchParams<{
+    courseId: string;
+    edit?: string;
+    focusNodeId?: string;
+    focusRequest?: string;
+  }>();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { transition } = usePixelTransition();
@@ -117,6 +123,7 @@ export default function TreeScreen() {
   const [claimedMissionId, setClaimedMissionId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(edit === '1');
   const [cameraFocusRequest, setCameraFocusRequest] = useState(0);
+  const [locatedNodeId, setLocatedNodeId] = useState<string | null>(null);
   const [linkMode, setLinkMode] = useState(false);
   const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
@@ -129,11 +136,14 @@ export default function TreeScreen() {
   const [editMissions, setEditMissions] = useState<MissionDraft[]>([]);
   const [editUsesMissionRewards, setEditUsesMissionRewards] = useState(false);
   const claimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const locateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handledLocateRequest = useRef<string | null>(null);
   const linkNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
     () => () => {
       if (claimTimer.current) clearTimeout(claimTimer.current);
+      if (locateTimer.current) clearTimeout(locateTimer.current);
       if (linkNoticeTimer.current) clearTimeout(linkNoticeTimer.current);
     },
     [],
@@ -159,6 +169,7 @@ export default function TreeScreen() {
   const {
     log,
     missionLog,
+    missionUnmarks,
     ready: progressReady,
     complete,
     toggleMission,
@@ -228,6 +239,22 @@ export default function TreeScreen() {
     [data?.missions, edited?.missions],
   );
 
+  useEffect(() => {
+    const targetNodeId = focusNodeId;
+    const request = targetNodeId ? `${targetNodeId}:${focusRequest ?? ''}` : null;
+    if (
+      !request
+      || handledLocateRequest.current === request
+      || !targetNodeId
+      || !sourceTree?.nodes.some((node) => node.id === targetNodeId)
+    ) return;
+    handledLocateRequest.current = request;
+    setSelectedId(targetNodeId);
+    setLocatedNodeId(targetNodeId);
+    if (locateTimer.current) clearTimeout(locateTimer.current);
+    locateTimer.current = setTimeout(() => setLocatedNodeId(null), prefs.motionOff ? 0 : 1500);
+  }, [focusNodeId, focusRequest, prefs.motionOff, sourceTree]);
+
   // A blank course is the manual-authoring entry point. The URL flag gets the
   // first visit there immediately; this fallback also restores the editor
   // after a reload, when transient query parameters are no longer present.
@@ -243,12 +270,16 @@ export default function TreeScreen() {
       missions: sourceMissions,
       // The server's record and this device's record are both true; a student
       // on a metered connection completes work offline and syncs later.
-      completedMissionIds: [...data.completedMissionIds, ...Object.keys(missionLog)],
+      completedMissionIds: effectiveMissionCompletionIds(
+        data.completedMissionIds,
+        Object.keys(missionLog),
+        Object.keys(missionUnmarks),
+      ),
       directlyCompletedIds: Object.keys(log),
       serverMasteredIds: data.masteredIds,
       serverXp: data.xp,
     });
-  }, [data, log, missionLog, sourceMissions, sourceTree]);
+  }, [data, log, missionLog, missionUnmarks, sourceMissions, sourceTree]);
 
   // One name per node, resolved once. The chart, the detail window, the REQUIRES
   // list and the "what next" bar all read from here, because two surfaces
@@ -795,6 +826,8 @@ export default function TreeScreen() {
         onResetLayout={resetLayout}
         progressByNode={progressByNode}
         focusRequestKey={cameraFocusRequest}
+        focusNodeId={locatedNodeId}
+        focusNodeRequestKey={focusRequest ?? 0}
       />
         </View>
 
@@ -1100,12 +1133,15 @@ export default function TreeScreen() {
                         {mission.description || ' '}
                       </PixelText>
 
-                      <PixelText variant="micro" colour={t.inkMuted}>
+                      <View style={styles.previewMeta}>
+                        <MissionDifficultyTag difficulty={missionDifficulty(mission, selected)} />
+                        <PixelText variant="micro" colour={t.inkMuted}>
                         {[mission.kind, mission.estimatedMinutes ? `${mission.estimatedMinutes} MIN` : null]
                           .filter(Boolean)
                           .join(' · ')
                           .toUpperCase()}
-                      </PixelText>
+                        </PixelText>
+                      </View>
 
                       <PixelText
                         variant="micro"
@@ -1335,6 +1371,16 @@ function Field({ label, value, detail }: { label: string; value: string; detail?
           {detail}
         </PixelText>
       ) : null}
+    </View>
+  );
+}
+
+function MissionDifficultyTag({ difficulty }: { difficulty: ReturnType<typeof missionDifficulty> }) {
+  const t = useTheme();
+  const colour = difficulty === 'easy' ? t.success : difficulty === 'medium' ? t.warning : t.alarm;
+  return (
+    <View style={[styles.detailBadge, { borderColor: colour, backgroundColor: t.well }]}>
+      <PixelText variant="micro" colour={colour}>{difficulty.toUpperCase()}</PixelText>
     </View>
   );
 }
@@ -1640,6 +1686,7 @@ const styles = StyleSheet.create({
   previewNodeRow: { flexDirection: 'row', alignItems: 'center', gap: space.cell },
   previewNode: { width: touch, height: touch, borderWidth: bevel, alignItems: 'center', justifyContent: 'center' },
   previewMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
+  detailBadge: { minHeight: 28, borderWidth: bevel, justifyContent: 'center', paddingHorizontal: space.cell },
   renameToggle: { minHeight: touch, justifyContent: 'center', paddingLeft: space.md },
   renameForm: { gap: space.cell, marginTop: space.xs },
   objective: { marginTop: space.cell, gap: space.hair },

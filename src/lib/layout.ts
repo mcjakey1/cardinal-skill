@@ -21,6 +21,9 @@ import { useWindowDimensions } from 'react-native';
  */
 export const WIDE_AT = 720;
 
+/** Below this, dense command rows stack before labels become ambiguous. */
+export const COMPACT_AT = 420;
+
 /** Width the docked detail window takes on a wide screen. */
 export const DOCK_WIDTH = 360;
 

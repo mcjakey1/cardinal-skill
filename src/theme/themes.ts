@@ -12,6 +12,10 @@ export interface ThemePalette {
   textMuted: string;
   success: string;
   warning: string;
+  /** Mission deep-link locator ring; deliberately orange in every preset. */
+  locate: string;
+  /** Dark ink that remains AA-legible on locate orange in every preset. */
+  locateInk: string;
   danger: string;
   nodeCompleted: {
     background: string;
@@ -61,6 +65,8 @@ export const THEME_PRESETS = {
     textMuted: '#94A3B8',
     success: '#86EFAC',
     warning: '#FDE68A',
+    locate: '#F97316',
+    locateInk: '#0B0F19',
     danger: '#FDA4AF',
     nodeCompleted: {
       background: '#1E293B', border: '#38BDF8', icon: '#38BDF8', glow: '#38BDF8',
@@ -89,6 +95,8 @@ export const THEME_PRESETS = {
     textMuted: '#B9A7D8',
     success: '#00FFA3',
     warning: '#FFD166',
+    locate: '#F97316',
+    locateInk: '#0B0F19',
     danger: '#FF8FC8',
     nodeCompleted: {
       background: '#2B1055', border: '#00FFA3', icon: '#00FFA3', glow: '#00FFA3',
@@ -117,6 +125,8 @@ export const THEME_PRESETS = {
     textMuted: '#86B89A',
     success: '#86EFAC',
     warning: '#FDE68A',
+    locate: '#F97316',
+    locateInk: '#0B0F19',
     danger: '#FDA4AF',
     nodeCompleted: {
       background: '#133824', border: '#22C55E', icon: '#86EFAC', glow: '#22C55E',
@@ -145,6 +155,8 @@ export const THEME_PRESETS = {
     textMuted: '#A8A29E',
     success: '#86EFAC',
     warning: '#FDE68A',
+    locate: '#F97316',
+    locateInk: '#0B0F19',
     danger: '#FDA4AF',
     nodeCompleted: {
       background: '#451A03', border: '#F59E0B', icon: '#FDE68A', glow: '#F59E0B',
@@ -173,6 +185,8 @@ export const THEME_PRESETS = {
     textMuted: '#B8C1D1',
     success: '#A3BE8C',
     warning: '#EBCB8B',
+    locate: '#F97316',
+    locateInk: '#0B0F19',
     danger: '#F2A5AD',
     nodeCompleted: {
       background: '#434C5E', border: '#88C0D0', icon: '#ECEFF4', glow: '#88C0D0',
@@ -219,6 +233,8 @@ export function toLegacyTheme(preset: ThemePalette): Theme {
     earnedText: preset.nodeCompleted.icon,
     success: preset.success,
     warning: preset.warning,
+    locate: preset.locate,
+    locateInk: preset.locateInk,
     alarm: preset.danger,
     focus: preset.nodeActive.border,
     field: [preset.background, preset.background],

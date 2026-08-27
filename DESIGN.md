@@ -63,6 +63,7 @@ colors:
   solar-completed-bg: "#451A03"
   solar-locked-ink: "#78716C"
   solar-active: "#EA580C"
+  locate-orange: "#F97316"
   solar-completed: "#F59E0B"
   solar-muted: "#A8A29E"
   solar-secondary: "#E7E5E4"
@@ -261,6 +262,10 @@ screen by itself.
 - **Periwinkle** (`#7A6BE8`): the only cool colour in the system. Informational
   log lines and links. It exists so "the machine is telling you something" never
   has to borrow the colour that means "do this next".
+- **Locate orange** (`#F97316`): the mission-navigation accent. It frames the
+  primary objective, marks "Locate on chart", and becomes the 1.5-second ring
+  that identifies the destination node. It never carries progress, difficulty,
+  or completion meaning.
 
 ### Light set
 Two entries added on 2026-08-05, when light became the default rendition. Both
@@ -522,6 +527,18 @@ addition to colour.
 Progress is lit cells, never a bar: 8×10dp blocks with a 2dp gap, `brass` for
 level progress and `cardinal` on an unearned stamp. Sixteen colours cannot draw a
 smooth bar, and a segmented meter reads faster anyway.
+
+### Record
+The scope selector and the equal-weight Leaderboard / Dossier & stamps toggle
+own the first viewport, ahead of either view's content. The leaderboard follows
+with an opt-in visibility control, a top-three podium that wraps rather than
+shrinks on narrow screens, ranks 4–50, and a docked self row above bottom chrome
+when the student's rank falls outside the first 50.
+
+The dossier reads as terminal telemetry: personal totals, a 14-day activity
+punch card, pace, and progress-only stamps. Switching the two views uses one
+`FadeIn` at their shared content boundary, skipped under reduced motion; nested
+Record sections do not add entrance motion.
 
 ## Do's and Don'ts
 

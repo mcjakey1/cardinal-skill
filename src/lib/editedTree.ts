@@ -11,6 +11,17 @@ export interface EditedCourse {
 
 export const editedTreeKey = (courseId: string) => `cardinal.edited-tree.v1.${courseId}`;
 
+const editedCourseListeners = new Map<string, Set<(course: EditedCourse | null) => void>>();
+
+function notifyEditedCourse(courseId: string, course: EditedCourse | null) {
+  editedCourseListeners.get(courseId)?.forEach((listener) => listener(course));
+}
+
+export async function saveEditedCourseSnapshot(courseId: string, course: EditedCourse): Promise<void> {
+  await AsyncStorage.setItem(editedTreeKey(courseId), JSON.stringify(course));
+  notifyEditedCourse(courseId, course);
+}
+
 export function useEditedTree(
   courseId: string | undefined,
   serverNodeIds: readonly string[] | undefined,
@@ -60,16 +71,28 @@ export function useEditedTree(
     return () => { live = false; };
   }, [courseId, idKey]);
 
+  useEffect(() => {
+    if (!courseId) return;
+    const listeners = editedCourseListeners.get(courseId) ?? new Set();
+    listeners.add(setEdited);
+    editedCourseListeners.set(courseId, listeners);
+    return () => {
+      listeners.delete(setEdited);
+      if (listeners.size === 0) editedCourseListeners.delete(courseId);
+    };
+  }, [courseId]);
+
   const save = useCallback(async (next: EditedCourse) => {
     if (!courseId) return;
     setEdited(next);
-    await AsyncStorage.setItem(editedTreeKey(courseId), JSON.stringify(next));
+    await saveEditedCourseSnapshot(courseId, next);
   }, [courseId]);
 
   const clear = useCallback(async () => {
     if (!courseId) return;
     setEdited(null);
     await AsyncStorage.removeItem(editedTreeKey(courseId));
+    notifyEditedCourse(courseId, null);
   }, [courseId]);
 
   return { edited, ready, save, clear };
@@ -79,6 +102,8 @@ export async function purgeCourseCache(courseId: string): Promise<void> {
   await AsyncStorage.multiRemove([
     `cardinal.progress.v1.${courseId}`,
     `cardinal.missions.v1.${courseId}`,
+    `cardinal.mission-unmarks.v1.${courseId}`,
+    `cardinal.mission-sync.v1.${courseId}`,
     `cardinal.questnames.v1.${courseId}`,
     `cardinal.signals.v1.${courseId}`,
     `@cardinal_nodes_${courseId}`,

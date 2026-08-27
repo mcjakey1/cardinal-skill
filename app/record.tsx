@@ -1,51 +1,189 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { achievements, streakDays, type Achievement } from '@/features/skilltree/achievements';
-import { learnerMode, paceTarget, personalXpPerLevel } from '@/features/skilltree/adaptive';
-import { learnerSignals } from '@/features/skilltree/observed';
+import { useAuth } from '@/auth/AuthContext';
+import { achievements, streakDays } from '@/features/skilltree/achievements';
+import { fetchCourseOptions } from '@/features/skilltree/courseQueries';
+import { LeaderboardStickyBar, LeaderboardView } from '@/features/skilltree/LeaderboardView';
+import { effectiveMissionCompletionIds } from '@/features/skilltree/missions';
+import { PlayerStats } from '@/features/skilltree/PlayerStats';
+import {
+  activityPunchCard,
+  completionEstimateDays,
+  nodesPerWeek,
+  playerTitle,
+} from '@/features/skilltree/recordAnalytics';
+import { RecordHeader, type RecordView } from '@/features/skilltree/RecordHeader';
+import {
+  fetchLeaderboard,
+  fetchLeaderboardVisibility,
+  fetchRecordEvents,
+  setLeaderboardVisibility,
+} from '@/features/skilltree/recordQueries';
 import { XP_PER_LEVEL, levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
 import { fetchLiveTree } from '@/features/skilltree/queries';
 import { rollUpProgress } from '@/features/skilltree/rollup';
+import { StampsList } from '@/features/skilltree/StampsList';
+import type { Tree } from '@/features/skilltree/types';
 import { usePrefs } from '@/lib/prefs';
-import { useLocalProgress } from '@/lib/progress';
-import { useSignals } from '@/lib/signals';
+import { useMultiCourseProgress } from '@/lib/progress';
 import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
-import { Window } from '@/ui/Window';
+import { StableScrollView } from '@/ui/StableScrollView';
 import { usePixelTransition } from '@/ui/PixelTransition';
-import { Bevel, Meter, PixelButton, PixelIcon, PixelText } from '@/ui/pixel';
+import { Window } from '@/ui/Window';
+import { Bevel, PixelButton, PixelText } from '@/ui/pixel';
 
-/**
- * The record: what the student's effort has actually built.
- *
- * Every figure here is derived from the chart and the completion log at read
- * time. Nothing is stored, so nothing can drift out of agreement with what they
- * did — and no stamp pays XP, because two students doing identical work must end
- * up worth the same amount.
- */
 export default function Record() {
-  const { transition } = usePixelTransition();
   const t = useTheme();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const { transition } = usePixelTransition();
+  const { session } = useAuth();
   const insets = useSafeAreaInsets();
-  const { lastCourseId, lowBandwidth } = usePrefs();
-  const { log, missionLog } = useLocalProgress(lastCourseId ?? undefined);
-  const { visits } = useSignals(lastCourseId ?? undefined);
+  const prefs = usePrefs();
+  const [scopeId, setScopeId] = useState(prefs.lastCourseId ?? 'all');
+  const [view, setView] = useState<RecordView>('leaderboard');
 
-  const { data, isPending } = useQuery({
-    queryKey: ['tree', lastCourseId],
-    queryFn: () => fetchLiveTree(lastCourseId!),
-    enabled: Boolean(lastCourseId),
+  const { data: courses = [], isPending: coursesPending } = useQuery({
+    queryKey: ['courses'],
+    queryFn: fetchCourseOptions,
+  });
+  const selectedCourse = courses.find((course) => course.id === scopeId);
+  const globalCourses = useMemo(() => {
+    const live = courses.filter((course) => !course.isFixture);
+    return live.length > 0 ? live : courses;
+  }, [courses]);
+  const scopedCourses = useMemo(() => scopeId === 'all'
+    ? globalCourses
+    : selectedCourse ? [selectedCourse] : [], [globalCourses, scopeId, selectedCourse]);
+  const activeCourseIds = useMemo(() => scopedCourses.map((course) => course.id), [scopedCourses]);
+
+  useEffect(() => {
+    if (scopeId !== 'all' && courses.length > 0 && !courses.some((course) => course.id === scopeId)) {
+      setScopeId(globalCourses[0]?.id ?? 'all');
+    }
+  }, [courses, globalCourses, scopeId]);
+
+  const treeQueries = useQueries({
+    queries: activeCourseIds.map((courseId) => ({
+      queryKey: ['tree', courseId],
+      queryFn: () => fetchLiveTree(courseId),
+    })),
+  });
+  const { logs, ready: progressReady } = useMultiCourseProgress(activeCourseIds);
+  const signedInLive = session?.source === 'supabase';
+  const liveScope = scopeId === 'all' || Boolean(selectedCourse && !selectedCourse.isFixture);
+  const remoteEnabled = signedInLive && liveScope;
+  const remoteCourseId = scopeId === 'all' ? null : scopeId;
+
+  const leaderboardQuery = useQuery({
+    queryKey: ['student-leaderboard', remoteCourseId],
+    queryFn: () => fetchLeaderboard(remoteCourseId),
+    enabled: remoteEnabled,
+  });
+  const eventsQuery = useQuery({
+    queryKey: ['record-events', remoteCourseId],
+    queryFn: () => fetchRecordEvents(remoteCourseId),
+    enabled: remoteEnabled,
+  });
+  const visibilityQuery = useQuery({
+    queryKey: ['leaderboard-visibility'],
+    queryFn: fetchLeaderboardVisibility,
+    enabled: signedInLive,
+  });
+  const visibilityMutation = useMutation({
+    mutationFn: setLeaderboardVisibility,
+    onSuccess: async (visible) => {
+      queryClient.setQueryData(['leaderboard-visibility'], visible);
+      await queryClient.invalidateQueries({ queryKey: ['student-leaderboard'] });
+    },
   });
 
-  if (!lastCourseId) {
+  const dossier = useMemo(() => {
+    const combinedTree: Tree = { nodes: [], prereqs: [] };
+    const masteredIds: string[] = [];
+    const masteryAt = new Map<string, string>();
+    const activityTimestamps: string[] = [];
+    let xp = 0;
+
+    treeQueries.forEach((query, index) => {
+      const data = query.data;
+      const courseId = activeCourseIds[index];
+      if (!data || !courseId) return;
+      const local = logs[courseId] ?? { nodes: {}, missions: {}, missionUnmarks: {} };
+      const rolled = rollUpProgress({
+        tree: data.tree,
+        missions: data.missions,
+        completedMissionIds: effectiveMissionCompletionIds(
+          data.completedMissionIds,
+          Object.keys(local.missions),
+          Object.keys(local.missionUnmarks),
+        ),
+        directlyCompletedIds: Object.keys(local.nodes),
+        serverMasteredIds: data.masteredIds,
+        serverXp: data.xp,
+      });
+      xp += rolled.xp;
+      combinedTree.nodes.push(...data.tree.nodes);
+      combinedTree.prereqs.push(...data.tree.prereqs);
+      masteredIds.push(...rolled.masteredIds);
+      activityTimestamps.push(...Object.values(local.nodes), ...Object.values(local.missions));
+
+      rolled.masteredIds.forEach((nodeId) => {
+        const localTimes = [
+          local.nodes[nodeId],
+          ...data.missions.filter((mission) => mission.skillId === nodeId).map((mission) => local.missions[mission.id]),
+        ].filter((timestamp): timestamp is string => Boolean(timestamp));
+        const latest = localTimes.sort().at(-1);
+        if (latest) masteryAt.set(`${courseId}:${nodeId}`, latest);
+      });
+    });
+
+    for (const event of eventsQuery.data ?? []) {
+      activityTimestamps.push(event.completedAt);
+      const key = `${event.courseId}:${event.nodeId}`;
+      const current = masteryAt.get(key);
+      if (!current || event.completedAt > current) masteryAt.set(key, event.completedAt);
+    }
+
+    const masteredSet = new Set(masteredIds);
+    const masteredTimestamps = [...masteryAt.entries()]
+      .filter(([key]) => masteredSet.has(key.slice(key.indexOf(':') + 1)))
+      .map(([, timestamp]) => timestamp);
+    const velocity = nodesPerWeek(masteredTimestamps);
+    const totalNodes = combinedTree.nodes.length;
+    return {
+      tree: combinedTree,
+      masteredIds: [...masteredSet],
+      xp,
+      totalNodes,
+      availableXp: totalXp(combinedTree.nodes),
+      streak: streakDays(activityTimestamps),
+      activity: activityPunchCard(activityTimestamps),
+      velocity,
+      estimatedDays: completionEstimateDays(Math.max(0, totalNodes - masteredSet.size), velocity),
+    };
+  }, [activeCourseIds, eventsQuery.data, logs, treeQueries]);
+
+  const currentRank = leaderboardQuery.data?.find((entry) => entry.isCurrentUser) ?? null;
+  const level = levelForXp(dossier.xp);
+  const stamps = achievements(dossier.tree, dossier.masteredIds, dossier.streak);
+  const pending = coursesPending || treeQueries.some((query) => query.isPending) || !progressReady;
+  const treeFailed = treeQueries.some((query) => query.isError);
+  const scopeTitle = scopeId === 'all'
+    ? 'Global record'
+    : [selectedCourse?.courseCode, selectedCourse?.title].filter(Boolean).join(' · ') || 'Record';
+
+  if (!coursesPending && courses.length === 0) {
     return (
-      <Shell insets={insets.top} flat={lowBandwidth}>
+      <Shell insets={insets.top} flat={prefs.lowBandwidth}>
         <Window title="No record yet">
           <PixelText variant="body" colour={t.ink}>
             Open a chart and clear a node. What you finish is recorded here.
@@ -56,126 +194,119 @@ export default function Record() {
     );
   }
 
-  if (isPending || !data) {
-    return (
-      <Shell insets={insets.top} flat={lowBandwidth}>
-        <Window title="Reading record" live={false}>
-          <PixelText variant="body" colour={t.inkMuted}>
-            00: COUNTING CLEARED NODES
-          </PixelText>
-        </Window>
-      </Shell>
-    );
-  }
-
-  const { masteredIds, xp } = rollUpProgress({
-    tree: data.tree,
-    missions: data.missions,
-    completedMissionIds: [...data.completedMissionIds, ...Object.keys(missionLog)],
-    directlyCompletedIds: Object.keys(log),
-    serverMasteredIds: data.masteredIds,
-    serverXp: data.xp,
-  });
-  const level = levelForXp(xp);
-  const streak = streakDays([...Object.values(log), ...Object.values(missionLog)]);
-  const stamps = achievements(data.tree, masteredIds, streak);
-  const earned = stamps.filter((s) => s.earned).length;
-
-  // Pacing, not assessment. Nothing below reads a grade or writes one, and none
-  // of it changes the level shown above — it describes the stride, not the
-  // ladder, because a level a student compares with a classmate has to mean the
-  // same thing for both of them.
-  const masteredAtById: Record<string, string> = {};
-  for (const id of masteredIds) {
-    const direct = log[id];
-    if (direct) {
-      masteredAtById[id] = direct;
-      continue;
-    }
-    const times = data.missions
-      .filter((m) => m.skillId === id)
-      .map((m) => missionLog[m.id])
-      .filter((at): at is string => Boolean(at))
-      .sort();
-    const last = times[times.length - 1];
-    if (last) masteredAtById[id] = last;
-  }
-
-  const signals = learnerSignals(visits, masteredAtById, streak);
-  const mode = learnerMode(data.tree, signals);
-  const pace = paceTarget(signals);
-  const stride = personalXpPerLevel(signals);
-
   return (
     <Shell
       insets={insets.top}
-      flat={lowBandwidth}
-      title={`Record · ${data.title}`}
-      description={`Level ${level}, ${masteredIds.length} of ${data.tree.nodes.length} nodes cleared.`}
+      flat={prefs.lowBandwidth}
+      title={`${scopeTitle} · Cardinal Skill`}
+      description={`${dossier.masteredIds.length} of ${dossier.totalNodes} nodes cleared across ${scopeTitle}.`}
+      overlay={view === 'leaderboard' && currentRank && currentRank.rank > 50
+        ? <LeaderboardStickyBar entry={currentRank} />
+        : null}
     >
-      <PixelText variant="title">{data.title}</PixelText>
-
-      <Bevel tone="panel" style={styles.readout}>
-        <View style={styles.figureRow}>
-          <Figure label="Level" value={String(level)} />
-          <Figure label="XP" value={`${xp}/${totalXp(data.tree.nodes)}`} />
-          <Figure label="Cleared" value={`${masteredIds.length}/${data.tree.nodes.length}`} />
-          <Figure label="Streak" value={streak > 0 ? `${streak}d` : '—'} />
-        </View>
-        <Meter
-          value={levelProgress(xp)}
-          cells={20}
-          label={`Level ${level}, ${Math.round(levelProgress(xp) * 100)} percent to the next level`}
-        />
-      </Bevel>
-
-      <Bevel tone="panel" depth="inset" style={styles.pace}>
-        <PixelText variant="micro" colour={t.inkMuted}>
-          YOUR PACE
-        </PixelText>
-        <PixelText variant="body" colour={t.ink}>
-          {MODE_COPY[mode]}
-        </PixelText>
+      <View style={styles.intro}>
+        <PixelText variant="title">Record</PixelText>
         <PixelText variant="body" colour={t.inkMuted}>
-          About {pace} {pace === 1 ? 'node' : 'nodes'} a week.
-          {stride === XP_PER_LEVEL
-            ? ''
-            : ` At that rate a level is ${stride} XP for you, against ${XP_PER_LEVEL} as standard.`}
-        </PixelText>
-      </Bevel>
-
-      <View style={styles.stampsHeading}>
-        <PixelText variant="title">Stamps</PixelText>
-        <PixelText variant="micro" colour={t.inkMuted}>
-          {earned} OF {stamps.length}
+          Compare the ladder or inspect the work your progress has built.
         </PixelText>
       </View>
 
-      <View style={styles.stamps}>
-        {stamps.map((s) => (
-          <Stamp key={s.id} stamp={s} />
-        ))}
-      </View>
+      <RecordHeader
+        scopeId={scopeId}
+        courses={courses}
+        view={view}
+        onScopeChange={(next) => {
+          setScopeId(next);
+          if (next !== 'all') prefs.set('lastCourseId', next);
+        }}
+        onViewChange={setView}
+      />
+
+      {pending ? (
+        <Window title="Reading record" live={false}>
+          <PixelText variant="body" colour={t.inkMuted}>COUNTING CLEARED WORK</PixelText>
+        </Window>
+      ) : treeFailed ? (
+        <Window title="Record unavailable">
+          <PixelText variant="body" colour={t.ink}>
+            The record could not be loaded. Check your connection and try again.
+          </PixelText>
+        </Window>
+      ) : (
+        <>
+          {remoteEnabled && eventsQuery.isError ? (
+            <Bevel tone="panel" style={[styles.syncError, { borderColor: t.alarm }]}>
+              <View style={styles.syncErrorCopy}>
+                <PixelText variant="label" colour={t.alarm}>Activity sync unavailable</PixelText>
+                <PixelText variant="micro" colour={t.inkMuted}>
+                  Local activity is shown, but server history may be incomplete.
+                </PixelText>
+              </View>
+              <PixelButton label="Retry activity" tone="panel" grow={false} onPress={() => void eventsQuery.refetch()} />
+            </Bevel>
+          ) : null}
+          <Animated.View key={view} entering={prefs.motionOff ? undefined : FadeIn.duration(180)}>
+            {view === 'leaderboard' ? (
+              <LeaderboardView
+                entries={leaderboardQuery.data ?? []}
+                pending={leaderboardQuery.isPending && remoteEnabled}
+                error={leaderboardQuery.isError}
+                available={remoteEnabled}
+                visibility={signedInLive ? visibilityQuery.data : null}
+                visibilityPending={visibilityMutation.isPending || visibilityQuery.isPending}
+                visibilityError={visibilityQuery.isError}
+                onVisibilityChange={(visible) => visibilityMutation.mutate(visible)}
+                onVisibilityRetry={() => void visibilityQuery.refetch()}
+                onRetry={() => void leaderboardQuery.refetch()}
+              />
+            ) : (
+              <View style={styles.dossier}>
+              <PlayerStats
+                level={level}
+                title={playerTitle(level)}
+                xp={dossier.xp}
+                availableXp={dossier.availableXp}
+                levelProgress={levelProgress(dossier.xp, XP_PER_LEVEL)}
+                mastered={dossier.masteredIds.length}
+                totalNodes={dossier.totalNodes}
+                streak={dossier.streak}
+                rank={currentRank?.rank ?? null}
+                participants={currentRank?.participantCount ?? 0}
+                rankLabel={scopeId === 'all' ? 'Global rank' : 'Course rank'}
+                activity={dossier.activity}
+                velocity={dossier.velocity}
+                estimatedDays={dossier.estimatedDays}
+              />
+              <StampsList stamps={stamps} />
+              </View>
+            )}
+          </Animated.View>
+        </>
+      )}
+
+      {visibilityMutation.isError ? (
+        <PixelText variant="micro" colour={t.alarm}>
+          Leaderboard visibility could not be changed. Check your connection and try again.
+        </PixelText>
+      ) : null}
+
     </Shell>
   );
 }
 
-/**
- * The page metadata lives here rather than in the ready branch, because the
- * empty and loading states return before it — and a student who lands on this
- * URL with nothing open would otherwise get an untitled page.
- */
 function Shell({
   insets,
   flat,
   title = 'Record · Cardinal Skill',
-  description = 'What your effort on this course has actually built.',
+  description = 'Your progress dossier and opt-in course leaderboards.',
+  overlay,
   children,
 }: {
   insets: number;
   flat: boolean;
   title?: string;
   description?: string;
+  overlay?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const t = useTheme();
@@ -186,88 +317,22 @@ function Shell({
         <meta name="description" content={description} />
       </Head>
       <DitherField variant="quiet" bands={7} flat={flat} />
-      <ScrollView contentContainerStyle={[styles.body, { paddingTop: insets + space.cell }]}>
+      <StableScrollView
+        showsVerticalScrollIndicator
+        contentContainerStyle={[styles.body, { paddingTop: insets + space.cell }]}
+      >
         {children}
-      </ScrollView>
+      </StableScrollView>
+      {overlay}
     </View>
-  );
-}
-
-/**
- * The learner mode as something a student would want said to them.
- *
- * Never "struggling". The engine's word for it is fine inside the engine, and it
- * is the wrong thing to put on a screen belonging to the person it describes.
- */
-const MODE_COPY = {
-  struggling: 'You are working through some hard material right now.',
-  steady: 'You are moving at a steady pace.',
-  fast: 'You are moving quickly and your streak is holding.',
-} as const;
-
-function Figure({ label, value }: { label: string; value: string }) {
-  const t = useTheme();
-  return (
-    <View style={styles.figure}>
-      <PixelText variant="title" colour={t.ink}>
-        {value}
-      </PixelText>
-      <PixelText variant="micro" colour={t.inkMuted}>
-        {label.toUpperCase()}
-      </PixelText>
-    </View>
-  );
-}
-
-function Stamp({ stamp }: { stamp: Achievement }) {
-  const t = useTheme();
-  return (
-    <Bevel
-      tone={stamp.earned ? 'earned' : 'panel'}
-      depth={stamp.earned ? 'raised' : 'inset'}
-      style={styles.stamp}
-      accessible
-      accessibilityLabel={`${stamp.title}. ${stamp.earned ? 'Earned' : 'Not earned'}. ${stamp.detail}`}
-    >
-      <View style={styles.stampHead}>
-        <PixelIcon
-          name={stamp.earned ? 'stamp' : 'lock'}
-          size={16}
-          colour={stamp.earned ? t.well : t.inkMuted}
-        />
-        <PixelText variant="label" colour={stamp.earned ? t.well : t.ink}>
-          {stamp.title}
-        </PixelText>
-      </View>
-      <PixelText variant="micro" colour={stamp.earned ? t.tone.earned.ink : t.inkMuted}>
-        {stamp.detail}
-      </PixelText>
-      {stamp.earned ? null : (
-        <Meter
-          value={stamp.progress}
-          cells={10}
-          colour={t.brand}
-          label={`${stamp.title}: ${Math.round(stamp.progress * 100)} percent`}
-        />
-      )}
-    </Bevel>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  body: { padding: space.md, gap: space.md, maxWidth: 560, width: '100%', alignSelf: 'center' },
-  readout: { padding: space.md, gap: space.md },
-  pace: { padding: space.md, gap: space.xs, marginTop: space.cell },
-  figureRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.md },
-  figure: { minWidth: 72, gap: space.hair },
-  stampsHeading: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginTop: space.cell,
-  },
-  stamps: { gap: space.cell },
-  stamp: { padding: space.md, gap: space.cell },
-  stampHead: { flexDirection: 'row', alignItems: 'center', gap: space.cell },
+  body: { width: '100%', maxWidth: 800, alignSelf: 'center', padding: space.md, paddingRight: space.lg, paddingBottom: 120, gap: space.md },
+  intro: { gap: space.xs },
+  dossier: { gap: space.md },
+  syncError: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.md, padding: space.md },
+  syncErrorCopy: { minWidth: 0, flex: 1, gap: space.xs },
 });

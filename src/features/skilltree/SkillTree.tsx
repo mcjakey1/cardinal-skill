@@ -146,6 +146,10 @@ interface Props {
   progressByNode?: Readonly<Record<string, number>>;
   /** Changes whenever navigation returns to this chart and requests active-work focus. */
   focusRequestKey?: number;
+  /** A mission deep-link can focus one exact node instead of the active-work set. */
+  focusNodeId?: string | null;
+  /** Changes when the same focused node is requested again. */
+  focusNodeRequestKey?: string | number;
   editMode?: boolean;
   linkMode?: boolean;
   linkSourceId?: string | null;
@@ -306,6 +310,8 @@ function SkillTreeCanvas({
   onResetLayout,
   progressByNode = {},
   focusRequestKey = 0,
+  focusNodeId,
+  focusNodeRequestKey = 0,
   editMode,
   linkMode,
   linkSourceId,
@@ -447,6 +453,25 @@ function SkillTreeCanvas({
     focusedRequest.current = focusRequestKey;
     focusCurrentWork(true);
   }, [focusCurrentWork, focusRequestKey, nodes.length, viewport.height, viewport.width]);
+
+  const focusedNodeRequest = useRef<string | null>(null);
+  useEffect(() => {
+    const request = focusNodeId ? `${focusNodeId}:${focusNodeRequestKey}` : null;
+    if (
+      !request
+      || focusedNodeRequest.current === request
+      || viewport.width === 0
+      || viewport.height === 0
+    ) return;
+    const node = byId.get(focusNodeId!);
+    if (!node) return;
+    focusedNodeRequest.current = request;
+    setCamera(
+      focusTransform(boundsOf([{ x: node.px, y: node.py }], CELL + LABEL_BLOCK), viewport),
+      true,
+      motion.unlock,
+    );
+  }, [byId, focusNodeId, focusNodeRequestKey, setCamera, viewport]);
 
   /** Camera coordinates stay on the UI thread; React only receives the scale readout. */
   const panStartX = useSharedValue(0);
@@ -651,6 +676,7 @@ function SkillTreeCanvas({
               progress={progressByNode[node.id] ?? 0}
               selected={node.id === selectedId}
               recommended={node.id === recommendedId}
+              located={node.id === focusNodeId}
               wipe={openedIds.has(node.id) ? wipe : 1}
               celebrating={node.id === recentlyMasteredId}
               linkSource={Boolean(linkMode && node.id === linkSourceId)}
@@ -899,6 +925,7 @@ function NodeCell({
   progress,
   selected,
   recommended,
+  located,
   wipe,
   celebrating,
   linkSource,
@@ -916,6 +943,7 @@ function NodeCell({
   progress: number;
   selected: boolean;
   recommended: boolean;
+  located: boolean;
   wipe: number;
   celebrating: boolean;
   linkSource: boolean;
@@ -1003,6 +1031,14 @@ function NodeCell({
             { borderColor: theme.nodeActive.glow ?? theme.nodeActive.border },
           ]}
           pointerEvents="none"
+        />
+      ) : null}
+
+      {located ? (
+        <NodePulse
+          reduceMotion={reduceMotion}
+          mode="locate"
+          style={[styles.locateHalo, { borderColor: theme.locate }]}
         />
       ) : null}
 
@@ -1221,6 +1257,14 @@ const styles = StyleSheet.create({
     height: CELL + 22,
     borderWidth: 2,
     borderStyle: 'dashed',
+  },
+  locateHalo: {
+    position: 'absolute',
+    left: LABEL_WIDTH / 2 - HALF - 16,
+    top: -16,
+    width: CELL + 32,
+    height: CELL + 32,
+    borderWidth: 4,
   },
   selectionOuter: {
     position: 'absolute',

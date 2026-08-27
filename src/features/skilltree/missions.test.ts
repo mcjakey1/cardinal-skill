@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   fragmentMissionXp,
+  effectiveMissionCompletionIds,
   isNodeMastered,
   missionsForNode,
   nodeXpEarned,
@@ -25,6 +26,13 @@ test('a node is worth the sum of its missions', () => {
   assert.equal(nodeXpFromMissions(FIXTURE, 'trees'), 250);
   assert.equal(nodeXpFromMissions(FIXTURE, 'nonexistent'), 0, 'a node with no missions holds no work');
   assert.equal(missionsForNode(FIXTURE, 'hashing').length, 3);
+});
+
+test('local unmarks override stale server completion while new local work joins it', () => {
+  assert.deepEqual(
+    effectiveMissionCompletionIds(['server-done', 'undo-me'], ['local-done'], ['undo-me']),
+    ['server-done', 'local-done'],
+  );
 });
 
 test('earned XP counts only completed missions, and mastery means all of them', () => {

@@ -87,6 +87,11 @@ must never be assumed well-formed downstream.
 
 **Privacy is a database boundary, not an app one.** Row Level Security scopes
 every table. Social visibility is off by default behind an explicit opt-in flag.
+The Record leaderboard applies that flag only to peer visibility: the caller
+always sees their own rank. Its security-definer RPC returns display-safe
+aggregates and never a peer auth ID. In global scope, each student's denominator
+contains only the scoped courses in which that student is enrolled, rather than
+borrowing the caller's full course load.
 Instructors read the progress of students on courses they own, by name, and
 nothing outside those courses — the read Canvas and Google Classroom already
 give an instructor of record, granted by policy in `0005_instructor_reads.sql`

@@ -76,6 +76,9 @@ export interface Theme {
   earnedText: string;
   success: string;
   warning: string;
+  /** Mission navigation accent, shared by locate controls and their chart pulse. */
+  locate: string;
+  locateInk: string;
   alarm: string;
   focus: string;
   field: readonly [string, string];

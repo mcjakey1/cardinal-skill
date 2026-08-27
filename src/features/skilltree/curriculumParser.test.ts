@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  attachMissingSyllabusCoverage,
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
   requireGranularSkillCount,
@@ -85,6 +86,29 @@ test('dense syllabus subtopics may share a node only when their content names ea
     () => requireSyllabusCoverage(grouped.slice(0, 2), coverage),
     /graph omitted syllabus coverage: Venn Diagrams/i,
   );
+});
+
+test('the final parser deterministically attaches one omitted dense subtopic to its outline unit', () => {
+  const coverage = [{
+    week: 13,
+    topics: ['Boolean Functions & Expressions', 'Logic Gates', 'Simplification Techniques'],
+  }];
+  const candidate = [
+    { unit: 'Logic Gates', label: 'Digital Logic Gates', description: 'Model common gates.' },
+    { unit: 'Graph Coloring', label: 'Graph Coloring', description: 'Solve scheduling problems.' },
+    {
+      unit: 'Simplification Techniques',
+      label: 'Boolean Simplification',
+      description: 'Minimize expressions with algebra and K-maps.',
+    },
+  ];
+
+  const repaired = attachMissingSyllabusCoverage(candidate, coverage);
+  assert.match(repaired[2]!.description, /Includes Boolean Functions & Expressions/i);
+  assert.equal(repaired[0]!.description, candidate[0]!.description);
+  assert.equal(repaired[1]!.description, candidate[1]!.description);
+  assert.doesNotThrow(() => requireSyllabusCoverage(repaired, coverage));
+  assert.equal(candidate[0]!.description, 'Model common gates.');
 });
 
 test('coverage repair can add room for omitted syllabus concepts', () => {

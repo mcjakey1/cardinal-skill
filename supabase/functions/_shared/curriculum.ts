@@ -168,6 +168,65 @@ export function requireSyllabusCoverage(
   }
 }
 
+/**
+ * Preserve source coverage when the model groups a dense outline into fewer
+ * nodes than there are subtopics. The missing label is attached to the closest
+ * node from the same coverage row (then nearest week) before strict validation.
+ * This is source-backed enrichment, not invented curriculum content.
+ */
+export function attachMissingSyllabusCoverage<T extends SyllabusCoverageNode>(
+  nodes: readonly T[],
+  coverage: readonly AcademicCoverageRow[],
+): T[] {
+  if (nodes.length === 0) return [];
+  const rows = coverage.flatMap((row) => row.topics.map((topic) => ({
+    week: row.week,
+    key: comparableTopic(topic),
+    label: topic.trim(),
+    siblingKeys: new Set(row.topics.map(comparableTopic).filter(Boolean)),
+  }))).filter((row) => row.key && row.label);
+  const weekByTopic = new Map(rows.map((row) => [row.key, row.week]));
+  const additions = new Map<number, string[]>();
+  const attachedKeys = new Set<string>();
+
+  for (const missing of rows) {
+    if (nodes.some((node) => nodeCoversTopic(node, missing.key))) continue;
+    if (attachedKeys.has(missing.key)) continue;
+    attachedKeys.add(missing.key);
+    const expectedTokens = new Set(meaningfulTopicTokens(missing.key));
+    let bestIndex = 0;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    nodes.forEach((node, index) => {
+      const unitKey = comparableTopic(node.unit);
+      const unitWeek = weekByTopic.get(unitKey);
+      const sameRow = missing.siblingKeys.has(unitKey) ? 1 : 0;
+      const distance = unitWeek === undefined ? 52 : Math.abs(unitWeek - missing.week);
+      const nodeTokens = new Set(meaningfulTopicTokens([
+        comparableTopic(node.unit),
+        comparableTopic(node.label),
+        comparableTopic(node.description),
+      ].join(' ')));
+      const overlap = [...expectedTokens].filter((token) => nodeTokens.has(token)).length;
+      const score = sameRow * 10_000 + overlap * 100 - distance * 10 - index / 100;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    additions.set(bestIndex, [...(additions.get(bestIndex) ?? []), missing.label]);
+  }
+
+  return nodes.map((node, index) => {
+    const topics = additions.get(index);
+    if (!topics?.length) return node;
+    const prefix = `Includes ${topics.join(', ')}.`;
+    const description = typeof node.description === 'string' && node.description.trim()
+      ? `${prefix} ${node.description.trim()}`
+      : prefix;
+    return { ...node, description };
+  });
+}
+
 export function syllabusGraphRepairPrompt({
   outline,
   candidate,
@@ -214,7 +273,7 @@ export function repairNodeTarget(
   return Math.min(range.max, Math.max(range.min, boundedCandidate + omitted + repeatedShortfall));
 }
 
-interface SyllabusCoverageNode {
+export interface SyllabusCoverageNode {
   unit: unknown;
   label?: unknown;
   description?: unknown;

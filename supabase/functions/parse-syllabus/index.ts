@@ -4,6 +4,7 @@ import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
 import { parseJsonObjectText } from '../_shared/bai.ts';
 import { normalizeTieredCourseDag } from '../_shared/courseGraph.ts';
 import {
+  attachMissingSyllabusCoverage,
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
   requireSyllabusCoverage,
@@ -558,10 +559,11 @@ function isAssessmentOnlyTopic(topic: string): boolean {
 function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): ParsedTree {
   if (!Array.isArray(input.nodes)) throw new Error('The parser must return academic skills as an array.');
   requireSyllabusScaledSkillCount(input.nodes, outline.estimatedWeeks);
-  requireSyllabusCoverage(input.nodes, outline.coverage);
+  const coveredNodes = attachMissingSyllabusCoverage(input.nodes, outline.coverage);
+  requireSyllabusCoverage(coveredNodes, outline.coverage);
   const usedKeys = new Set<string>();
   const keyByInputId = new Map<string, string>();
-  const normalizedKeys = input.nodes.map((node, index) => {
+  const normalizedKeys = coveredNodes.map((node, index) => {
     const rawId = clean(node.id, 120);
     const stem = slug(rawId || clean(node.label, 120)) || `skill-${index + 1}`;
     let key = stem;
@@ -579,7 +581,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
     prereqsByKey.get(target)?.push(source);
   }
 
-  const nodes = normalizeTieredCourseDag(input.nodes.map((node, index): ParsedNode => {
+  const nodes = normalizeTieredCourseDag(coveredNodes.map((node, index): ParsedNode => {
     const key = normalizedKeys[index]!;
     const title = compactLabel(node.label);
     const description = clean(node.description, 600) || `Apply ${title} in a focused example.`;

@@ -507,17 +507,17 @@ duplicate/fork, and delete. Reordering updates indices immediately and saves to
 the device first; database synchronization may finish later without reverting
 the visible order.
 
-Every course identity carries its authority label: Practice, Official, or
+Every course identity carries its authority label: Playground, Official, or
 Student made. Official and student-made shared courses remain read-only to a
 learner. An edit attempt opens a focused explanation with one recovery action:
-create an attributed private practice copy with zero progress. The copy enters
+create an attributed private Playground copy with zero progress. The copy enters
 edit mode; the shared original and its leaderboard remain unchanged.
 
-The Courses screen separates My courses, Official, and Community as equal-width
-tabs. Catalog rows name the author, learner count, and authority before the join
-action. Community publishing is explicit: Link only keeps a course out of browse
-results, while Public community lists it with an always-visible Student made
-label. Archiving removes discovery and new joins without deleting learner work.
+The Courses screen separates My courses, Playground, and Community as equal-width
+tabs. My courses is the verified instructor catalog; Playground contains private,
+student-owned charts; Community contains published student-made courses. Community
+publishing has one explicit public state with an always-visible Student made label.
+Archiving removes discovery and new joins without deleting learner work.
 Official catalog publication is a separate instructor action and requires a
 server-managed `verified_instructors` record; a Supabase dashboard team role or
 editable auth metadata never grants that authority. Course authors stay outside
@@ -560,7 +560,7 @@ outside the top three.
 
 Every ladder belongs to exactly one published Official or Student made course.
 The all-courses dossier may total a student's personal work, but it never
-produces a combined rank. Practice charts have no ladder. XP is snapshotted by
+produces a combined rank. Playground charts have no ladder. XP is snapshotted by
 the database at completion time, so later author edits affect future rewards
 without rewriting points students already earned.
 

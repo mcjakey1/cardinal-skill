@@ -48,7 +48,7 @@ export function PracticeCopyPrompt({
         <View style={[styles.dialog, { backgroundColor: theme.hudBackground, borderColor: theme.border }]}>
           <View style={styles.header}>
             <View style={styles.headerCopy}>
-              <PixelText variant="title" colour={t.ink}>Create a practice copy?</PixelText>
+              <PixelText variant="title" colour={t.ink}>Create a Playground copy?</PixelText>
               <PixelText variant="micro" colour={courseKind === 'official' ? t.warning : t.info}>
                 {courseKindLabel(courseKind).toUpperCase()} COURSE · READ ONLY
               </PixelText>
@@ -57,7 +57,7 @@ export function PracticeCopyPrompt({
               onPress={onCancel}
               disabled={busy}
               accessibilityRole="button"
-              accessibilityLabel="Close practice copy prompt"
+              accessibilityLabel="Close Playground copy prompt"
               style={({ pressed }) => [styles.close, bevelStyle(t, 'panel', pressed ? 'inset' : 'raised')]}
             >
               <PixelIcon name="close" size={14} colour={t.ink} />
@@ -69,7 +69,7 @@ export function PracticeCopyPrompt({
               Only {owner} can edit {courseTitle}. Create a private copy to change its chart, missions, prerequisites, or XP.
             </PixelText>
             <PixelText variant="micro" colour={t.info}>
-              PRIVATE PRACTICE · ZERO PROGRESS · ORIGINAL UNCHANGED
+              PRIVATE PLAYGROUND · ZERO PROGRESS · ORIGINAL UNCHANGED
             </PixelText>
           </View>
 
@@ -78,7 +78,7 @@ export function PracticeCopyPrompt({
           <View style={styles.footer}>
             <PixelButton label="Cancel" tone="panel" grow={false} disabled={busy} onPress={onCancel} />
             <PixelButton
-              label={busy ? 'Creating copy…' : 'Create practice copy'}
+              label={busy ? 'Creating copy…' : 'Create Playground copy'}
               grow={false}
               disabled={busy}
               onPress={onConfirm}

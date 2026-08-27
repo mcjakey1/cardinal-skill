@@ -17,13 +17,17 @@ import {
 } from '@/features/skilltree/courseQueries';
 import { mergeVisibleCourseOrder } from '@/features/skilltree/courseOrdering';
 import {
+  catalogKindForTab,
+  playgroundCourses,
+  type CourseLibraryTab,
+} from '@/features/skilltree/courseLibrary';
+import {
   fetchCourseCatalog,
   archiveSharedCourse,
   joinPublishedCourse,
   publishCommunityCourse,
   resolveSharedCourse,
   type CatalogCourse,
-  type CatalogKind,
   type CommunityVisibility,
 } from '@/features/skilltree/courseCatalog';
 import { usePrefs } from '@/lib/prefs';
@@ -35,8 +39,6 @@ import { ReorderableCourseList } from '@/ui/ReorderableCourseList';
 import { Window } from '@/ui/Window';
 import { PixelButton, PixelInput, PixelText, bevelStyle } from '@/ui/pixel';
 import { usePixelTransition } from '@/ui/PixelTransition';
-
-type CourseLibraryTab = 'mine' | CatalogKind;
 
 export default function Courses() {
   const t = useTheme();
@@ -58,7 +60,7 @@ export default function Courses() {
     queryKey: ['courses'],
     queryFn: fetchCourseOptions,
   });
-  const catalogKind = tab === 'mine' ? null : tab;
+  const catalogKind = catalogKindForTab(tab);
   const catalog = useQuery({
     queryKey: ['course-catalog', catalogKind],
     queryFn: () => fetchCourseCatalog(catalogKind!),
@@ -89,15 +91,19 @@ export default function Courses() {
     if (data) setOrdered(data.filter((course) => !course.isFixture));
   }, [data]);
 
-  const visibleCourses = useMemo(() => {
+  const ownedPlaygrounds = useMemo(
+    () => playgroundCourses(ordered),
+    [ordered],
+  );
+  const visiblePlaygrounds = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
-    if (!needle) return ordered;
-    return ordered.filter((course) => (
+    if (!needle) return ownedPlaygrounds;
+    return ownedPlaygrounds.filter((course) => (
       course.title.toLocaleLowerCase().includes(needle)
       || course.courseCode?.toLocaleLowerCase().includes(needle)
       || course.term?.toLocaleLowerCase().includes(needle)
     ));
-  }, [ordered, search]);
+  }, [ownedPlaygrounds, search]);
   const visibleCatalog = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
     const source = tab === 'community' && sharedCourse.data
@@ -168,8 +174,10 @@ export default function Courses() {
       ]);
       AccessibilityInfo.announceForAccessibility('Community sharing updated.');
       return shareCode;
-    } catch {
-      throw new Error('Sharing could not be updated. Check your connection and try again.');
+    } catch (cause) {
+      throw cause instanceof Error
+        ? cause
+        : new Error('Community publishing failed. Check your connection and try again.');
     }
   };
 
@@ -257,23 +265,23 @@ export default function Courses() {
           <PixelText variant="title">Courses</PixelText>
           <View style={styles.tabs} accessibilityRole="radiogroup" accessibilityLabel="Course library view">
             <LibraryTab label="My courses" active={tab === 'mine'} onPress={() => setTab('mine')} />
-            <LibraryTab label="Official" active={tab === 'official'} onPress={() => setTab('official')} />
+            <LibraryTab label="Playground" active={tab === 'playground'} onPress={() => setTab('playground')} />
             <LibraryTab label="Community" active={tab === 'community'} onPress={() => setTab('community')} />
           </View>
           <PixelInput
-            label={tab === 'mine' ? 'Search my courses' : `Search ${tab} courses`}
+            label={tab === 'mine' ? 'Search my courses' : `Search ${tab}`}
             value={search}
             onChangeText={setSearch}
             placeholder={tab === 'mine' ? 'SEARCH MY COURSES...' : `SEARCH ${tab.toUpperCase()}...`}
             autoCapitalize="none"
             autoCorrect={false}
           />
-          {tab === 'mine' && orderNotice ? (
+          {tab === 'playground' && orderNotice ? (
             <PixelText variant="body" colour={orderNotice.error ? t.alarm : t.warning}>
               {orderNotice.text}
             </PixelText>
           ) : null}
-          {tab !== 'mine' && catalogNotice ? (
+          {tab !== 'playground' && catalogNotice ? (
             <PixelText variant="body" colour={catalogNotice.error ? t.alarm : t.info}>
               {catalogNotice.text}
             </PixelText>
@@ -281,20 +289,20 @@ export default function Courses() {
         </View>
 
         <View style={styles.library}>
-          {tab === 'mine' && isPending ? (
-            <Notice title="Reading courses">
-              <PixelText variant="body" colour={t.inkMuted}>00: OPENING LIBRARY</PixelText>
+          {tab === 'playground' && isPending ? (
+            <Notice title="Reading Playground">
+              <PixelText variant="body" colour={t.inkMuted}>00: OPENING PLAYGROUND</PixelText>
             </Notice>
-          ) : tab === 'mine' && error ? (
-            <Notice title="Courses unavailable">
+          ) : tab === 'playground' && error ? (
+            <Notice title="Playground unavailable">
               <PixelText variant="body" colour={t.ink}>
-                Couldn&apos;t load your courses. Check your connection and try again.
+                Couldn&apos;t load your Playground courses. Check your connection and try again.
               </PixelText>
               <PixelButton label="Try again" onPress={() => refetch()} />
             </Notice>
-          ) : tab === 'mine' ? (
+          ) : tab === 'playground' ? (
             <ReorderableCourseList
-              courses={visibleCourses}
+              courses={visiblePlaygrounds}
               activeCourseId={prefs.lastCourseId}
               reduceMotion={prefs.motionOff}
               onOpen={open}
@@ -306,23 +314,23 @@ export default function Courses() {
               onDuplicate={duplicate}
               onDelete={remove}
               empty={
-                <Notice title={search.trim() ? 'No matching charts' : 'No charts yet'}>
+                <Notice title={search.trim() ? 'No matching Playground courses' : 'Playground is empty'}>
                   <PixelText variant="body" colour={t.ink}>
                     {search.trim()
                       ? 'Try a different course title, code, or term.'
-                      : 'Upload a syllabus or start with a blank chart.'}
+                      : 'Upload a syllabus or start with a blank chart to build privately.'}
                   </PixelText>
                 </Notice>
               }
             />
           ) : catalog.isPending ? (
-            <Notice title={`Reading ${tab} courses`}>
+            <Notice title={tab === 'mine' ? 'Reading your courses' : 'Reading community courses'}>
               <PixelText variant="body" colour={t.inkMuted}>OPENING COURSE CATALOG</PixelText>
             </Notice>
           ) : catalog.error ? (
             <Notice title="Catalog unavailable">
               <PixelText variant="body" colour={t.ink}>
-                Couldn&apos;t load the {tab} catalog. Check your connection and try again.
+                Couldn&apos;t load {tab === 'mine' ? 'instructor courses' : 'the Community catalog'}. Check your connection and try again.
               </PixelText>
               <PixelButton label="Try again" onPress={() => catalog.refetch()} />
             </Notice>
@@ -333,11 +341,11 @@ export default function Courses() {
               onJoin={join}
               onOpen={(course) => open(course.id)}
               empty={
-                <Notice title={search.trim() ? 'No matching courses' : `No ${tab} courses yet`}>
+                <Notice title={search.trim() ? 'No matching courses' : tab === 'mine' ? 'No instructor courses yet' : 'No community courses yet'}>
                   <PixelText variant="body" colour={t.ink}>
                     {search.trim()
                       ? 'Try a different title, code, term, or author.'
-                      : tab === 'official'
+                      : tab === 'mine'
                         ? 'Verified instructors have not published a course yet.'
                         : 'Student authors have not published a public course yet.'}
                   </PixelText>
@@ -347,7 +355,7 @@ export default function Courses() {
           )}
         </View>
 
-        {tab === 'mine' ? (
+        {tab === 'playground' ? (
           <View style={styles.actions}>
             <PixelButton label="Upload a syllabus" onPress={goToUpload} />
             <PixelButton label="+ Create blank chart by hand" tone="panel" onPress={createBlank} />

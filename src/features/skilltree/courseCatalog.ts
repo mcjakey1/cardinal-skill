@@ -38,7 +38,7 @@ export async function publishCommunityCourse(
     p_course_id: courseId,
     p_discoverability: visibility,
   });
-  if (error) throw error;
+  if (error) throw new Error(error.message || 'Community publishing failed.');
   if (typeof data !== 'string') throw new Error('The shared course did not return a share code.');
   return data;
 }

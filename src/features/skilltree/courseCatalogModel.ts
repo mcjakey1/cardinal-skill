@@ -1,7 +1,7 @@
-import type { CourseKind, CourseDiscoverability } from './courseDistribution';
+import type { CourseKind } from './courseDistribution';
 
 export type CatalogKind = Extract<CourseKind, 'official' | 'community'>;
-export type CommunityVisibility = Extract<CourseDiscoverability, 'unlisted' | 'public'>;
+export type CommunityVisibility = 'public';
 
 export interface CatalogCourse {
   id: string;

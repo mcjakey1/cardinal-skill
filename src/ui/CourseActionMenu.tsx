@@ -59,7 +59,7 @@ export function CourseActionMenu({
   const [courseCode, setCourseCode] = useState(course.courseCode ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [shareVisibility, setShareVisibility] = useState<CommunityVisibility>('unlisted');
+  const shareVisibility: CommunityVisibility = 'public';
   const [shareCode, setShareCode] = useState<string | null>(null);
 
   useEffect(() => {
@@ -212,7 +212,7 @@ export function CourseActionMenu({
             />
             <PopoverAction
               icon="link"
-              label={course.kind === 'community' ? 'Sharing settings' : 'Share as community course'}
+              label={course.kind === 'community' ? 'Community publishing' : 'Publish to Community'}
               colour={t.info}
               disabled={!course.canEdit || course.isFixture || course.kind === 'official'}
               onPress={() => choose('share')}
@@ -294,9 +294,7 @@ export function CourseActionMenu({
                 {shareCode ? (
                   <>
                     <PixelText variant="body" colour={t.ink}>
-                      {shareVisibility === 'public'
-                        ? 'This student-made course is now listed in Community.'
-                        : 'This student-made course is available to anyone with its invite link.'}
+                      This student-made course is now listed in Community.
                     </PixelText>
                     <View style={[styles.shareCode, { borderColor: t.line, backgroundColor: t.well }]}>
                       <PixelText variant="micro" colour={t.info} selectable>{shareCode}</PixelText>
@@ -310,22 +308,11 @@ export function CourseActionMenu({
                 ) : (
                   <>
                     <PixelText variant="body" colour={t.ink}>
-                      Publish an instructor-independent student-made course. Learners join the shared original; their leaderboard stays separate from official and private practice XP.
+                      Publish this Playground course to Community. Learners join the shared original; their leaderboard stays separate from official courses and your private Playground XP.
                     </PixelText>
-                    <View style={styles.visibility} accessibilityRole="radiogroup" accessibilityLabel="Community course visibility">
-                      <VisibilityChoice
-                        label="Link only"
-                        detail="Only people with the invite can find it."
-                        active={shareVisibility === 'unlisted'}
-                        onPress={() => setShareVisibility('unlisted')}
-                      />
-                      <VisibilityChoice
-                        label="Public community"
-                        detail="List it for every signed-in learner."
-                        active={shareVisibility === 'public'}
-                        onPress={() => setShareVisibility('public')}
-                      />
-                    </View>
+                    <PixelText variant="micro" colour={t.inkMuted}>
+                      Every signed-in learner can discover and join it from Community.
+                    </PixelText>
                     <PixelText variant="micro" colour={t.warning}>
                       STUDENT MADE · UNOFFICIAL SCORING · AUTHOR EXCLUDED FROM LADDER
                     </PixelText>
@@ -383,7 +370,7 @@ function headingFor(action: ActionKind, title: string, archive: boolean): string
   if (action === 'share') return 'Share student-made course';
   if (action === 'reset') return 'Reset progress?';
   if (action === 'duplicate') return 'Duplicate chart?';
-  if (action === 'copyToEdit') return 'Create a practice copy?';
+  if (action === 'copyToEdit') return 'Create a Playground copy?';
   return archive ? `Archive ${title}?` : `Delete ${title}?`;
 }
 
@@ -425,30 +412,6 @@ function PopoverAction({ icon, label, colour, disabled, onPress }: {
   );
 }
 
-function VisibilityChoice({ label, detail, active, onPress }: {
-  label: string;
-  detail: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  const t = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="radio"
-      accessibilityState={{ checked: active }}
-      accessibilityLabel={`${label}. ${detail}`}
-      style={({ pressed }) => [
-        styles.visibilityChoice,
-        bevelStyle(t, active ? 'brand' : 'panel', pressed || active ? 'inset' : 'raised'),
-      ]}
-    >
-      <PixelText variant="body" colour={active ? t.brandInk : t.ink}>{label}</PixelText>
-      <PixelText variant="micro" colour={active ? t.brandInk : t.inkMuted}>{detail}</PixelText>
-    </Pressable>
-  );
-}
-
 function ConfirmButton({ action, archive, busy, onPress }: {
   action: ActionKind;
   archive: boolean;
@@ -465,7 +428,7 @@ function ConfirmButton({ action, archive, busy, onPress }: {
         : action === 'duplicate'
           ? 'Create copy'
           : action === 'copyToEdit'
-            ? 'Create practice copy'
+            ? 'Create Playground copy'
             : action === 'share'
               ? 'Publish sharing'
           : archive ? 'Archive course' : 'Delete course';
@@ -531,8 +494,6 @@ const styles = StyleSheet.create({
   close: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
   fields: { gap: space.md },
   confirmCopy: { gap: space.cell },
-  visibility: { gap: space.cell },
-  visibilityChoice: { minHeight: touch, justifyContent: 'center', padding: space.cell },
   shareCode: { borderWidth: bevel, padding: space.md },
   footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: space.cell, flexWrap: 'wrap' },
   deleteButton: {

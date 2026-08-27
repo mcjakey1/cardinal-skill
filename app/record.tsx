@@ -108,8 +108,8 @@ export default function Record() {
       message: 'XP from different courses is never combined. Select an official or student-made course above.',
     };
     if (selectedCourse?.isFixture || selectedCourse?.kind === 'practice') return {
-      title: 'No live ladder for practice charts',
-      message: 'Private practice progress stays personal and never enters a competitive ranking.',
+      title: 'No live ladder for Playground courses',
+      message: 'Private Playground progress stays personal and never enters a competitive ranking.',
     };
     if (selectedCourse?.canEdit) return {
       title: 'Authors do not enter learner rankings',

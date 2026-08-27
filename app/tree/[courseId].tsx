@@ -738,8 +738,10 @@ export default function TreeScreen() {
       ]);
       AccessibilityInfo.announceForAccessibility('Community sharing updated.');
       return shareCode;
-    } catch {
-      throw new Error('Sharing could not be updated. Check your connection and try again.');
+    } catch (cause) {
+      throw cause instanceof Error
+        ? cause
+        : new Error('Community publishing failed. Check your connection and try again.');
     }
   };
 
@@ -765,7 +767,7 @@ export default function TreeScreen() {
     } catch (cause) {
       setPracticeCopyError(cause instanceof Error
         ? cause.message
-        : 'The practice copy could not be created. Check your connection and try again.');
+        : 'The Playground copy could not be created. Check your connection and try again.');
     } finally {
       setPracticeCopyBusy(false);
     }

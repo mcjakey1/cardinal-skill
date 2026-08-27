@@ -23,7 +23,7 @@ export const PRIVATE_PRACTICE_DISTRIBUTION: CourseDistribution = {
 export function courseKindLabel(kind: CourseKind): string {
   if (kind === 'official') return 'Official';
   if (kind === 'community') return 'Student made';
-  return 'Practice';
+  return 'Playground';
 }
 
 export function normalizeCourseDistribution(value: {

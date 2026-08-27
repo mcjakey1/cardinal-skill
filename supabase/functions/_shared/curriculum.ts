@@ -72,6 +72,7 @@ Missions:
 - Easy definition, classification, and notation work takes 5 to 10 minutes and awards 20 to 30 XP.
 - Medium problem solving, calculation, interpretation, and data analysis takes 15 to 20 minutes and awards 40 to 60 XP.
 - Hard derivation, proof, critique, multi-stage analysis, synthesis, and design takes 25 to 45 minutes and awards 75 to 100 XP.
+- Every Tier 4 mission is Hard. A Tier 3 mission is Hard when it asks for proof, derivation, design, evaluation, critique, synthesis, or multi-stage analysis. Tier 2 and later missions must not be Easy.
 - Keep difficulty, duration, and XP consistent with one another. Vary them according to actual cognitive load.
 
 Output discipline:
@@ -157,7 +158,10 @@ export function requireSyllabusCoverage(
   }
 
   for (const [key, entry] of expected) {
-    if (entry.weeks.size < 2) continue;
+    // A two-week unit range does not prove that every bullet under the unit is
+    // independently taught in both weeks. Three repeated weekly rows are a
+    // strong enough signal to require progressive nodes (the DSP filter case).
+    if (entry.weeks.size < 3) continue;
     const requiredNodes = Math.min(4, entry.weeks.size);
     const actualNodes = actual.get(key) ?? 0;
     if (actualNodes < requiredNodes) {
@@ -310,6 +314,23 @@ function comparableTopic(value: unknown): string {
 }
 
 export type MissionDifficulty = 'Easy' | 'Medium' | 'Hard';
+
+export function missionDifficultyForTier(
+  tier: unknown,
+  content: unknown,
+  authored: unknown,
+): MissionDifficulty {
+  const level = Math.max(1, Math.min(4, Math.round(Number(tier) || 1)));
+  const initial: MissionDifficulty = authored === 'Easy' || authored === 'Hard'
+    ? authored
+    : 'Medium';
+  if (initial === 'Hard' || level >= 4) return 'Hard';
+  const hardWork = /\b(proof|prove|derive|derivation|design|evaluate|evaluation|critique|synthesi[sz]e?|multi[ -]?stage|analy[sz]e)\b/i
+    .test(typeof content === 'string' ? content : '');
+  if (level >= 3 && hardWork) return 'Hard';
+  if (level >= 2 && initial === 'Easy') return 'Medium';
+  return initial;
+}
 
 export function scaleMission(
   difficulty: unknown,

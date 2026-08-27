@@ -64,3 +64,8 @@ test('difficulty inherits safely and mission title case permits connecting words
   assert.equal(isMissionTitleCase('read the Chapter Opener'), false);
   assert.equal(isMissionTitleCase('Read The Chapter Opener'), false);
 });
+
+test('legacy missions recover parser difficulty from their scaled XP', () => {
+  const legacy = row('legacy-hard', 'open', 85, 30, 3);
+  assert.equal(missionDifficulty(legacy.mission, legacy.node), 'hard');
+});

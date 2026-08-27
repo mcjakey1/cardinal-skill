@@ -7,6 +7,7 @@ import {
   attachMissingSyllabusCoverage,
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
+  missionDifficultyForTier,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
   repairNodeTarget,
@@ -377,6 +378,7 @@ Deno.serve(async (req) => {
     kind: mission.type,
     xp_reward: mission.xp,
     estimated_minutes: mission.estimated_minutes,
+    difficulty: mission.difficulty,
     sort_order: index,
   })));
 
@@ -435,6 +437,7 @@ interface ParsedMission {
   type: typeof KINDS[number];
   estimated_minutes: number;
   xp: number;
+  difficulty: 'easy' | 'medium' | 'hard';
 }
 
 interface ParsedCourseGraphNode {
@@ -588,8 +591,13 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
     const missionTitle = clean(node.mission?.title, 160) || `Practice ${title}`;
     const missionDescription = cleanFull(node.mission?.description)
       || `Complete one worked exercise that demonstrates ${title}.`;
-    const missionScale = scaleMission(
+    const resolvedDifficulty = missionDifficultyForTier(
+      node.tier,
+      `${title} ${description} ${missionTitle} ${missionDescription}`,
       node.mission?.difficulty,
+    );
+    const missionScale = scaleMission(
+      resolvedDifficulty,
       node.mission?.estimatedMinutes,
       node.mission?.xpReward,
     );
@@ -612,6 +620,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
         type: kind === 'assessment' || kind === 'project' ? kind : 'assignment',
         estimated_minutes: missionScale.estimatedMinutes,
         xp: missionScale.xpReward,
+        difficulty: missionScale.difficulty.toLowerCase() as ParsedMission['difficulty'],
       }],
     };
   }));

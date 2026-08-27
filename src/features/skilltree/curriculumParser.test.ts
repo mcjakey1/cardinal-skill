@@ -5,6 +5,7 @@ import {
   attachMissingSyllabusCoverage,
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
+  missionDifficultyForTier,
   requireGranularSkillCount,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
@@ -57,6 +58,15 @@ test('multi-week DSP filter coverage must expand and cannot disappear behind pad
     { unit: 'Design of Digital Filter: FIR and IIR' },
     { unit: 'Design of Digital Filter: FIR and IIR' },
   ], coverage));
+});
+
+test('a two-week unit range does not duplicate every subtopic inside that unit', () => {
+  assert.doesNotThrow(() => requireSyllabusCoverage([
+    { unit: 'Propositions & Logical Connectives' },
+  ], [
+    { week: 1, topics: ['Propositions & Logical Connectives'] },
+    { week: 2, topics: ['Propositions & Logical Connectives'] },
+  ]));
 });
 
 test('dense syllabus subtopics may share a node only when their content names each topic', () => {
@@ -155,6 +165,13 @@ test('mission effort and XP stay aligned with difficulty', () => {
   assert.deepEqual(scaleMission('Hard', 10, 40), {
     difficulty: 'Hard', estimatedMinutes: 25, xpReward: 75,
   });
+});
+
+test('mission difficulty follows cognitive load and the graph tier', () => {
+  assert.equal(missionDifficultyForTier(4, 'Integrate the course', 'Medium'), 'Hard');
+  assert.equal(missionDifficultyForTier(3, 'Design and evaluate a filter', 'Medium'), 'Hard');
+  assert.equal(missionDifficultyForTier(2, 'Apply a standard method', 'Easy'), 'Medium');
+  assert.equal(missionDifficultyForTier(1, 'Identify basic notation', 'Easy'), 'Easy');
 });
 
 test('the same syllabus content receives the same Gemini seed', async () => {

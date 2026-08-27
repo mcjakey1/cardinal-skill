@@ -32,6 +32,10 @@ export function missionDifficulty(mission: Mission, node: SkillNode): MissionDif
   if (node.difficultyLabel === 'Advanced') return 'hard';
   if (node.difficultyLabel === 'Intermediate') return 'medium';
   if (node.difficultyLabel === 'Foundational') return 'easy';
+  // Parser versions before v31 scaled XP from difficulty but did not persist
+  // the label. Recover that original signal for already-imported courses.
+  if (mission.xpReward >= 75) return 'hard';
+  if (mission.xpReward <= 30) return 'easy';
   if (mission.kind === 'assessment' || mission.kind === 'project') return 'hard';
   if (mission.kind === 'assignment') return 'medium';
   return 'easy';

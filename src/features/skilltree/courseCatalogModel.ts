@@ -60,3 +60,33 @@ export function normalizeCatalogCourses(rows: readonly CatalogRow[]): CatalogCou
     }];
   });
 }
+
+/**
+ * How long after publication an official course still reads as new.
+ *
+ * Bounded so a course nobody ever opens stops shouting: without a window, a row
+ * published last term stays marked forever for every student who never joined.
+ */
+export const NEW_COURSE_WINDOW_DAYS = 14;
+
+const NEW_COURSE_WINDOW_MS = NEW_COURSE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Is this catalog row new for the student looking at it?
+ *
+ * Pure on purpose: the seen ids and the clock are arguments, so the rule is
+ * testable with no storage, no React, and no Supabase. A joined course is never
+ * new — joining is the only way a student opens a catalog course, so the server
+ * flag alone already covers every course opened before the seen set existed.
+ */
+export function isNewCatalogCourse(
+  course: Pick<CatalogCourse, 'id' | 'kind' | 'isJoined' | 'publishedAt'>,
+  seenCourseIds: ReadonlySet<string>,
+  now: number,
+): boolean {
+  if (course.kind !== 'official') return false;
+  if (course.isJoined || seenCourseIds.has(course.id)) return false;
+  const publishedAt = Date.parse(course.publishedAt);
+  if (Number.isNaN(publishedAt)) return false;
+  return now - publishedAt <= NEW_COURSE_WINDOW_MS;
+}

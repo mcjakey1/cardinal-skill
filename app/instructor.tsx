@@ -293,7 +293,7 @@ const SAMPLE_INSIGHTS: {
   students: ProgressRow[];
   nodes: GraphNode[];
   prereqs: GraphEdge[];
-  cleared: [string, number][];
+  cleared: [string, number | null][];
 } = {
   students: [
     ...Array.from({ length: 8 }, (_, i) => ({
@@ -339,7 +339,11 @@ const SAMPLE_INSIGHTS: {
   cleared: [
     ['sample-1', 19],
     ['sample-2', 14],
-    // 'sample-3' is deliberately absent: under five, so withheld.
+    // 'sample-3' is measured and withheld — under five cleared it. That is a
+    // null entry, not an absent key: absence means no mission data exists for
+    // the node, which is a different fact and is left out of the ranking
+    // entirely rather than read as a low number.
+    ['sample-3', null],
     ['sample-4', 9],
   ],
 };
@@ -1969,6 +1973,12 @@ function Insights({ course }: { course: CourseRow }) {
   const pending = !sample && !fixture && (roster.isPending || tree.isPending || reach.isPending);
   const noSession = roster.data?.kind === 'no-session' || reach.data?.kind === 'no-session';
   const emptyClass = !sample && live !== null && live.students.length === 0;
+  // `live` is null for more reasons than "no class": the roster may be listing
+  // registered accounts rather than this course's students, or the course may
+  // belong to someone else. Every other branch here needs `live` to be present,
+  // so without this one the page renders its heading and nothing else — no
+  // notice, no error, not even the sample toggle, and no way forward.
+  const noClassToRead = !sample && !fixture && !pending && !error && !noSession && live === null;
 
   return (
     <>
@@ -2040,6 +2050,19 @@ function Insights({ course }: { course: CourseRow }) {
             Every panel here counts students, and this course has none, so there is nothing to
             count. Enrolling students is not wired up in this build. Look at a sample class to see
             what this page says once there is one.
+          </Notice>
+          {toggle}
+        </>
+      ) : null}
+
+      {noClassToRead ? (
+        <>
+          <Notice tone="attention" title="No class to measure yet">
+            <LText variant="small">
+              {roster.data?.kind === 'not-owned'
+                ? 'This course belongs to another account, so its class is not yours to read.'
+                : 'The Students tab is listing registered accounts rather than students enrolled on this course, and none of these figures would describe your class. They will fill in once students are enrolled here.'}
+            </LText>
           </Notice>
           {toggle}
         </>

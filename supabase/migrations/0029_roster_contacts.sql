@@ -99,6 +99,33 @@ begin
     where e.course_id = p_course_id and e.role = 'student'
   ) into v_any_enrolled;
 
+  -- The fallback below lists learner accounts that are NOT on this course, so
+  -- its gate cannot be course ownership. 0027 makes creating a course
+  -- self-service — `create policy "create own courses" ... with check (owner_id
+  -- = auth.uid())` — so "the owner of a course" is a description of anyone who
+  -- signed up and inserted one row. Owner-gating a system-wide directory of
+  -- names and addresses is therefore no gate at all: register, create a course,
+  -- enrol nobody, read every learner's email, forever.
+  --
+  -- So the fallback additionally requires a verified instructor or an
+  -- administrator. That is not a strong boundary and this comment will not
+  -- pretend otherwise: 0028 verifies anyone who registers as an instructor, so
+  -- the cost of reaching this list is choosing the instructor tab at sign-up.
+  -- It is the boundary this product already accepted when it opened the
+  -- official catalog on the same signal, and an administrator can revoke it.
+  -- The enrolled path above stays owner-or-administrator and is unaffected.
+  --
+  -- To close it properly, delete the fallback and ship the enrolment write, or
+  -- narrow this to `public.is_administrator(v_caller)` alone — one line, and
+  -- the roster then shows addresses only to an administrator until enrolment
+  -- exists.
+  if not v_any_enrolled
+    and not (public.is_verified_instructor(v_caller) or public.is_administrator(v_caller))
+  then
+    raise exception 'Only a verified instructor can see learner accounts that are not enrolled on this course.'
+      using errcode = '42501';
+  end if;
+
   return query
     select
       u.id,

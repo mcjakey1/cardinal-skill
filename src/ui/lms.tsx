@@ -225,6 +225,26 @@ export function Meter({ percent, label }: { percent: number; label?: string }) {
   );
 }
 
+/**
+ * Text that has to be wrapped before React Native will draw it.
+ *
+ * A notice body written as prose with one interpolation in it — `{course.title}
+ * has no class` — is not a string, it is an array of strings, so a plain
+ * `typeof children === 'string'` test misses it and the raw text reaches a
+ * `View`. On web that is a console error and the words still paint, which is
+ * why it survived; on iOS and Android it is a hard render failure. Checking
+ * every child keeps the wrap where the wrap belongs — in this component, once,
+ * rather than at each call site remembering.
+ *
+ * Children that are elements are left alone: a caller passing its own layout
+ * knows what it is doing, and a `View` nested inside a `Text` is its own bug.
+ */
+function isPlainText(children: React.ReactNode): boolean {
+  const parts = Array.isArray(children) ? children : [children];
+  return parts.length > 0
+    && parts.every((part) => typeof part === 'string' || typeof part === 'number');
+}
+
 /** State that is not a row: a caveat, a suppression, a validation failure. */
 export function Notice({
   tone = 'neutral',
@@ -262,7 +282,7 @@ export function Notice({
             {title}
           </LText>
         ) : null}
-        {typeof children === 'string' ? <LText variant="small">{children}</LText> : children}
+        {isPlainText(children) ? <LText variant="small">{children}</LText> : children}
       </View>
     </View>
   );

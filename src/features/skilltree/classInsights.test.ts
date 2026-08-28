@@ -207,6 +207,17 @@ test('studentsToWatch survives a clock-skewed or unreadable timestamp', () => {
 const nodes = (...ids: string[]): GraphNode[] => ids.map((id) => ({ id, title: id.toUpperCase() }));
 const edge = (nodeId: string, prereqId: string): GraphEdge => ({ nodeId, prereqId });
 
+/**
+ * Every named node measured, every answer withheld.
+ *
+ * An empty map does not mean this. Absence means mission data cannot speak for
+ * the node at all, and `bottlenecks` leaves those out rather than reading the
+ * silence as "four or fewer" — so a structural test about blocking has to say
+ * which nodes were measured before it can assert anything about their rank.
+ */
+const withheldFor = (...ids: string[]): Map<string, number | null> =>
+  new Map(ids.map((id) => [id, null]));
+
 /** Narrows the union so a test can index the rows. */
 function rowsOf(result: ReturnType<typeof bottlenecks>): Bottleneck[] {
   if (!Array.isArray(result)) return assert.fail(`suppressed: ${result.reason}`);
@@ -227,7 +238,7 @@ test('bottlenecks counts every skill downstream, not just the next one', () => {
     bottlenecks(
       nodes('a', 'b', 'c', 'd', 'e'),
       [edge('b', 'a'), edge('c', 'b'), edge('d', 'c'), edge('e', 'a')],
-      new Map(),
+      withheldFor('a', 'b', 'c', 'd', 'e'),
       10,
     ),
   );
@@ -238,13 +249,50 @@ test('bottlenecks counts every skill downstream, not just the next one', () => {
   assert.equal(blocks.get('d'), undefined, 'a leaf blocks nothing and is not a bottleneck');
 });
 
+test('bottlenecks leaves out a skill mission data cannot speak for', () => {
+  // `mystery` gates three skills and has no mission data at all. Read as
+  // "four or fewer cleared it", it would claim 20 of 24 students are stuck
+  // behind it and take the top of the list — the page's headline advice would
+  // be about the one node nothing is known about. It is left out instead.
+  const rows = rowsOf(
+    bottlenecks(
+      nodes('known', 'k1', 'mystery', 'm1', 'm2', 'm3'),
+      [
+        edge('k1', 'known'),
+        edge('m1', 'mystery'),
+        edge('m2', 'mystery'),
+        edge('m3', 'mystery'),
+      ],
+      new Map([['known', 6]]),
+      24,
+    ),
+  );
+  assert.deepEqual(rows.map((r) => r.nodeId), ['known']);
+});
+
+test('bottlenecks still ranks a skill whose count was withheld', () => {
+  // Withheld is a real bound — four or fewer — and must keep its place, or
+  // suppression would quietly delete the skills nobody has cleared.
+  const rows = rowsOf(
+    bottlenecks(
+      nodes('hidden', 'h1', 'known', 'k1'),
+      [edge('h1', 'hidden'), edge('k1', 'known')],
+      new Map<string, number | null>([['hidden', null], ['known', 22]]),
+      24,
+    ),
+  );
+  assert.equal(rows[0]!.nodeId, 'hidden');
+  assert.equal(rows[0]!.clearedAtMost, null);
+  assert.equal(rows[0]!.waitingAtLeast, 24 - (MIN_COHORT - 1));
+});
+
 test('bottlenecks does not double-count a skill reachable by two paths', () => {
   // a -> b, a -> c, both -> d
   const rows = rowsOf(
     bottlenecks(
       nodes('a', 'b', 'c', 'd'),
       [edge('b', 'a'), edge('c', 'a'), edge('d', 'b'), edge('d', 'c')],
-      new Map(),
+      withheldFor('a', 'b', 'c', 'd'),
       10,
     ),
   );
@@ -253,7 +301,7 @@ test('bottlenecks does not double-count a skill reachable by two paths', () => {
 
 test('bottlenecks terminates on a cycle the parser produced', () => {
   const rows = rowsOf(
-    bottlenecks(nodes('a', 'b', 'c'), [edge('b', 'a'), edge('c', 'b'), edge('a', 'c')], new Map(), 10),
+    bottlenecks(nodes('a', 'b', 'c'), [edge('b', 'a'), edge('c', 'b'), edge('a', 'c')], withheldFor('a', 'b', 'c'), 10),
   );
   assert.equal(rows.length, 3);
   for (const row of rows) assert.equal(row.blocks, 2);
@@ -261,14 +309,14 @@ test('bottlenecks terminates on a cycle the parser produced', () => {
 
 test('bottlenecks drops an edge naming a node that is not in the graph', () => {
   const rows = rowsOf(
-    bottlenecks(nodes('a', 'b'), [edge('b', 'a'), edge('ghost', 'a'), edge('b', 'ghost')], new Map(), 10),
+    bottlenecks(nodes('a', 'b'), [edge('b', 'a'), edge('ghost', 'a'), edge('b', 'ghost')], withheldFor('a', 'b'), 10),
   );
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.blocks, 1);
 });
 
 test('bottlenecks reports a withheld count as unknown, never as zero', () => {
-  const rows = rowsOf(bottlenecks(nodes('a', 'b'), [edge('b', 'a')], new Map(), 24));
+  const rows = rowsOf(bottlenecks(nodes('a', 'b'), [edge('b', 'a')], withheldFor('a', 'b'), 24));
   assert.equal(rows[0]!.clearedAtMost, null);
   // Withheld means four or fewer cleared it, so at least twenty have not. The
   // floor narrows the claim; it does not delete it.
@@ -309,7 +357,7 @@ test('bottlenecks honours the limit', () => {
     bottlenecks(
       nodes('a', 'b', 'c', 'd'),
       [edge('b', 'a'), edge('c', 'b'), edge('d', 'c')],
-      new Map(),
+      withheldFor('a', 'b', 'c', 'd'),
       10,
       2,
     ),
@@ -336,11 +384,15 @@ test('clearedUpperBounds takes the weakest mission as the ceiling for its node',
 
 test('clearedUpperBounds withholds a node when any one mission is under the floor', () => {
   const bounds = clearedUpperBounds([mission('m1', 'a'), mission('m2', 'a')], new Map([['m1', 20]]));
-  assert.equal(bounds.has('a'), false, 'm2 was suppressed, so the node is too');
+  // Withheld is an entry holding null, not an absent key. The absence is
+  // reserved for a node mission data cannot speak for at all.
+  assert.equal(bounds.has('a'), true, 'the node was measured, and the answer is withheld');
+  assert.equal(bounds.get('a'), null, 'm2 was suppressed, so the node is too');
 });
 
 test('clearedUpperBounds withholds a node whose own ceiling is under the floor', () => {
-  assert.equal(clearedUpperBounds([mission('m1', 'a')], new Map([['m1', 4]])).has('a'), false);
+  const bounds = clearedUpperBounds([mission('m1', 'a')], new Map([['m1', 4]]));
+  assert.equal(bounds.get('a'), null);
 });
 
 test('clearedUpperBounds says nothing about a node with no missions', () => {

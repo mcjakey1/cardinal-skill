@@ -331,7 +331,7 @@ export interface MissionRef {
 export function clearedUpperBounds(
   missions: readonly MissionRef[],
   perMissionCompletions: ReadonlyMap<string, number>,
-): Map<string, number> {
+): Map<string, number | null> {
   const byNode = new Map<string, number[]>();
   for (const mission of missions) {
     // A mission absent from the summary is under the floor. Recording it as
@@ -343,10 +343,16 @@ export function clearedUpperBounds(
     else byNode.set(mission.skillId, [count]);
   }
 
-  const bounds = new Map<string, number>();
+  // Two different unknowns, and collapsing them is how a missing measurement
+  // becomes a fabricated alarm. A node that HAS missions but whose count fell
+  // under the floor is recorded as null — "four or fewer", a real bound worth
+  // acting on. A node with no missions gets no entry at all, because nothing
+  // here can speak for it, and a caller must not read that silence as a low
+  // number.
+  const bounds = new Map<string, number | null>();
   for (const [nodeId, counts] of byNode) {
     const least = Math.min(...counts);
-    if (least >= MIN_COHORT) bounds.set(nodeId, least);
+    bounds.set(nodeId, least >= MIN_COHORT ? least : null);
   }
   return bounds;
 }
@@ -414,7 +420,10 @@ export interface Bottleneck {
 export function bottlenecks(
   nodes: readonly GraphNode[],
   edges: readonly GraphEdge[],
-  clearedCounts: ReadonlyMap<string, number>,
+  // Keyed by node: a number is a measured ceiling, null is measured-and-
+  // withheld ("four or fewer"), and an absent key means mission data cannot
+  // speak for the node at all. The third is not the second.
+  clearedCounts: ReadonlyMap<string, number | null>,
   classSize: number,
   limit = 5,
 ): Bottleneck[] | Suppressed {
@@ -450,6 +459,14 @@ export function bottlenecks(
   };
 
   return nodes
+    // Only nodes mission data can actually speak for. An absent entry means no
+    // missions are defined on the node, not that few students cleared it —
+    // reading it as "four or fewer" invents the largest possible number of
+    // students waiting, and since the ranking multiplies by that, the nodes
+    // nothing is known about would take the top of the list and become the
+    // page's headline advice. A node this cannot measure is left out rather
+    // than guessed at.
+    .filter((node) => clearedCounts.has(node.id))
     .map((node) => {
       const clearedAtMost = clearedCounts.get(node.id) ?? null;
       const blocks = downstream(node.id);

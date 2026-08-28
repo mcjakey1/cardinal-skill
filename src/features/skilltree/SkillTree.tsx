@@ -1376,6 +1376,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'flex-end',
+    // Wrap rather than overflow. A narrow canvas puts the edit tray under the
+    // zoom controls instead of pushing it past the left edge of the chart.
+    flexWrap: 'wrap',
     gap: space.cell,
     overflow: 'visible',
   },
@@ -1388,7 +1391,13 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: space.cell,
   },
-  editToolbar: { maxWidth: '100%', flexShrink: 1, overflow: 'visible' },
+  // `minWidth: 0` is what makes the `flexShrink` above do anything. A flex item
+  // defaults to a minimum of its own content width, so a tray wider than the
+  // canvas column does not shrink — and because the HUD row ends at
+  // `justifyContent: 'flex-end'`, the overflow goes off the LEFT edge and takes
+  // its own labels with it ("EDIT MODE IS ON" arriving as "MODE IS ON"). With a
+  // floor of zero it wraps instead, which also costs fewer rows of canvas.
+  editToolbar: { maxWidth: '100%', flexShrink: 1, minWidth: 0, overflow: 'visible' },
   editToolbarInner: {
     alignItems: 'flex-end',
     gap: space.xs,

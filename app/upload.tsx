@@ -7,10 +7,14 @@ import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleShee
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { supabase } from '@/lib/supabase';
-import { bytesToBase64 } from '@/lib/base64';
-import { callEdgeFunction } from '@/lib/edgeFunctions';
 import { cacheParsedCourse } from '@/lib/courseCache';
-import { extractTextFromPDF } from '@/lib/pdfTextExtraction';
+import {
+  checkParserStatus as fetchParserStatus,
+  readSyllabusFile,
+  runSyllabusImport,
+  type SyllabusDocument,
+  type SyllabusReadEvent,
+} from '@/lib/syllabusImport';
 import { fetchTree } from '@/features/skilltree/queries';
 import { validateGraph } from '@/features/skilltree/validation';
 import { usePrefs } from '@/lib/prefs';
@@ -40,22 +44,6 @@ import { PixelButton, PixelIcon, PixelInput, PixelText } from '@/ui/pixel';
  * Every line in the log below is written when the step actually happened. This
  * screen has no simulated progress.
  */
-type SelectedDocument = { name: string; mediaType: 'application/pdf'; base64: string };
-interface ParseResult {
-  course_id: string;
-  course_code: string | null;
-  course_name: string;
-  course_description?: string | null;
-  semester_description: string | null;
-  units?: number | null;
-  node_count: number;
-  mission_count: number;
-  edge_count: number;
-}
-interface ParserStatusResponse {
-  status: 'online';
-  model?: string;
-}
 type ParserStatus = 'checking' | 'online' | 'parsing' | 'offline';
 
 export default function Upload() {
@@ -69,7 +57,7 @@ export default function Upload() {
 
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
-  const [document, setDocument] = useState<SelectedDocument | null>(null);
+  const [document, setDocument] = useState<SyllabusDocument | null>(null);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [fileStatus, setFileStatus] = useState('Waiting for a file');
   const [fileStatusTone, setFileStatusTone] = useState<'idle' | 'ok' | 'bad'>('idle');
@@ -109,11 +97,7 @@ export default function Upload() {
   const checkParserStatus = useCallback(async () => {
     setParserStatus('checking');
     try {
-      const result = await callEdgeFunction<ParserStatusResponse>(
-        'parse-syllabus',
-        { action: 'status' },
-        12_000,
-      );
+      const result = await fetchParserStatus();
       setParserModel(result.model ? result.model.replaceAll('-', ' ').toUpperCase() : 'EDGE ENGINE');
       setParserStatus('online');
     } catch {
@@ -137,18 +121,37 @@ export default function Upload() {
     return () => clearInterval(intervalId);
   }, [busy]);
 
+  const traceRead = (event: SyllabusReadEvent) => {
+    switch (event.kind) {
+      case 'fetching':
+        return trace('NETWORK', 'READING LOCAL FILE URI');
+      case 'fetched':
+        return trace(
+          'NETWORK',
+          `LOCAL FILE RESPONSE ${event.status} · ${event.durationMs} MS`,
+          event.status >= 200 && event.status < 300 ? 'ok' : 'bad',
+        );
+      case 'pdf':
+        return trace('FILE', `PDF BUFFER ${event.bytes} BYTES · BASE64 PAYLOAD ${event.base64Length} CHARACTERS`, 'ok');
+      case 'extracting':
+        return trace('PARSER', 'CLIENT PDF TEXT EXTRACTION STARTED');
+      case 'extracted':
+        return trace(
+          'PARSER',
+          `EXTRACTED ${event.pageCount} PAGES · ${event.characters} CHARACTERS · ${event.durationMs} MS${event.truncated ? ' · TRUNCATED' : ''}`,
+          'ok',
+        );
+      case 'no-text-layer':
+        return trace('PARSER', 'NO CLIENT TEXT LAYER · THE PARSER WILL READ PDF BYTES');
+      case 'extract-failed':
+        return trace('PARSER', 'CLIENT TEXT EXTRACTION FAILED · THE PARSER WILL READ PDF BYTES');
+      case 'text':
+        return trace('FILE', `TEXT PAYLOAD ${event.characters} CHARACTERS`, 'ok');
+    }
+  };
+
   const readFile = async (file: FileDropzoneSelection) => {
     beginLogSession();
-    const accepted = /\.(pdf|txt|md)$/i.test(file.name);
-    if (!accepted) {
-      setSelectedFileName(null);
-      setFileStatus('Use a PDF, TXT, or MD file');
-      setFileStatusTone('bad');
-      say('THAT FILE TYPE IS NOT SUPPORTED', 'bad');
-      trace('FILE', `REJECTED ${file.name.toUpperCase()} · ${file.mimeType ?? 'UNKNOWN TYPE'}`, 'bad');
-      return;
-    }
-
     setSelectedFileName(file.name);
     setFileStatus('Reading file…');
     setFileStatusTone('idle');
@@ -159,61 +162,20 @@ export default function Upload() {
     );
 
     try {
-      const fileReadStartedAt = Date.now();
-      trace('NETWORK', 'READING LOCAL FILE URI');
-      const response = await fetch(file.uri);
-      trace(
-        'NETWORK',
-        `LOCAL FILE RESPONSE ${response.status} · ${Date.now() - fileReadStartedAt} MS`,
-        response.ok ? 'ok' : 'bad',
-      );
-      if (!response.ok) throw new Error(`File read failed with HTTP ${response.status}.`);
-      if (/\.pdf$/i.test(file.name) || file.mimeType === 'application/pdf') {
-        const buffer = await response.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        if (bytes.byteLength > 15_000_000) throw new Error('PDF exceeds 15 MB.');
-        const base64 = bytesToBase64(bytes);
-        setDocument({ name: file.name, mediaType: 'application/pdf', base64 });
-        setFileStatus(`${Math.ceil(bytes.byteLength / 1024)} KB PDF ready`);
-        setFileStatusTone('ok');
-        say(`FILE READY · ${Math.ceil(bytes.byteLength / 1024)} KB PDF`, 'ok');
-        trace('FILE', `PDF BUFFER ${bytes.byteLength} BYTES · BASE64 PAYLOAD ${base64.length} CHARACTERS`, 'ok');
-        trace('PARSER', 'CLIENT PDF TEXT EXTRACTION STARTED');
-        try {
-          const extractionStartedAt = Date.now();
-          const extracted = await extractTextFromPDF(buffer);
-          if (extracted) {
-            setText(extracted.text);
-            trace(
-              'PARSER',
-              `EXTRACTED ${extracted.pageCount} PAGES · ${extracted.text.length} CHARACTERS · ${Date.now() - extractionStartedAt} MS${extracted.truncated ? ' · TRUNCATED' : ''}`,
-              'ok',
-            );
-          } else {
-            setText('');
-            trace('PARSER', 'NO CLIENT TEXT LAYER · GEMINI WILL READ PDF BYTES');
-          }
-        } catch {
-          setText('');
-          trace('PARSER', 'CLIENT TEXT EXTRACTION FAILED · GEMINI WILL READ PDF BYTES');
-        }
-      } else {
-        const body = await response.text();
-        setText(body);
-        setDocument(null);
-        setFileStatus(`${body.length} characters ready`);
-        setFileStatusTone('ok');
-        say(`FILE READY · ${body.length} CHARACTERS`, 'ok');
-        trace('FILE', `TEXT PAYLOAD ${body.length} CHARACTERS`, 'ok');
-      }
+      const selection = await readSyllabusFile(file, traceRead);
+      setDocument(selection.document);
+      setText(selection.text);
+      setFileStatus(selection.status);
+      setFileStatusTone('ok');
+      say(`FILE READY · ${selection.status.toUpperCase()}`, 'ok');
     } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'That file could not be read.';
       setDocument(null);
       setSelectedFileName(null);
-      setFileStatus('Could not read that file');
+      setFileStatus(message);
       setFileStatusTone('bad');
-      say("COULDN'T READ THAT FILE ON THIS DEVICE", 'bad');
-      say('PASTE THE SYLLABUS TEXT BELOW INSTEAD');
-      trace('FILE', cause instanceof Error ? cause.message.toUpperCase() : 'FILE READ FAILED', 'bad');
+      say(message.toUpperCase(), 'bad');
+      trace('FILE', message.toUpperCase(), 'bad');
     }
   };
 
@@ -231,71 +193,51 @@ export default function Upload() {
     setBusy(true);
     setParseStage('reading');
     setParserStatus('parsing');
-    let createdCourseId: string | null = null;
-    let parsed = false;
     try {
       trace('PARSER', `STARTED WITH ${document ? 'PDF DOCUMENT' : 'EXTRACTED TEXT'} INPUT`);
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error('Sign in with Supabase before uploading a live syllabus.');
-      trace('NETWORK', 'AUTH SESSION VERIFIED', 'ok');
-      const courseCreateStartedAt = Date.now();
-      trace('NETWORK', 'POSTING PROVISIONAL COURSE ROW');
-      const provisionalTitle = title.trim()
-        || selectedFileName?.replace(/\.(pdf|txt|md)$/i, '').trim()
-        || 'Imported course';
-      const { data: course, error: courseError } = await supabase
-        .from('courses')
-        .insert({ title: provisionalTitle, owner_id: auth.user.id })
-        .select('id')
-        .single();
-      if (courseError || !course) throw courseError ?? new Error('No course returned.');
-      createdCourseId = course.id;
-      trace('NETWORK', `COURSE ROW CREATED · ${Date.now() - courseCreateStartedAt} MS`, 'ok');
-
       const extractedText = text.trim();
-      setParseStage('extracting');
-      say(`ANALYZING SYLLABUS WITH ${parserModel}`);
-      trace(
-        'PARSER',
-        extractedText
-          ? `USING ${extractedText.length} EXTRACTED TEXT CHARACTERS`
-          : `USING ${document?.base64.length ?? 0} PDF BASE64 CHARACTERS`,
-      );
-      const parseResult = await callEdgeFunction<ParseResult>(
-        'parse-syllabus',
-        {
-          courseId: course.id,
-          syllabusText: extractedText || undefined,
-          // Prefer extracted text; preserve the original PDF as the native and
-          // scanned-document fallback without uploading both representations.
-          documentBase64: extractedText ? undefined : document?.base64,
-          documentMediaType: extractedText ? undefined : document?.mediaType,
-          documentName: extractedText ? undefined : document?.name,
-        },
-        210_000,
-        {
-          onRequest: ({ endpoint, requestBytes }) => {
-            trace('NETWORK', `POST ${endpointPath(endpoint)} · ${requestBytes} REQUEST BYTES`);
+      const { courseId, title: provisionalTitle, result: parseResult } =
+        await runSyllabusImport(
+          { titleOverride: title, fileName: selectedFileName, text, document },
+          {
+            onStage: (stage) => {
+              if (stage === 'creating') {
+                trace('NETWORK', 'POSTING PROVISIONAL COURSE ROW');
+                return;
+              }
+              if (stage === 'parsing') {
+                setParseStage('extracting');
+                say(`ANALYZING SYLLABUS WITH ${parserModel}`);
+                trace(
+                  'PARSER',
+                  extractedText
+                    ? `USING ${extractedText.length} EXTRACTED TEXT CHARACTERS`
+                    : `USING ${document?.base64.length ?? 0} PDF BASE64 CHARACTERS`,
+                );
+                return;
+              }
+              if (stage === 'discarded') trace('NETWORK', 'PROVISIONAL COURSE ROW REMOVED');
+            },
+            telemetry: {
+              onRequest: ({ endpoint, requestBytes }) => {
+                trace('NETWORK', `POST ${endpointPath(endpoint)} · ${requestBytes} REQUEST BYTES`);
+              },
+              onResponse: ({ status, durationMs, contentLength }) => {
+                trace(
+                  'NETWORK',
+                  `HTTP ${status} · HEADERS IN ${durationMs} MS${contentLength === null ? '' : ` · ${contentLength} RESPONSE BYTES`}`,
+                  status >= 200 && status < 300 ? 'ok' : 'bad',
+                );
+              },
+              onChunk: ({ index, chunkBytes, totalBytes, estimatedTokens }) => {
+                trace(
+                  'STREAM',
+                  `CHUNK ${index} · ${chunkBytes} BYTES · ${totalBytes} TOTAL · ~${estimatedTokens} JSON TOKENS`,
+                );
+              },
+            },
           },
-          onResponse: ({ status, durationMs, contentLength }) => {
-            trace(
-              'NETWORK',
-              `HTTP ${status} · HEADERS IN ${durationMs} MS${contentLength === null ? '' : ` · ${contentLength} RESPONSE BYTES`}`,
-              status >= 200 && status < 300 ? 'ok' : 'bad',
-            );
-          },
-          onChunk: ({ index, chunkBytes, totalBytes, estimatedTokens }) => {
-            trace(
-              'STREAM',
-              `CHUNK ${index} · ${chunkBytes} BYTES · ${totalBytes} TOTAL · ~${estimatedTokens} JSON TOKENS`,
-            );
-          },
-        },
-      );
-      if (typeof parseResult.node_count !== 'number') {
-        throw new Error('The parser did not return a saved chart.');
-      }
-      parsed = true;
+        );
       setParseStage('building');
       setParserStatus('online');
       trace(
@@ -306,7 +248,7 @@ export default function Upload() {
 
       say(`SKILL TREE GENERATED WITH ${parseResult.node_count} NODES`, 'ok');
       try {
-        const snapshot = await fetchTree(course.id);
+        const snapshot = await fetchTree(courseId);
         const validation = validateGraph(snapshot.tree.nodes, snapshot.tree.prereqs);
         trace(
           'DAG',
@@ -316,7 +258,7 @@ export default function Upload() {
           validation.isValid ? 'ok' : 'bad',
         );
         await cacheParsedCourse({
-          id: course.id,
+          id: courseId,
           courseCode: parseResult.course_code ?? null,
           title: parseResult.course_name || provisionalTitle,
           term: parseResult.semester_description ?? null,
@@ -331,12 +273,8 @@ export default function Upload() {
       await queryClient.invalidateQueries({ queryKey: ['courses'] });
       trace('NETWORK', 'COURSE QUERY CACHE INVALIDATED', 'ok');
       setParseStage('complete');
-      transition(() => router.navigate({ pathname: '/tree/[courseId]', params: { courseId: course.id } }));
+      transition(() => router.navigate({ pathname: '/tree/[courseId]', params: { courseId } }));
     } catch (err) {
-      if (createdCourseId && !parsed) {
-        await supabase.from('courses').delete().eq('id', createdCourseId);
-        trace('NETWORK', 'PROVISIONAL COURSE ROW REMOVED');
-      }
       const message = err instanceof Error ? err.message : String(err);
       setParseStage('error');
       say(message.toUpperCase(), 'bad');

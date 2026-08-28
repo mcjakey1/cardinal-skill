@@ -5,8 +5,8 @@
  * 0002 closed writes on that table to them for exactly this kind of reason. So a
  * drag here is a personal arrangement of someone else's chart, not an edit of
  * it: it is kept locally and never pushed. An instructor rearranging the real
- * layout is a different feature, and it goes through the same owner-gated write
- * `/author` uses.
+ * layout is a different feature, and it goes through the owner-gated publish
+ * the instructor canvas uses.
  *
  * Only moved nodes are stored. A node absent from the map sits where the
  * syllabus put it, so a re-parsed course still lands somewhere sensible instead

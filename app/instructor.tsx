@@ -14,6 +14,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SkillTree } from '@/features/skilltree/SkillTree';
+import { NodeEditorPanel } from '@/features/skilltree/NodeEditorPanel';
+import { linkRefusal, mintId, missionsEqual, type NodeEdit } from '@/features/skilltree/nodeEditing';
 import { MIN_COHORT, STALE_DAYS, activityFlag } from '@/features/skilltree/cohort';
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
 import { resolveName } from '@/features/skilltree/naming';
@@ -33,8 +35,8 @@ import type { CourseKind, CoursePublicationStatus } from '@/features/skilltree/c
 import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/features/skilltree/chartImpact';
 import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
 import { purgeCourseCache } from '@/lib/editedTree';
-import type { NodeKind, SkillNode } from '@/features/skilltree/types';
-import type { ChartState, NodePatch } from '@/features/skilltree/chartDraft';
+import type { SkillNode } from '@/features/skilltree/types';
+import type { ChartState } from '@/features/skilltree/chartDraft';
 import { aliveSubgraph, sameNodeIds } from '@/features/skilltree/chartDraft';
 import { unmoved, useChartDraft } from '@/lib/useChartDraft';
 import { usePrefs } from '@/lib/prefs';
@@ -441,7 +443,6 @@ export default function Instructor() {
             flat={lowBandwidth}
             motionOff={motionOff}
             onImport={() => go('import')}
-            onAuthor={() => router.navigate('/author')}
             onStudentView={() =>
               router.navigate({ pathname: '/tree/[courseId]', params: { courseId: course.id } })
             }
@@ -795,7 +796,6 @@ function TreeSection({
   flat,
   motionOff,
   onImport,
-  onAuthor,
   onStudentView,
 }: {
   course: CourseRow;
@@ -804,11 +804,13 @@ function TreeSection({
   flat: boolean;
   motionOff: boolean;
   onImport: () => void;
-  onAuthor: () => void;
   onStudentView: () => void;
 }) {
   const [selected, setSelected] = useState<SkillNode | null>(null);
-  const [editing, setEditing] = useState(false);
+  // Which node's form is open, rather than a bare flag: a different node means a
+  // fresh form, and adding a node can open its form in the same turn it selects
+  // it without an effect racing to close it again.
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // `modalCard` has no maxHeight and the backdrop centres it, so a card taller
   // than the viewport hangs off both ends with nothing to scroll. On a landscape
@@ -887,9 +889,7 @@ function TreeSection({
     ?? null;
 
   // A different node means a fresh form, never the previous node's half-typed one.
-  useEffect(() => {
-    setEditing(false);
-  }, [selected?.id]);
+  const editing = editingId !== null && editingId === selected?.id;
 
   // In edit mode the canvas draws the draft, so an unpublished change shows
   // where it was made. Archived nodes are already gone as far as a student goes.
@@ -908,7 +908,7 @@ function TreeSection({
 
   const addNode = (at: { x: number; y: number }) => {
     const node: SkillNode = {
-      id: mintNodeId(),
+      id: mintId(),
       courseId: course.id,
       trackId: null,
       title: 'New node',
@@ -921,11 +921,14 @@ function TreeSection({
     };
     edit({ t: 'add', node });
     setSelected(node);
+    // Opened for naming straight away, same as the student chart: a node called
+    // "New node" is the one thing nobody meant to add.
+    setEditingId(node.id);
   };
 
   const startLink = () => {
     if (!selected) {
-      notice('Select a node first');
+      notice('Select a source node first');
       return;
     }
     setLinkSourceId(selected.id);
@@ -942,20 +945,14 @@ function TreeSection({
       setSelected(node);
       return;
     }
-    if (linkSourceId === node.id) {
-      notice('A node cannot require itself');
-      return;
-    }
     // Same basis as the publish gate, or the two disagree about which chart is
     // being checked and a link can pass here only to block Publish later.
-    const alive = aliveSubgraph({
-      ...draft.working,
-      prereqs: [...draft.working.prereqs, { nodeId: node.id, prereqId: linkSourceId }],
-    });
-    const check = validateGraph(alive.nodes, alive.prereqs);
-    if (!check.isValid) {
-      notice(check.errors[0]?.message ?? 'That link would create a loop');
-      cancelLink();
+    const alive = aliveSubgraph(draft.working);
+    const refusal = linkRefusal(alive.nodes, alive.prereqs, linkSourceId, node.id);
+    if (refusal) {
+      // Link mode stays on, same as the student chart: the source is still the
+      // one they picked, and the fix is usually a different target.
+      notice(refusal);
       return;
     }
     edit({ t: 'link', nodeId: node.id, prereqId: linkSourceId });
@@ -1148,14 +1145,29 @@ function TreeSection({
     }
   };
 
-  // Null when the node has no missions, which is the only case its XP is
-  // authored rather than derived. Same graph `live` came from.
-  const missionXp = useMemo(() => {
-    const mine = (editMode && canEdit ? draft.working.missions : data?.missions ?? []).filter(
-      (m) => m.skillId === live?.id,
-    );
-    return mine.length > 0 ? mine.reduce((sum, m) => sum + m.xpReward, 0) : null;
-  }, [canEdit, data?.missions, draft.working.missions, editMode, live?.id]);
+  // Same graph `live` came from, or the editor would price a node against
+  // missions the canvas is not drawing.
+  const ownMissions = useMemo(
+    () =>
+      (editMode && canEdit ? draft.working.missions : data?.missions ?? []).filter(
+        (m) => m.skillId === live?.id,
+      ),
+    [canEdit, data?.missions, draft.working.missions, editMode, live?.id],
+  );
+
+  // Same graph again, so an edge added in the draft is listed where it was made
+  // rather than only drawn on the canvas.
+  const ownPrereqs = useMemo(() => {
+    const state = editMode && canEdit
+      ? draft.working
+      : { nodes: data?.tree.nodes ?? [], prereqs: data?.tree.prereqs ?? [] };
+    return state.prereqs
+      .filter((p) => p.nodeId === live?.id)
+      .map((p) => ({
+        id: p.prereqId,
+        title: state.nodes.find((n) => n.id === p.prereqId)?.title ?? p.prereqId,
+      }));
+  }, [canEdit, data?.tree.nodes, data?.tree.prereqs, draft.working, editMode, live?.id]);
 
   /**
    * Editing is offered only from inside edit mode.
@@ -1169,7 +1181,16 @@ function TreeSection({
    */
   const canEditNode = editMode && canEdit;
 
-  const saveNodePatch = (patch: NodePatch) => {
+  /**
+   * The shared editor's half of the persistence contract, instructor side.
+   *
+   * The same `NodeEdit` the student screen writes straight to the device lands
+   * here as ops on the publish draft, so nothing reaches a student until
+   * Publish. Two ops rather than one because they undo separately, and an
+   * instructor who only renamed a node should not have their missions on the
+   * same undo step.
+   */
+  const saveNodeEdit = (next: NodeEdit) => {
     if (!live) return;
     edit({
       t: 'field',
@@ -1179,28 +1200,49 @@ function TreeSection({
         description: live.description,
         kind: live.kind,
         xpReward: live.xpReward,
+        iconKey: live.iconKey ?? null,
       },
-      after: patch,
+      after: {
+        titleOverride: next.titleOverride,
+        description: next.description,
+        kind: next.kind,
+        iconKey: next.iconKey,
+        // Omitted entirely when missions own it, so the change set never claims
+        // an XP edit the publish will not make — it recomputes the sum (0015:252).
+        ...(next.missions.length > 0 ? {} : { xpReward: next.xpReward }),
+      },
     });
-    setEditing(false);
+    if (!missionsEqual(ownMissions, next.missions)) {
+      edit({ t: 'mission', nodeId: live.id, before: ownMissions, after: next.missions });
+    }
+    setEditingId(null);
   };
 
-  const inspectorBody = (
+  const unlinkPrereq = (prereqId: string) => {
+    if (!live) return;
+    edit({ t: 'unlink', nodeId: live.id, prereqId });
+  };
+
+  const inspectorBody = editing && live && canEditNode ? (
+    <NodeEditorPanel
+      key={live.id}
+      node={live}
+      missions={ownMissions}
+      prereqs={ownPrereqs}
+      onUnlink={unlinkPrereq}
+      reduceMotion={motionOff}
+      // `publish_chart_changes` writes every node with `track_id` null
+      // (0015:136), so an instructor cannot make one universal from here.
+      canSetUniversal={false}
+      onSave={saveNodeEdit}
+      onCancel={() => setEditingId(null)}
+    />
+  ) : (
     <NodeInspector
       node={live}
-      // Same graph the node itself came from, or a link added in the draft is
-      // drawn on the canvas and missing from the count beside it.
-      prereqCount={
-        (editMode && canEdit ? draft.working.prereqs : data?.tree.prereqs ?? []).filter(
-          (p) => p.nodeId === live?.id,
-        ).length
-      }
-      missionXp={missionXp}
+      prereqCount={ownPrereqs.length}
       canEdit={canEditNode}
-      editing={editing}
-      onStartEdit={() => setEditing(true)}
-      onCancelEdit={() => setEditing(false)}
-      onSave={saveNodePatch}
+      onStartEdit={() => setEditingId(live?.id ?? null)}
     />
   );
 
@@ -1261,7 +1303,17 @@ function TreeSection({
               />
             )
           ) : null}
-          <LButton label="Edit by hand" icon="edit-3" size="sm" onPress={onAuthor} />
+          {/* Edits the chart already on screen. It used to leave for a separate
+              node-row form that created a second, unrelated course, which is
+              the one thing "edit this course" must never do. */}
+          {canEdit && !editMode ? (
+            <LButton
+              label="Edit by hand"
+              icon="edit-3"
+              size="sm"
+              onPress={() => setEditMode(true)}
+            />
+          ) : null}
           <LButton
             label="Open as a student"
             icon="external-link"
@@ -1328,7 +1380,7 @@ function TreeSection({
                         // An open form would keep editing against it and record
                         // a `before` the draft never held — the same corruption
                         // gating the button closes, arriving the other way.
-                        setEditing(false);
+                        setEditingId(null);
                       }
                     }
                   : undefined
@@ -1363,7 +1415,7 @@ function TreeSection({
           title={live?.title ?? 'Node'}
           onRequestClose={() => {
             setSelected(null);
-            setEditing(false);
+            setEditingId(null);
           }}
         >
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -2051,165 +2103,26 @@ function PageHead({
   );
 }
 
-/**
- * A uuid for a node the instructor just added.
- *
- * `crypto.randomUUID` is there on web, but `app.json` targets ios and android
- * and this repo carries no `react-native-get-random-values` or `expo-crypto`
- * polyfill, so calling it unguarded crashes ADD NODE on Hermes.
- * `subtree.ts:82` takes its generator as a parameter to dodge the same global.
- * `skill_nodes.id` is a `uuid`, so the fallback has to be v4-shaped rather than
- * merely unique.
- *
- * ponytail: Math.random fallback, not cryptographic. Fine for a row id nobody
- * has to guess; reach for expo-crypto only if an id ever has to be unguessable.
- */
-function mintNodeId(): string {
-  const g = globalThis as { crypto?: { randomUUID?: () => string } };
-  if (typeof g.crypto?.randomUUID === 'function') return g.crypto.randomUUID();
-  return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (ch) => {
-    const n = Number(ch);
-    return (n ^ (Math.floor(Math.random() * 256) & (15 >> (n / 4)))).toString(16);
-  });
-}
-
-const KINDS: { value: NodeKind; label: string }[] = [
-  { value: 'topic', label: 'Topic' },
-  { value: 'reading', label: 'Reading' },
-  { value: 'assignment', label: 'Assignment' },
-  { value: 'assessment', label: 'Assessment' },
-  { value: 'project', label: 'Project' },
-];
-
-/** XP the database accepts is 0–10000; this is the range a node is worth reading. */
-const XP_MIN = 1;
-const XP_MAX = 2000;
-
-function NodeEditor({
-  node,
-  missionXp,
-  onSave,
-  onCancel,
-}: {
-  node: SkillNode;
-  /** Total XP of this node's missions, or null when it has none. */
-  missionXp: number | null;
-  onSave: (patch: NodePatch) => void;
-  onCancel: () => void;
-}) {
-  const resolved = resolveName({
-    override: node.titleOverride,
-    generated: node.questTitle,
-    syllabus: node.title,
-  });
-
-  const [name, setName] = useState(resolved.text);
-  const [description, setDescription] = useState(node.description);
-  const [kind, setKind] = useState<NodeKind>(node.kind);
-  const [xp, setXp] = useState(String(node.xpReward));
-
-  // A node's XP is authored only while it has no missions. With missions it is
-  // their sum, recomputed on publish, so offering an input would take the edit,
-  // count it as a change, and then silently snap back on the refetch.
-  const xpAuthored = missionXp === null;
-  const xpValue = Number.parseInt(xp, 10);
-  const xpError = xpAuthored && (Number.isNaN(xpValue) || xpValue < XP_MIN || xpValue > XP_MAX)
-    ? `A node is worth between ${XP_MIN} and ${XP_MAX} XP.`
-    : undefined;
-  const nameError = name.trim() === '' ? 'A node needs a name.' : undefined;
-
-  return (
-    <View style={styles.inspectorSection}>
-      <Field
-        label="Name"
-        value={name}
-        onChangeText={setName}
-        error={nameError}
-        hint={
-          resolved.source === 'override'
-            ? 'Typed by hand. Quest naming leaves it alone.'
-            : resolved.source === 'generated'
-              ? 'Generated. Editing it pins the name against the next run.'
-              : 'From the syllabus.'
-        }
-      />
-
-      <Field label="What it covers" value={description} onChangeText={setDescription} tall />
-
-      {xpAuthored ? (
-        <Field
-          label="XP"
-          value={xp}
-          onChangeText={setXp}
-          keyboardType="number-pad"
-          error={xpError}
-        />
-      ) : (
-        <View style={styles.inspectorSection}>
-          <Figure label="XP" value={String(missionXp)} />
-          <LText variant="small" tone="muted">
-            The total of this node&rsquo;s missions. Change what a mission is worth to change it.
-          </LText>
-        </View>
-      )}
-
-      <Segmented label="Kind" options={KINDS} value={kind} onChange={setKind} />
-
-      <View style={styles.rowWrap}>
-        <LButton
-          label="Save"
-          variant="primary"
-          disabled={Boolean(nameError || xpError)}
-          onPress={() =>
-            onSave({
-              // The name is written as an override, never over the syllabus
-              // title. That is the column `name-quest` checks before it
-              // renames anything (0002:45).
-              titleOverride: name.trim() === node.title.trim() ? null : name.trim(),
-              description,
-              kind,
-              // Omitted entirely when missions own it, so the change set never
-              // claims an XP edit the publish will not make.
-              ...(xpAuthored ? { xpReward: xpValue } : {}),
-            })
-          }
-        />
-        <LButton label="Cancel" variant="quiet" onPress={onCancel} />
-        {resolved.source === 'override' ? (
-          <LButton
-            label="Reset to generated name"
-            variant="quiet"
-            onPress={() => onSave({ titleOverride: null })}
-          />
-        ) : null}
-      </View>
-    </View>
-  );
-}
 
 /**
- * What the inspector shows, without the surround. The rail and the narrow-screen
- * sheet wrap it differently and must otherwise render exactly the same thing.
+ * What the inspector shows while nothing is being edited. The rail and the
+ * narrow-screen sheet wrap it differently and must otherwise render exactly the
+ * same thing.
+ *
+ * Read-only on purpose: the editing controls are `NodeEditorPanel`, shared with
+ * the student chart, so there is one node property panel in this repo and not
+ * two that drift.
  */
 function NodeInspector({
   node,
   prereqCount,
-  missionXp,
   canEdit,
-  editing,
   onStartEdit,
-  onCancelEdit,
-  onSave,
 }: {
   node: SkillNode | null;
   prereqCount: number;
-  /** Total XP of this node's missions, or null when it has none. */
-  missionXp: number | null;
   canEdit: boolean;
-  editing: boolean;
   onStartEdit: () => void;
-  onCancelEdit: () => void;
-  onSave: (patch: NodePatch) => void;
 }) {
   if (!node) {
     return (
@@ -2220,12 +2133,6 @@ function NodeInspector({
           drawn exactly as a student receives it.
         </LText>
       </View>
-    );
-  }
-
-  if (editing) {
-    return (
-      <NodeEditor node={node} missionXp={missionXp} onSave={onSave} onCancel={onCancelEdit} />
     );
   }
 

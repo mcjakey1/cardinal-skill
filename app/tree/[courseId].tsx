@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   Pressable,
-  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -45,16 +44,10 @@ import { PRIVATE_PRACTICE_DISTRIBUTION } from '@/features/skilltree/courseDistri
 import { archiveSharedCourse, publishCommunityCourse, type CommunityVisibility } from '@/features/skilltree/courseCatalog';
 import { aliveSubgraph } from '@/features/skilltree/chartDraft';
 import { nodeProgress, rollUpProgress } from '@/features/skilltree/rollup';
-import {
-  finalizeMissionDrafts,
-  missionDraftTotal,
-  toMissionDrafts,
-  type MissionDraft,
-} from '@/features/skilltree/missionEditing';
 import { displayStatus } from '@/features/skilltree/nodeVisualState';
-import { PIXEL_ICON_KEYS, resolvePixelIcon, type PixelIconKey } from '@/features/skilltree/pixelIcons';
+import { NodeEditorPanel } from '@/features/skilltree/NodeEditorPanel';
+import { linkRefusal, type NodeEdit } from '@/features/skilltree/nodeEditing';
 import type { Mission, SkillNode, Tree } from '@/features/skilltree/types';
-import { validateGraph } from '@/features/skilltree/validation';
 import { DOCK_WIDTH, useWide } from '@/lib/layout';
 import { useNodeLayout, type NodePosition } from '@/lib/nodeLayout';
 import { purgeCourseCache, useEditedTree } from '@/lib/editedTree';
@@ -73,7 +66,6 @@ import { Backdrop } from '@/ui/Backdrop';
 import { Window } from '@/ui/Window';
 import { StudyCompanionDrawer } from '@/ui/StudyCompanionDrawer';
 import { StableScrollView } from '@/ui/StableScrollView';
-import { SubjectPixelIcon } from '@/ui/SubjectPixelIcon';
 import { usePixelTransition } from '@/ui/PixelTransition';
 import { CourseSelector } from '@/ui/CourseSelector';
 import {
@@ -84,7 +76,6 @@ import {
   PixelInput,
   PixelText,
   StatusTag,
-  Toggle,
   bevelStyle,
 } from '@/ui/pixel';
 
@@ -134,13 +125,6 @@ export default function TreeScreen() {
   const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [editingProperties, setEditingProperties] = useState(false);
-  const [editTitle, setEditTitle] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [editXp, setEditXp] = useState('50');
-  const [editIcon, setEditIcon] = useState<PixelIconKey>('pixel_spellbook');
-  const [editUniversal, setEditUniversal] = useState(false);
-  const [editMissions, setEditMissions] = useState<MissionDraft[]>([]);
-  const [editUsesMissionRewards, setEditUsesMissionRewards] = useState(false);
   const claimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handledLocateRequest = useRef<string | null>(null);
@@ -470,15 +454,6 @@ export default function TreeScreen() {
     status,
     selected ? nodeProgress(selected, missions, completedMissionIds, isMastered) : 0,
   );
-  const previewNodeTheme = detailStatus === 'mastered'
-    ? theme.nodeCompleted
-    : detailStatus === 'locked'
-      ? theme.nodeLocked
-      : theme.nodeActive;
-  const editMissionTotal = missionDraftTotal(editMissions);
-  const editNodeTotal = editUsesMissionRewards
-    ? editMissionTotal
-    : Math.max(0, Number.parseInt(editXp, 10) || 0);
 
   // Every prerequisite, not just the unmet ones. Seeing "2 of 3 mastered" while
   // still locked tells a student how close they are; a list that only appears
@@ -526,17 +501,13 @@ export default function TreeScreen() {
   const selectNode = async (node: SkillNode) => {
     if (editMode && linkMode) {
       if (!linkSourceId) return;
-      if (linkSourceId === node.id) {
-        showLinkNotice('Cannot link a node to itself');
+      const refusal = linkRefusal(sourceTree?.nodes ?? [], tree.prereqs, linkSourceId, node.id);
+      if (refusal) {
+        showLinkNotice(refusal);
         return;
       }
       const edge = { prereqId: linkSourceId, nodeId: node.id };
       const prereqs = [...tree.prereqs.filter((item) => !(item.prereqId === edge.prereqId && item.nodeId === edge.nodeId)), edge];
-      const check = validateGraph(sourceTree?.nodes ?? [], prereqs);
-      if (!check.isValid) {
-        showLinkNotice(check.errors[0]?.message ?? 'That link would make the chart invalid.');
-        return;
-      }
       await persistEdit({ nodes: sourceTree?.nodes ?? [], prereqs });
       AccessibilityInfo.announceForAccessibility(`Connected ${sourceTree?.nodes.find((item) => item.id === linkSourceId)?.title ?? 'source'} to ${node.title}.`);
       setLinkNotice('Nodes connected');
@@ -587,13 +558,6 @@ export default function TreeScreen() {
     await persistEdit({ ...sourceTree, nodes: [...sourceTree.nodes, node] });
     setSelectedId(id);
     setEditingProperties(true);
-    setEditTitle(node.title);
-    setEditDescription(node.description);
-    setEditXp(String(node.xpReward));
-    setEditIcon(resolvePixelIcon(node));
-    setEditUniversal(false);
-    setEditMissions([]);
-    setEditUsesMissionRewards(false);
   };
 
   const deleteSelectedNode = async () => {
@@ -608,63 +572,45 @@ export default function TreeScreen() {
     setSelectedId(null);
   };
 
-  const beginPropertyEdit = () => {
-    if (!original) return;
-    setEditTitle(original.title);
-    setEditDescription(original.description);
-    setEditXp(String(original.xpReward));
-    setEditIcon(resolvePixelIcon(original));
-    setEditUniversal(Boolean(original.trackId));
-    const ownMissions = missions.filter((mission) => mission.skillId === original.id);
-    setEditMissions(toMissionDrafts(ownMissions));
-    setEditUsesMissionRewards(ownMissions.length > 0);
-    setEditingProperties(true);
-  };
-
-  const saveProperties = async () => {
+  /**
+   * The shared editor's half of the persistence contract, device-local side.
+   *
+   * A Playground edit is this student's arrangement of someone else's chart, so
+   * it lands in the AsyncStorage snapshot and nowhere else. The instructor
+   * surface hands the same `NodeEdit` to its publish draft instead.
+   */
+  const saveNodeEdit = async (next: NodeEdit) => {
     if (!sourceTree || !original) return;
-    const nextOwnMissions = finalizeMissionDrafts(editMissions);
-    const missionTotal = nextOwnMissions.reduce((total, mission) => total + mission.xpReward, 0);
-    const xpReward = editUsesMissionRewards
-      ? missionTotal
-      : Math.max(0, Math.min(10000, Number.parseInt(editXp, 10) || 0));
     const nextNodes = sourceTree.nodes.map((node) => node.id === original.id
       ? {
           ...node,
-          title: editTitle.trim() || 'Untitled skill',
-          titleOverride: editTitle.trim() || 'Untitled skill',
-          description: editDescription.trim(),
-          xpReward,
-          iconKey: editIcon,
-          trackId: editUniversal ? (node.trackId ?? `local-universal-${node.id}`) : null,
-          courseId: editUniversal ? null : courseId,
+          // The typed name is an override; the syllabus title stays underneath
+          // so clearing the override falls back to it rather than to nothing.
+          titleOverride: next.titleOverride,
+          description: next.description,
+          kind: next.kind,
+          xpReward: next.xpReward,
+          iconKey: next.iconKey,
+          trackId: next.universal ? (node.trackId ?? `local-universal-${node.id}`) : null,
+          courseId: next.universal ? null : courseId,
         }
       : node);
     const nextMissions = [
       ...missions.filter((mission) => mission.skillId !== original.id),
-      ...nextOwnMissions,
+      ...next.missions,
     ];
     await persistEdit({ ...sourceTree, nodes: nextNodes }, nextMissions);
     setEditingProperties(false);
   };
 
-  const addMission = () => {
-    if (!original) return;
-    const mission: MissionDraft = {
-      id: `local-mission-${Date.now()}-${editMissions.length}`,
-      skillId: original.id,
-      title: 'New mission',
-      description: '',
-      kind: original.kind,
-      xpReward: '0',
-      estimatedMinutes: 30,
-    };
-    setEditUsesMissionRewards(true);
-    setEditMissions((current) => [...current, mission]);
-  };
-
-  const removeMission = (missionId: string) => {
-    setEditMissions((current) => current.filter((mission) => mission.id !== missionId));
+  const unlinkPrereq = async (prereqId: string) => {
+    if (!sourceTree || !original) return;
+    await persistEdit({
+      ...sourceTree,
+      prereqs: sourceTree.prereqs.filter(
+        (edge) => !(edge.nodeId === original.id && edge.prereqId === prereqId),
+      ),
+    });
   };
 
   const resetProgress = async (targetCourseId: string) => {
@@ -930,101 +876,24 @@ export default function TreeScreen() {
           <StableScrollView style={wide ? styles.sheetScrollWide : styles.sheetScroll}>
             {editMode ? (
               <View style={styles.editProperties}>
-                {editingProperties ? (
-                  <Animated.View
-                    entering={prefs.motionOff ? undefined : SlideInRight.duration(240).easing(Easing.out(Easing.cubic))}
-                    exiting={prefs.motionOff ? undefined : SlideOutRight.duration(200).easing(Easing.in(Easing.cubic))}
-                    style={styles.editForm}
-                  >
-                    <PixelInput label="Node title" value={editTitle} onChangeText={setEditTitle} />
-                    <PixelInput label="Topic / description" value={editDescription} onChangeText={setEditDescription} multiline />
-                    {editUsesMissionRewards ? (
-                      <Field label="NODE TOTAL XP" value={`${editNodeTotal} XP`} detail="SUM OF MISSION REWARDS" />
-                    ) : (
-                      <PixelInput label="Node total XP" value={editXp} onChangeText={setEditXp} keyboardType="number-pad" />
-                    )}
-                    <Toggle value={editUniversal} onChange={setEditUniversal} label="Universal skill" />
-                    <PixelText variant="micro" colour={t.info}>PIXEL ICON</PixelText>
-                    <ScrollView horizontal contentContainerStyle={styles.iconChoices} showsHorizontalScrollIndicator={false}>
-                      {PIXEL_ICON_KEYS.map((icon) => (
-                        <Pressable
-                          key={icon}
-                          onPress={() => setEditIcon(icon)}
-                          accessibilityRole="radio"
-                          accessibilityLabel={icon.replaceAll('_', ' ')}
-                          accessibilityState={{ checked: editIcon === icon }}
-                          style={({ pressed }) => [
-                            styles.iconChoice,
-                            bevelStyle(t, editIcon === icon ? 'brand' : 'panel', pressed || editIcon === icon ? 'inset' : 'raised'),
-                          ]}
-                        >
-                          <SubjectPixelIcon icon={icon} size={20} colour={editIcon === icon ? t.brandInk : t.inkMuted} />
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                    <View style={[styles.livePreview, { backgroundColor: theme.surface, borderColor: previewNodeTheme.border }]}>
-                      <PixelText variant="micro" colour={theme.nodeCompleted.border}>LIVE PREVIEW</PixelText>
-                      <View style={styles.previewNodeRow}>
-                        <View style={[styles.previewNode, { backgroundColor: previewNodeTheme.background, borderColor: previewNodeTheme.border }]}>
-                          <SubjectPixelIcon icon={editIcon} colour={previewNodeTheme.icon} />
-                        </View>
-                        <View style={styles.grow}>
-                          <PixelText variant="label" colour={theme.textPrimary} numberOfLines={2}>{editTitle.trim() || 'Untitled skill'}</PixelText>
-                          <PixelText variant="micro" colour={theme.textMuted} numberOfLines={2}>{editDescription.trim() || 'No topic description yet.'}</PixelText>
-                        </View>
-                      </View>
-                      <View style={styles.previewMeta}>
-                        <StatusTag status={detailStatus} />
-                        <PixelText variant="micro" colour={theme.textSecondary}>{editUniversal ? 'UNIVERSAL SKILL' : 'COURSE SKILL'}</PixelText>
-                        <PixelText variant="micro" colour={theme.nodeCompleted.icon}>{editNodeTotal} XP</PixelText>
-                      </View>
-                    </View>
-                    <View style={styles.localMissionTools}>
-                      <View style={styles.rowBetween}>
-                        <PixelText variant="micro" colour={t.info}>MISSIONS &amp; REWARDS</PixelText>
-                        <PixelText variant="micro" colour={t.earnedText}>{editMissionTotal} XP</PixelText>
-                      </View>
-                      {editMissions.map((mission) => (
-                        <View key={mission.id} style={[styles.missionEditRow, { borderColor: theme.border }]}>
-                          <View style={styles.missionTitleEdit}>
-                            <PixelInput
-                              label="Mission title"
-                              value={mission.title}
-                              onChangeText={(title) => setEditMissions((current) => current.map((item) => (
-                                item.id === mission.id ? { ...item, title } : item
-                              )))}
-                            />
-                          </View>
-                          <View style={styles.missionXpEdit}>
-                            <PixelInput
-                              label="XP"
-                              value={mission.xpReward}
-                              keyboardType="number-pad"
-                              onChangeText={(xpReward) => setEditMissions((current) => current.map((item) => (
-                                item.id === mission.id ? { ...item, xpReward } : item
-                              )))}
-                            />
-                          </View>
-                          <Pressable
-                            onPress={() => removeMission(mission.id)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Delete ${mission.title}`}
-                            style={({ pressed }) => [
-                              styles.missionDelete,
-                              bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
-                            ]}
-                          >
-                            <PixelIcon name="close" size={12} colour={t.alarm} />
-                          </Pressable>
-                        </View>
-                      ))}
-                      <PixelButton tone="panel" label="+ Add mission" onPress={addMission} />
-                    </View>
-                    <PixelButton label="Save properties" onPress={saveProperties} />
-                    <PixelButton tone="panel" label="Cancel editing" onPress={() => setEditingProperties(false)} />
-                  </Animated.View>
+                {editingProperties && original ? (
+                  <NodeEditorPanel
+                    key={original.id}
+                    node={original}
+                    missions={missions.filter((mission) => mission.skillId === original.id)}
+                    prereqs={prereqNodes}
+                    onUnlink={unlinkPrereq}
+                    status={detailStatus}
+                    reduceMotion={prefs.motionOff}
+                    onSave={saveNodeEdit}
+                    onCancel={() => setEditingProperties(false)}
+                  />
                 ) : (
-                  <PixelButton tone="panel" label="Rename / edit properties" onPress={beginPropertyEdit} />
+                  <PixelButton
+                    tone="panel"
+                    label="Rename / edit properties"
+                    onPress={() => setEditingProperties(true)}
+                  />
                 )}
               </View>
             ) : null}
@@ -1753,23 +1622,6 @@ const styles = StyleSheet.create({
   headerTags: { gap: space.xs },
   naming: { gap: space.xs, marginBottom: space.cell },
   editProperties: { gap: space.cell, marginBottom: space.md },
-  editForm: { gap: space.cell },
-  localMissionTools: { gap: space.xs },
-  missionEditRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: space.xs,
-    borderWidth: bevel,
-    padding: space.xs,
-  },
-  missionTitleEdit: { minWidth: 0, flex: 1 },
-  missionXpEdit: { width: 88 },
-  missionDelete: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
-  iconChoices: { gap: space.xs, paddingVertical: space.xs },
-  iconChoice: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
-  livePreview: { borderWidth: bevel, padding: space.cell, gap: space.cell },
-  previewNodeRow: { flexDirection: 'row', alignItems: 'center', gap: space.cell },
-  previewNode: { width: touch, height: touch, borderWidth: bevel, alignItems: 'center', justifyContent: 'center' },
   previewMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
   detailBadge: { minHeight: 28, borderWidth: bevel, justifyContent: 'center', paddingHorizontal: space.cell },
   renameToggle: { minHeight: touch, justifyContent: 'center', paddingLeft: space.md },

@@ -16,6 +16,7 @@
  *   finish review, the verdict, and DESIGN.md.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DotGothic16_400Regular, useFonts } from '@expo-google-fonts/dotgothic16';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack, usePathname, useRouter } from 'expo-router';
@@ -48,7 +49,19 @@ SplashScreen.preventAutoHideAsync().catch(() => {
  * rail of its own (`src/theme/lms.ts`). Two navigations on one screen is one
  * navigation too many, so the pixel bar stays off it.
  */
-const BARE_ROUTES = ['/', '/upload', '/author', '/instructor'];
+const BARE_ROUTES = ['/', '/upload', '/instructor'];
+
+/**
+ * Keys left behind by screens that no longer exist.
+ *
+ * `cardinal.author.v1` held the standalone by-hand builder's node rows. That
+ * screen created a second, unrelated course instead of editing the one it was
+ * opened from, so it is gone and the chart canvas does the job; its draft would
+ * otherwise sit on every device that ever opened it with nothing left to read
+ * it. Removing a key that is already absent is a no-op, so this can stay until
+ * the install base has turned over.
+ */
+const RETIRED_KEYS = ['cardinal.author.v1'];
 
 export default function RootLayout() {
   const [queryClient] = useState(() => new QueryClient({
@@ -100,6 +113,10 @@ function Shell({ fontsReady }: { fontsReady: boolean }) {
   useEffect(() => {
     if (fontsReady && themeReady) SplashScreen.hideAsync().catch(() => {});
   }, [fontsReady, themeReady]);
+
+  useEffect(() => {
+    AsyncStorage.multiRemove(RETIRED_KEYS).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!authReady) return;

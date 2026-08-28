@@ -723,9 +723,11 @@ function layoutWithDagre(nodes: ParsedNode[]): LaidOutNode[] {
     const position = graph.node(node.key);
     return {
       ...node,
-      // Semantic tiers may contain prerequisite chains of their own. A
-      // topological sub-rank keeps those same-tier edges flowing left-to-right.
-      x: (rankByKey.get(node.key) ?? 0) * (nodeWidth + rankSep),
+      // Dagre's x and y must stay paired. Replacing only x with a simpler rank
+      // can collapse nodes that Dagre separated into different horizontal lanes.
+      x: Number.isFinite(position?.x)
+        ? position.x
+        : (rankByKey.get(node.key) ?? 0) * (nodeWidth + rankSep),
       y: Number.isFinite(position?.y) ? position.y : sort_order * 140,
       sort_order,
     };

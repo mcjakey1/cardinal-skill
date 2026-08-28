@@ -20,6 +20,35 @@ export interface LayoutConfig {
 
 export const DEFAULT_LAYOUT: LayoutConfig = { rankSep: 210, nodeSep: 120 };
 
+export interface NodeFootprint {
+  /** Minimum horizontal centre-to-centre distance in tree coordinates. */
+  width: number;
+  /** Minimum vertical centre-to-centre distance in tree coordinates. */
+  height: number;
+}
+
+/** The chart's 132dp label and cell stack converted back to tree coordinates. */
+export const DEFAULT_NODE_FOOTPRINT: NodeFootprint = { width: 148, height: 80 };
+
+/** Whether two finite node footprints occupy the same rendered space. */
+export function hasOverlappingNodePositions(
+  nodes: readonly Pick<SkillNode, 'x' | 'y'>[],
+  footprint: NodeFootprint = DEFAULT_NODE_FOOTPRINT,
+): boolean {
+  for (let left = 0; left < nodes.length; left += 1) {
+    const a = nodes[left]!;
+    if (!Number.isFinite(a.x) || !Number.isFinite(a.y)) return true;
+    for (let right = left + 1; right < nodes.length; right += 1) {
+      const b = nodes[right]!;
+      if (!Number.isFinite(b.x) || !Number.isFinite(b.y)) return true;
+      if (Math.abs(a.x - b.x) < footprint.width && Math.abs(a.y - b.y) < footprint.height) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export interface LayoutResult {
   nodes: SkillNode[];
 }

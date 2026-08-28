@@ -50,7 +50,7 @@ import {
 } from './chartViewport';
 import { deriveStatuses, nextQuests } from './progression';
 import type { Prereq, SkillNode, Tree } from './types';
-import { autoLayout } from './autoLayout';
+import { autoLayout, hasOverlappingNodePositions } from './autoLayout';
 import { displayStatus, type DisplayStatus } from './nodeVisualState';
 import { currentFocusNodes } from './chartFocus';
 import { miniMapGeometry, projectToMiniMap } from './minimap';
@@ -216,9 +216,7 @@ export function SkillTree(props: Props) {
   const layoutKey = `${props.viewportKey}:${props.tree.nodes.length}`;
   const treeRef = useRef(props.tree);
   treeRef.current = props.tree;
-  const needsLayout = props.tree.nodes.some(
-    (node) => !Number.isFinite(node.x) || !Number.isFinite(node.y),
-  );
+  const needsLayout = hasOverlappingNodePositions(props.tree.nodes);
   const [cachedLayout, setCachedLayout] = useState<CachedGraphLayout | null>(
     () => graphLayoutCache.get(layoutKey) ?? null,
   );

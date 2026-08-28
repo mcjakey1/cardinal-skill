@@ -2,7 +2,7 @@
 import Dagre, { layout as runDagreLayout } from 'npm:@dagrejs/dagre@3.1.0';
 import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
 import { parseJsonObjectText } from '../_shared/bai.ts';
-import { normalizeTieredCourseDag } from '../_shared/courseGraph.ts';
+import { normalizeTieredCourseDag, placeSynthesisAtCourseEnd } from '../_shared/courseGraph.ts';
 import {
   isMeaningfulSyllabusTopic,
   MAX_PARSED_SKILLS,
@@ -594,7 +594,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
   }
 
   const rawNodeByKey = new Map<string, ParsedCourseGraphNode>();
-  const nodes = normalizeTieredCourseDag(coveredNodes.map((node, index): ParsedNode => {
+  const nodes = normalizeTieredCourseDag(placeSynthesisAtCourseEnd(coveredNodes.map((node, index): ParsedNode => {
     const key = normalizedKeys[index]!;
     rawNodeByKey.set(key, node);
     const title = compactLabel(node.label);
@@ -634,7 +634,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
         difficulty: missionScale.difficulty.toLowerCase() as ParsedMission['difficulty'],
       }],
     };
-  })).map((node) => {
+  }))).map((node) => {
     const rawNode = rawNodeByKey.get(node.key)!;
     const mission = node.missions[0]!;
     const difficulty = missionDifficultyForTier(

@@ -63,6 +63,7 @@ Four-tier topology:
 - Avoid a single-file railroad longer than 3 nodes. Develop independent subject areas as parallel tracks, and develop each major track through 2 to 3 progressive competencies before a supported convergence.
 - Do not invent a shared prerequisite or arbitrary middle bottleneck merely to connect unrelated tracks.
 - Every non-root node needs at least one earlier prerequisite. Every Tier 1 to Tier 3 node must unlock a later competency. Tier 4 nodes may be terminal.
+- A node explicitly named as synthesis, capstone, comprehensive review, or cumulative integration must be Tier 4, appear after all ordinary competencies, depend on the terminal competency of every major track, and have no outgoing edge to an ordinary topic.
 - Edges must be unique, acyclic, non-self-referential, and point from an earlier node to a later node. Omit transitive bypasses: if A unlocks B and B unlocks C, omit A to C.
 - Keep related nodes adjacent in the nodes array. Connect within the same conceptual track or a neighboring track, and order converging parents beside one another to reduce crossings.
 - Return exactly one connected course graph. Do not split weeks, modules, or parallel tracks into separate course entities.

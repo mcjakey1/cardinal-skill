@@ -7,6 +7,61 @@ export interface TieredCourseGraphNode extends CourseGraphNode {
   tier: number;
 }
 
+export interface SemanticTieredCourseGraphNode extends TieredCourseGraphNode {
+  title: unknown;
+  description?: unknown;
+}
+
+/**
+ * A named synthesis/capstone is a convergence, never an early prerequisite.
+ * Put it after the academic tracks and make every non-synthesis terminal feed
+ * it. This repairs a common model inversion without guessing that every hard
+ * or Tier 4 topic is cumulative.
+ */
+export function placeSynthesisAtCourseEnd<T extends SemanticTieredCourseGraphNode>(
+  nodes: readonly T[],
+): T[] {
+  const synthesisKeys = new Set(nodes
+    .filter(isSynthesisNode)
+    .map((node) => node.key));
+  if (synthesisKeys.size === 0) {
+    return nodes.map((node) => ({ ...node, prereq_keys: [...node.prereq_keys] }));
+  }
+
+  const ordinary = nodes
+    .filter((node) => !synthesisKeys.has(node.key))
+    .map((node) => ({
+      ...node,
+      prereq_keys: node.prereq_keys.filter((key) => !synthesisKeys.has(key)),
+    }));
+  const ordinaryKeys = new Set(ordinary.map((node) => node.key));
+  const unlocksOrdinary = new Set<string>();
+  for (const node of ordinary) {
+    for (const prerequisite of node.prereq_keys) {
+      if (ordinaryKeys.has(prerequisite)) unlocksOrdinary.add(prerequisite);
+    }
+  }
+  const terminalKeys = ordinary
+    .filter((node) => !unlocksOrdinary.has(node.key))
+    .map((node) => node.key);
+
+  const synthesis = nodes
+    .filter((node) => synthesisKeys.has(node.key))
+    .map((node) => ({
+      ...node,
+      tier: 4,
+      prereq_keys: [...terminalKeys],
+    }));
+  return [...ordinary, ...synthesis];
+}
+
+function isSynthesisNode(node: SemanticTieredCourseGraphNode): boolean {
+  const content = `${typeof node.title === 'string' ? node.title : ''} ${
+    typeof node.description === 'string' ? node.description : ''
+  }`.toLowerCase();
+  return /\b(?:synthesis|capstone)\b|\b(?:comprehensive|cumulative|integrative)\s+(?:course\s+)?(?:review|assessment|project)\b/.test(content);
+}
+
 /**
  * Repair recoverable model topology mistakes before persistence.
  *

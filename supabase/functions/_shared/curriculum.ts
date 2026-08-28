@@ -247,6 +247,60 @@ export interface SyllabusCoverageNode {
   mission?: { title?: unknown; description?: unknown } | null;
 }
 
+/**
+ * Preserve dense sibling topics that the model grouped into one competency but
+ * failed to repeat in its prose. A topic can only join a node that explicitly
+ * covers another academic topic from the same extracted week, so unrelated
+ * omissions still fail the validator.
+ */
+export function reconcileGroupedSyllabusCoverage<T extends SyllabusCoverageNode>(
+  nodes: readonly T[],
+  coverage: readonly AcademicCoverageRow[],
+): T[] {
+  const missing = new Map<string, { label: string; weeks: Set<number> }>();
+  for (const row of coverage) {
+    for (const topic of row.topics) {
+      const key = comparableTopic(topic);
+      if (!key || !isMeaningfulSyllabusTopic(topic) || topicCoverageCount(nodes, key) > 0) continue;
+      const entry = missing.get(key) ?? { label: topic.trim(), weeks: new Set<number>() };
+      entry.weeks.add(row.week);
+      missing.set(key, entry);
+    }
+  }
+  if (missing.size === 0) return [...nodes];
+
+  const assignments = new Map<number, string[]>();
+  for (const [missingKey, entry] of missing) {
+    const siblingKeys = new Set(coverage
+      .filter((row) => entry.weeks.has(row.week))
+      .flatMap((row) => row.topics)
+      .map(comparableTopic)
+      .filter((key) => key && key !== missingKey));
+    let bestIndex = -1;
+    let bestScore = 0;
+    nodes.forEach((node, index) => {
+      const score = [...siblingKeys].filter((key) => nodeCoversTopic(node, key)).length;
+      if (score > bestScore) {
+        bestIndex = index;
+        bestScore = score;
+      }
+    });
+    if (bestIndex < 0) continue;
+    assignments.set(bestIndex, [...(assignments.get(bestIndex) ?? []), entry.label]);
+  }
+
+  return nodes.map((node, index) => {
+    const labels = assignments.get(index);
+    if (!labels?.length) return node;
+    const description = typeof node.description === 'string' ? node.description.trim() : '';
+    const separator = description && !/[.!?]$/.test(description) ? '.' : '';
+    return {
+      ...node,
+      description: `${description}${separator}${description ? ' ' : ''}Related syllabus coverage: ${labels.join('; ')}.`,
+    };
+  });
+}
+
 function nodeCoversTopic(node: SyllabusCoverageNode, topicKey: string): boolean {
   if (comparableTopic(node.unit) === topicKey) return true;
   const expectedTokens = meaningfulTopicTokens(topicKey);

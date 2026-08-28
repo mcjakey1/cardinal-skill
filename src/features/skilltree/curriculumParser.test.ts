@@ -12,6 +12,7 @@ import {
   requireUniqueParserNodeIds,
   repairNodeTarget,
   repairGenerationSeed,
+  reconcileGroupedSyllabusCoverage,
   scaleMission,
   syllabusGraphRepairPrompt,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
@@ -161,6 +162,36 @@ test('an indirect-proofs node covers the combined contraposition and contradicti
     unit: 'Proof Methods',
     label: 'Proof Strategies',
   }], [{ week: 4, topics: ['Proof by Contraposition & Contradiction'] }]), /omitted syllabus coverage/i);
+});
+
+test('omitted dense subtopics reconcile only within their syllabus week', () => {
+  const nodes = [
+    { unit: 'Set Notation & Operations', description: 'Apply operations to finite sets.' },
+    { unit: 'Basic Counting Principles', description: 'Use sum and product rules.' },
+  ];
+  const coverage = [
+    { week: 5, topics: ['Set Notation & Operations', 'Venn Diagrams', 'Cartesian Products'] },
+    { week: 9, topics: ['Basic Counting Principles', 'Combinations'] },
+  ];
+  const reconciled = reconcileGroupedSyllabusCoverage(nodes, coverage);
+
+  assert.match(String(reconciled[0]?.description), /Venn Diagrams; Cartesian Products/);
+  assert.match(String(reconciled[1]?.description), /Combinations/);
+  assert.doesNotThrow(() => requireSyllabusCoverage(reconciled, coverage));
+  assert.equal(nodes[0]?.description, 'Apply operations to finite sets.');
+});
+
+test('an unrelated omission is never reconciled across syllabus weeks', () => {
+  const coverage = [
+    { week: 5, topics: ['Venn Diagrams'] },
+    { week: 9, topics: ['Basic Counting Principles'] },
+  ];
+  const reconciled = reconcileGroupedSyllabusCoverage(
+    [{ unit: 'Basic Counting Principles' }],
+    coverage,
+  );
+
+  assert.throws(() => requireSyllabusCoverage(reconciled, coverage), /Venn Diagrams/i);
 });
 
 test('duplicate provider node ids fail before edge normalization', () => {

@@ -14,6 +14,7 @@ import {
   expandSharedLeadTopic,
   repairGenerationSeed,
   repairNodeTarget,
+  reconcileGroupedSyllabusCoverage,
   scaleMission,
   syllabusGraphRepairPrompt,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
@@ -569,8 +570,8 @@ function isAssessmentOnlyTopic(topic: string): boolean {
 function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): ParsedTree {
   if (!Array.isArray(input.nodes)) throw new Error('The parser must return academic skills as an array.');
   requireSyllabusScaledSkillCount(input.nodes, outline.estimatedWeeks);
-  requireSyllabusCoverage(input.nodes, outline.coverage);
-  const coveredNodes = input.nodes;
+  const coveredNodes = reconcileGroupedSyllabusCoverage(input.nodes, outline.coverage);
+  requireSyllabusCoverage(coveredNodes, outline.coverage);
   requireUniqueParserNodeIds(coveredNodes);
   const usedKeys = new Set<string>();
   const keyByInputId = new Map<string, string>();

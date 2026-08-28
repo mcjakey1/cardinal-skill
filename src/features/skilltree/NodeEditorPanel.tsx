@@ -319,6 +319,7 @@ export function NodeEditorPanel({
         <PixelButton
           tone="panel"
           label={node.questTitle ? 'Use the generated name' : 'Use the syllabus title'}
+          disabled={!canSave}
           onPress={() => void onSave({ ...nodeEditResult(form, node), titleOverride: null })}
         />
       ) : null}

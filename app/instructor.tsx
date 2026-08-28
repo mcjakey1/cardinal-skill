@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SkillTree } from '@/features/skilltree/SkillTree';
 import { NodeEditorPanel } from '@/features/skilltree/NodeEditorPanel';
 import { linkRefusal, mintId, missionsEqual, type NodeEdit } from '@/features/skilltree/nodeEditing';
-import { MIN_COHORT, STALE_DAYS } from '@/features/skilltree/cohort';
+import { MIN_COHORT, STALE_DAYS, activityFlag } from '@/features/skilltree/cohort';
 import {
   mergeRoster,
   rosterFlag,
@@ -24,7 +24,19 @@ import {
   type RosterEntry,
   type RosterView,
 } from '@/features/skilltree/roster';
+import {
+  bottlenecks,
+  classSpread,
+  clearedUpperBounds,
+  studentsToWatch,
+  type Bottleneck,
+  type GraphEdge,
+  type GraphNode,
+  type ProgressRow,
+  type WatchRow,
+} from '@/features/skilltree/classInsights';
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
+import { findMockCourse } from '@/features/skilltree/mockCourses';
 import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
 import { validateGraph } from '@/features/skilltree/validation';
@@ -126,82 +138,46 @@ interface CourseRow {
 
 // --------------------------------------------------------------- cohort query
 
-interface NodeCompletion {
-  nodeId: string;
-  title: string;
-  completedCount: number;
-}
-
-type CohortReadout =
+type MissionReach =
   | { kind: 'no-session' }
-  | { kind: 'suppressed' }
-  | {
-      kind: 'ready';
-      courseTitle: string;
-      students: number;
-      missionsCompleted: number;
-      avgPerStudent: number;
-      nodes: NodeCompletion[];
-    };
+  | { kind: 'fixture' }
+  /** Mission id → students who completed it. Missions under the floor are absent. */
+  | { kind: 'ready'; completions: [string, number][] };
 
-async function fetchCohortReadout(courseId: string): Promise<CohortReadout> {
-  // Both RPCs are security-definer functions keyed on auth.uid(), which cannot
-  // tell "nobody signed in" from "not this course's owner" from "too few
-  // students" apart — all three come back as zero rows. Asking first keeps
-  // "suppressed" honest for the one case it actually names.
+/**
+ * How many students have finished each mission on a course.
+ *
+ * The only server read Class insights makes of its own; the roster and the
+ * chart come from the queries the Students and Skill tree tabs already run, so
+ * opening this tab costs one RPC and not four.
+ *
+ * `course_mission_summary` is a security-definer function keyed on `auth.uid()`,
+ * and it cannot tell "nobody signed in" from "not this course's owner" from
+ * "every mission is under the five-student floor" — all three arrive as zero
+ * rows. Asking for the session first is what keeps the empty states apart on
+ * screen.
+ */
+async function fetchMissionReach(courseId: string): Promise<MissionReach> {
+  // The example chart and the sample courses have ids like 'demo', and the RPC
+  // parameter is a uuid: Postgres rejects the cast with 22P02 and the screen
+  // shows a database error for a course that was never in the database. The
+  // roster hit the identical bug. Fixtures have no class, so do not ask.
+  if (courseId === DEMO_COURSE_ID || findMockCourse(courseId)) return { kind: 'fixture' };
+
   const { data: auth } = await supabase.auth.getUser();
   if (!auth.user) return { kind: 'no-session' };
 
-  const [cohortRes, missionRes, courseRes, nodesRes] = await Promise.all([
-    supabase.rpc('course_cohort_summary', { p_course_id: courseId }),
-    supabase.rpc('course_mission_summary', { p_course_id: courseId }),
-    supabase.from('courses').select('title').eq('id', courseId).maybeSingle(),
-    supabase.from('skill_nodes').select('id, title, quest_title, title_override').eq('course_id', courseId),
-  ]);
-
-  // These two carry the actual figures, so their errors are not tolerated —
-  // an instructor sees the real failure rather than a quietly empty screen.
-  if (cohortRes.error) throw cohortRes.error;
-  if (missionRes.error) throw missionRes.error;
-
-  const row = cohortRes.data?.[0];
-  if (!row) return { kind: 'suppressed' };
-
-  // Per-mission rows rolled up to per-node, matching what the screen asks for.
-  // A mission missing here is not an error: its own count can be below five
-  // even while the class as a whole clears the floor.
-  //
-  // Names go through the same precedence every other screen uses — override,
-  // then generated, then syllabus — via `resolveName` rather than the raw
-  // `title` column, or this would be the one screen showing a syllabus title
-  // where the rest of the app shows the quest name.
-  const titleByNode = new Map<string, string>(
-    (nodesRes.data ?? []).map((n) => [
-      n.id,
-      resolveName({ override: n.title_override, generated: n.quest_title, syllabus: n.title }).text,
-    ]),
-  );
-  const totals = new Map<string, number>();
-  for (const m of missionRes.data ?? []) {
-    totals.set(m.node_id, (totals.get(m.node_id) ?? 0) + m.completed_count);
-  }
-  const nodes = [...totals.entries()]
-    .map(([nodeId, completedCount]) => ({
-      nodeId,
-      title: titleByNode.get(nodeId) ?? nodeId,
-      completedCount,
-    }))
-    .sort((a, b) => b.completedCount - a.completedCount);
+  const { data, error } = await supabase.rpc('course_mission_summary', {
+    p_course_id: courseId,
+  });
+  if (error) throw error;
 
   return {
     kind: 'ready',
-    // Same fallback fetchTree uses: a course row RLS hides is still a cohort
-    // worth reading, just not one with a name to print.
-    courseTitle: courseRes.data?.title ?? 'Untitled course',
-    students: row.students,
-    missionsCompleted: row.missions_completed,
-    avgPerStudent: Number(row.avg_missions_per_student ?? 0),
-    nodes,
+    completions: (data ?? []).map((m: Record<string, unknown>) => [
+      String(m.mission_id),
+      Number(m.completed_count ?? 0),
+    ]),
   };
 }
 
@@ -294,26 +270,77 @@ const SAMPLE_ROSTER: RosterEntry[] = [
 ];
 
 /**
- * Invented figures, labelled as invented wherever they appear.
+ * An invented class, labelled as invented wherever it appears.
  *
- * Chosen to show the rule rather than just fill the layout: a sixth node in this
- * imaginary course has three completions and is deliberately absent from the
- * list, because three is under the five-student floor. That omission is the most
- * important thing this screen does, and it would be invisible in sample data
- * where every row happened to clear the threshold.
+ * Nobody can enrol on a course in this build, so every real course reads zero
+ * students and the page an instructor opens is a page of empty states. This is
+ * how the layout gets looked at at all.
+ *
+ * Chosen to exercise the rules rather than flatter them. The class has pulled
+ * apart into a stuck group and a finished group, so the split warning fires; two
+ * students have gone quiet and one never began; and "Sampling distributions" is
+ * under the five-student floor, so its figure is withheld rather than drawn as a
+ * zero. That withholding is the most important thing this screen does, and it
+ * would be invisible in sample data where every row cleared the threshold.
  */
-const SAMPLE_READOUT: Extract<CohortReadout, { kind: 'ready' }> = {
-  kind: 'ready',
-  courseTitle: 'Statistics 101 — sample data',
-  students: 24,
-  missionsCompleted: 187,
-  avgPerStudent: 7.8,
+/** Fixed so the sample class does not drift as the real clock moves. */
+const SAMPLE_NOW = new Date('2026-03-01T09:00:00.000Z');
+
+const daysBefore = (from: Date, days: number): string =>
+  new Date(from.getTime() - days * 86_400_000).toISOString();
+
+const SAMPLE_INSIGHTS: {
+  students: ProgressRow[];
+  nodes: GraphNode[];
+  prereqs: GraphEdge[];
+  cleared: [string, number][];
+} = {
+  students: [
+    ...Array.from({ length: 8 }, (_, i) => ({
+      userId: `sample-low-${i}`,
+      displayName: `Student ${i + 1}`,
+      mastered: i === 0 ? 0 : 1,
+      gradedNodes: 6,
+      progress: i === 0 ? 0 : 17,
+      lastActive: i === 0 ? null : daysBefore(SAMPLE_NOW, i < 3 ? 26 : 3),
+    })),
+    ...Array.from({ length: 2 }, (_, i) => ({
+      userId: `sample-mid-${i}`,
+      displayName: `Student ${i + 9}`,
+      mastered: 3,
+      gradedNodes: 6,
+      progress: 50,
+      lastActive: daysBefore(SAMPLE_NOW, 2),
+    })),
+    ...Array.from({ length: 10 }, (_, i) => ({
+      userId: `sample-high-${i}`,
+      displayName: `Student ${i + 11}`,
+      mastered: 6,
+      gradedNodes: 6,
+      progress: 100,
+      lastActive: daysBefore(SAMPLE_NOW, 1),
+    })),
+  ],
   nodes: [
-    { nodeId: 'sample-1', title: 'Describing data', completedCount: 22 },
-    { nodeId: 'sample-2', title: 'Probability basics', completedCount: 19 },
-    { nodeId: 'sample-3', title: 'Sampling distributions', completedCount: 14 },
-    { nodeId: 'sample-4', title: 'Confidence intervals', completedCount: 9 },
-    { nodeId: 'sample-5', title: 'Hypothesis testing', completedCount: 6 },
+    { id: 'sample-1', title: 'Describing data' },
+    { id: 'sample-2', title: 'Probability basics' },
+    { id: 'sample-3', title: 'Sampling distributions' },
+    { id: 'sample-4', title: 'Confidence intervals' },
+    { id: 'sample-5', title: 'Hypothesis testing' },
+    { id: 'sample-6', title: 'Reporting a result' },
+  ],
+  prereqs: [
+    { nodeId: 'sample-2', prereqId: 'sample-1' },
+    { nodeId: 'sample-3', prereqId: 'sample-2' },
+    { nodeId: 'sample-4', prereqId: 'sample-3' },
+    { nodeId: 'sample-5', prereqId: 'sample-3' },
+    { nodeId: 'sample-6', prereqId: 'sample-5' },
+  ],
+  cleared: [
+    ['sample-1', 19],
+    ['sample-2', 14],
+    // 'sample-3' is deliberately absent: under five, so withheld.
+    ['sample-4', 9],
   ],
 };
 
@@ -1840,41 +1867,127 @@ function initials(name: string): string {
 
 // ------------------------------------------------------------------ insights
 
+/**
+ * What this class needs from the instructor next week.
+ *
+ * The screen this replaced showed an average, a total, and a completion count
+ * per skill: three true numbers, none of which named anything to do. The rules
+ * behind what is here now, and the evidence for each, are in
+ * `src/features/skilltree/classInsights.ts` — including what was left out on
+ * purpose. There is no leaderboard, no XP panel and no per-student ranking, and
+ * that is a finding rather than an omission.
+ *
+ * Panels are ordered by what an instructor can act on soonest, not by how
+ * impressive the number is. Every one carries a line saying what it means and a
+ * line saying what to do, because a figure with no implied action is what made
+ * the old screen useless.
+ *
+ * Three reads feed it and only one is its own: the roster and the chart come
+ * from the queries the Students and Skill tree tabs already run, under the same
+ * keys, so this tab reuses their cache instead of asking again.
+ */
 function Insights({ course }: { course: CourseRow }) {
   const [sample, setSample] = useState(false);
-  const { data, error, isPending, refetch } = useQuery({
+  // Fixture courses have ids like 'demo' and no class behind them; every query
+  // below would either fail its uuid cast or return nothing.
+  const fixture = course.id === DEMO_COURSE_ID || Boolean(findMockCourse(course.id));
+
+  const roster = useQuery({
+    queryKey: ['instructor-roster', course.id],
+    queryFn: () => fetchRoster(course.id),
+    enabled: !fixture,
+  });
+  const tree = useQuery({
+    queryKey: ['instructor-tree', course.id],
+    queryFn: () => fetchTree(course.id),
+    enabled: !fixture,
+  });
+  const reach = useQuery({
     queryKey: ['instructor-cohort', course.id],
-    queryFn: () => fetchCohortReadout(course.id),
+    queryFn: () => fetchMissionReach(course.id),
+    enabled: !fixture,
   });
 
-  const readout = sample ? SAMPLE_READOUT : data;
+  // One clock for the whole render, so two panels cannot disagree about today.
+  const now = useMemo(() => new Date(), []);
+
+  const live = useMemo(() => {
+    // All three, or none. With the mission counts still in flight every node
+    // reads as withheld, and a panel that says "at least 20 students" for half a
+    // second before settling on nine has told the instructor something false.
+    if (roster.data?.kind !== 'ready' || !tree.data || reach.data?.kind !== 'ready') return null;
+    const nodes = tree.data.tree.nodes.filter((n) => !n.archived);
+    return {
+      now,
+      students: roster.data.rows,
+      nodes: nodes.map((n) => ({
+        id: n.id,
+        // The same name precedence every other screen uses — override, then
+        // generated, then syllabus. Reading `title` directly would make this the
+        // one screen showing a syllabus heading where the app shows a quest.
+        title: resolveName({
+          override: n.titleOverride,
+          generated: n.questTitle,
+          syllabus: n.title,
+        }).text,
+      })),
+      prereqs: tree.data.tree.prereqs,
+      cleared: clearedUpperBounds(tree.data.missions, new Map(reach.data.completions)),
+    };
+  }, [roster.data, tree.data, reach.data, now]);
+
+  const sampled = useMemo(
+    () => ({
+      now: SAMPLE_NOW,
+      students: SAMPLE_INSIGHTS.students,
+      nodes: SAMPLE_INSIGHTS.nodes,
+      prereqs: SAMPLE_INSIGHTS.prereqs,
+      cleared: new Map(SAMPLE_INSIGHTS.cleared),
+    }),
+    [],
+  );
+
+  const source = sample ? sampled : live;
 
   const toggle = (
     <LButton
-      label={sample ? 'Hide the sample figures' : 'Show sample figures'}
+      label={sample ? 'Hide the sample class' : 'Show me a sample class'}
       icon={sample ? 'eye-off' : 'eye'}
       onPress={() => setSample((on) => !on)}
     />
   );
 
+  const error = roster.error ?? tree.error ?? reach.error;
+  const pending = !sample && !fixture && (roster.isPending || tree.isPending || reach.isPending);
+  const noSession = roster.data?.kind === 'no-session' || reach.data?.kind === 'no-session';
+  const emptyClass = !sample && live !== null && live.students.length === 0;
+
   return (
     <>
-      {/* This screen used to claim that nobody could be identified from it. With
-          a roster one tab away that would now be a lie, so it says what the floor
-          actually still does: it stops an average being computed over a group too
-          small to be an average. */}
       <PageHead
         title="Class insights"
-        lede={`Where ${course.title} is as a whole. Averages stay hidden below ${MIN_COHORT} students, because a figure over two people is not an average. For one student's own progress, open Students.`}
+        lede={`What ${course.title} needs from you next week. Each panel says what it means and what to do about it. Anything worked out over a group smaller than ${MIN_COHORT} students stays hidden, because a figure over a handful of people points at those people.`}
       />
 
       {sample ? (
-        <Notice tone="attention" title="Sample figures — every number below is made up">
-          No database was read, no class exists and nobody is signed in. This is the layout only.
+        <Notice tone="attention" title="Sample class — every student and number below is made up">
+          No database was read and nobody is signed in. This is the layout, filled with an invented
+          class of twenty chosen to show the panels working.
         </Notice>
       ) : null}
 
-      {!sample && isPending ? (
+      {!sample && fixture ? (
+        <>
+          <Notice title="The example chart has no class">
+            {DEMO_COURSE_TITLE} is a sample chart for looking at, not a course anybody is enrolled
+            on, so there is nothing to measure. Open one of your own courses, or look at a sample
+            class below.
+          </Notice>
+          {toggle}
+        </>
+      ) : null}
+
+      {pending ? (
         <Panel>
           <View style={styles.panelBody}>
             <Skeleton width="55%" />
@@ -1884,88 +1997,343 @@ function Insights({ course }: { course: CourseRow }) {
         </Panel>
       ) : null}
 
-      {!sample && error ? (
+      {!sample && !fixture && error ? (
         <>
-          <Notice tone="error" title="The class summary did not load">
-            {error instanceof Error ? error.message : 'The summary could not be read.'}
+          <Notice tone="error" title="The class figures did not load">
+            {error instanceof Error ? error.message : 'The figures could not be read.'}
           </Notice>
           <View style={styles.rowWrap}>
-            <LButton label="Try again" onPress={() => refetch()} />
+            <LButton
+              label="Try again"
+              onPress={() => {
+                roster.refetch();
+                tree.refetch();
+                reach.refetch();
+              }}
+            />
             {toggle}
           </View>
         </>
       ) : null}
 
-      {!sample && !error && data?.kind === 'no-session' ? (
+      {!sample && !fixture && !error && noSession ? (
         <>
           <Notice tone="attention" title="Sign-in needed for real figures">
-            Class figures come from two database functions gated on the signed-in account, and
-            sign-in is not wired in this build. Nothing is invented to stand in for them.
+            These figures come from database functions gated on the signed-in account, and sign-in
+            is not wired up in this build. Nothing is invented to stand in for them.
           </Notice>
           {toggle}
         </>
       ) : null}
 
-      {!sample && !error && data?.kind === 'suppressed' ? (
-        <Notice tone="attention" title="Too few students to average">
-          Fewer than {MIN_COHORT} students in this class have completed anything, so there is no
-          meaningful class figure to draw yet. Their individual progress is on Students.
-        </Notice>
+      {emptyClass ? (
+        <>
+          <Notice tone="attention" title="Nobody is enrolled on this course yet">
+            Every panel here counts students, and this course has none, so there is nothing to
+            count. Enrolling students is not wired up in this build. Look at a sample class to see
+            what this page says once there is one.
+          </Notice>
+          {toggle}
+        </>
       ) : null}
 
-      {readout?.kind === 'ready' ? (
+      {source && source.students.length > 0 ? (
         <>
-          <Panel>
-            <PanelHead
-              title="Cohort"
-              right={<Badge label={`${readout.students} students`} />}
-            />
-            <View style={styles.panelBody}>
-              <Figure label="Students" value={String(readout.students)} />
-              <Figure label="Missions completed" value={String(readout.missionsCompleted)} />
-              <Figure label="Per student" value={readout.avgPerStudent.toFixed(1)} />
-            </View>
-          </Panel>
-
-          <LText variant="section" style={styles.sectionHeading}>
-            Per skill
-          </LText>
-
-          <Panel>
-            <DataTable
-              columns={[
-                { key: 'title', label: 'Skill', flex: 3 },
-                { key: 'done', label: 'Completed', num: true, flex: 1 },
-              ]}
-              rows={readout.nodes.map((n) => ({
-                key: n.nodeId,
-                label: `${n.title}, ${n.completedCount} completed`,
-                cells: [n.title, String(n.completedCount)],
-              }))}
-              empty={
-                <LText variant="small" tone="muted">
-                  No single skill has {MIN_COHORT} completions of its own yet, so none are listed.
-                </LText>
-              }
-            />
-          </Panel>
-
-          {sample ? (
-            <>
-              <Notice title="What is missing here, and why">
-                A sixth skill in this imaginary course has three completions and is deliberately not
-                listed. Below {MIN_COHORT} students a count starts identifying people, so it is not
-                returned at all — that omission is the rule working, not a gap in the table.
-              </Notice>
-              {toggle}
-            </>
-          ) : null}
+          <StuckPanel
+            rows={bottlenecks(source.nodes, source.prereqs, source.cleared, source.students.length)}
+            classSize={source.students.length}
+          />
+          <WatchPanel list={studentsToWatch(source.students, source.now)} />
+          <SpreadPanel result={classSpread(source.students)} />
+          <LimitsPanel />
+          {sample ? toggle : null}
         </>
       ) : null}
     </>
   );
 }
 
+/**
+ * A one-line "what this is" above the numbers and a one-line "what to do" below
+ * them. Both are required: the research on these dashboards is consistent that
+ * instructors read a figure, agree it is interesting, and change nothing.
+ */
+function InsightPanel({
+  title,
+  meaning,
+  action,
+  children,
+}: {
+  title: string;
+  meaning: string;
+  action?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Panel>
+      <PanelHead title={title} />
+      <View style={styles.panelBody}>
+        <LText variant="body" tone="muted" style={styles.prose}>
+          {meaning}
+        </LText>
+      </View>
+      {children}
+      {action ? (
+        <View style={styles.insightAction}>
+          <Icon name="arrow-right" size={16} tone="brand" />
+          <LText variant="body" style={[styles.prose, styles.strong]}>
+            {action}
+          </LText>
+        </View>
+      ) : null}
+    </Panel>
+  );
+}
+
+/** Shown in place of a figure, saying which rule hid it and why. */
+function Withheld({ reason }: { reason: string }) {
+  return (
+    <View style={styles.panelBody}>
+      <Notice tone="attention" title="Not enough students to say">
+        {reason}
+      </Notice>
+    </View>
+  );
+}
+
+// --------------------------------------------------------------- 1. stuck
+
+function StuckPanel({
+  rows,
+  classSize,
+}: {
+  rows: Bottleneck[] | { suppressed: true; size: number; reason: string };
+  classSize: number;
+}) {
+  const meaning =
+    'A skill counts as a hold-up when a lot of people have not cleared it and a lot of the course sits behind it. The top row is costing this class the most.';
+
+  if (!Array.isArray(rows)) {
+    return (
+      <InsightPanel title="Where the class is stuck" meaning={meaning}>
+        <Withheld reason={rows.reason} />
+      </InsightPanel>
+    );
+  }
+
+  const worst = rows[0];
+  return (
+    <InsightPanel
+      title="Where the class is stuck"
+      meaning={meaning}
+      action={
+        // "At least" in both branches, because it is true in both: where the
+        // count is known it is a ceiling on who cleared the skill, so the number
+        // behind it is a floor either way.
+        worst
+          ? `Spend next week on ${worst.title}. It opens ${countOf(worst.blocks, 'later skill')}, and at least ${countOf(worst.waitingAtLeast, 'student')} of ${classSize} are still behind it.`
+          : undefined
+      }
+    >
+      <DataTable
+        columns={[
+          { key: 'title', label: 'Skill', flex: 3 },
+          // Not `num`: the cell is a sentence when the count is withheld, and a
+          // right-aligned column of mixed words and figures reads as neither.
+          { key: 'behind', label: 'Students behind it', flex: 2 },
+          { key: 'blocks', label: 'Later skills it opens', num: true, flex: 2 },
+        ]}
+        rows={rows.map((row) => ({
+          key: row.nodeId,
+          label: `${row.title}. At least ${row.waitingAtLeast} of ${classSize} students have not cleared it. It opens ${row.blocks} later skills.`,
+          cells: [row.title, `at least ${row.waitingAtLeast} of ${classSize}`, String(row.blocks)],
+        }))}
+        empty={
+          <LText variant="body" tone="muted">
+            Nothing in this course has anything behind it, so no one skill can hold the class up.
+          </LText>
+        }
+      />
+      <View style={styles.panelBody}>
+        <LText variant="small" tone="muted" style={styles.prose}>
+          &ldquo;At least&rdquo; is exact, not vague. Completions are recorded per piece of work
+          rather than per skill, so the number who have finished a whole skill can only be lower
+          than its weakest piece — and a piece finished by fewer than {MIN_COHORT} students has its
+          count withheld entirely. Either way the number of students behind a skill can only be
+          higher than shown, never lower.
+        </LText>
+      </View>
+    </InsightPanel>
+  );
+}
+
+// --------------------------------------------------------------- 2. watch
+
+function WatchPanel({ list }: { list: ReturnType<typeof studentsToWatch> }) {
+  const meaning = `Students who have never finished anything, or who were working and have cleared nothing for ${STALE_DAYS} days. How recently somebody worked is the earliest warning this data can give.`;
+
+  return (
+    <InsightPanel
+      title="Who to check on"
+      meaning={meaning}
+      action={
+        list.rows.length > 0
+          ? 'Send one short message each. Name the work, not the person — ask what is in the way of the skill they stopped on, rather than telling them they are behind.'
+          : undefined
+      }
+    >
+      <DataTable
+        columns={[
+          { key: 'name', label: 'Student', flex: 3 },
+          { key: 'what', label: 'What happened', flex: 3 },
+          { key: 'when', label: 'Days since', num: true, flex: 2 },
+        ]}
+        rows={list.rows.map((row) => ({
+          key: row.userId,
+          label: `${row.displayName}. ${watchWords(row)}.`,
+          cells: [row.displayName, watchWords(row), row.daysIdle === null ? '—' : String(row.daysIdle)],
+        }))}
+        empty={
+          <LText variant="body" tone="muted">
+            Everybody has started, and everybody has finished something in the last {STALE_DAYS}{' '}
+            days. Nothing here needs chasing.
+          </LText>
+        }
+      />
+      <View style={styles.panelBody}>
+        <LText variant="small" tone="muted" style={styles.prose}>
+          {list.rankingSuppressed
+            ? `This is a list of things that happened, not a judgement. Nobody appears on it for being slow. With fewer than ${MIN_COHORT} students there is no class to compare anyone against, so the comparison is not made at all.`
+            : 'This is a list of things that happened, not a judgement. Nobody appears on it for being slow — being in the slower half while still working is not on this list. Somebody who has stopped may be ill, ahead elsewhere, or working on something with no skill attached.'}
+        </LText>
+      </View>
+    </InsightPanel>
+  );
+}
+
+function watchWords(row: WatchRow): string {
+  if (row.reason === 'not-started') return 'Has not finished anything yet';
+  return row.alsoBehind
+    ? 'Stopped, and among the slowest quarter'
+    : 'Was working, then stopped';
+}
+
+// -------------------------------------------------------------- 3. spread
+
+function SpreadPanel({ result }: { result: ReturnType<typeof classSpread> }) {
+  const meaning =
+    'Where the class sits, as a shape rather than one average. An average hides the class that has split in two: half finished and half not started still averages out to a comfortable middle.';
+
+  if (result.suppressed) {
+    return (
+      <InsightPanel title="How far the class has got" meaning={meaning}>
+        <Withheld reason={result.reason} />
+      </InsightPanel>
+    );
+  }
+
+  return (
+    <InsightPanel
+      title="How far the class has got"
+      meaning={meaning}
+      action={
+        result.split
+          ? 'This class has pulled into two groups with almost nobody in between. One pace cannot serve both — plan next week as two things, not one.'
+          : `Half the class is past ${result.median}% of the course. The slowest quarter is at ${result.lower}% or below; the fastest at ${result.upper}% or above.`
+      }
+    >
+      <View style={styles.panelBody}>
+        {result.bands.map((band) => (
+          <View key={band.key} style={styles.bandRow}>
+            <LText variant="body" style={styles.bandLabel}>
+              {band.label}
+            </LText>
+            <View style={styles.bandTrack}>
+              <View
+                style={[
+                  styles.bandFill,
+                  { width: `${Math.round((band.count / result.size) * 100)}%` },
+                ]}
+              />
+            </View>
+            <LText variant="body" numeric style={styles.bandCount}>
+              {band.count} of {result.size}
+            </LText>
+          </View>
+        ))}
+        <LText variant="small" tone="muted" style={styles.prose}>
+          Counts rather than percentages on purpose. With {result.size} students one person moving
+          shifts a percentage by several points, and a figure that swings that far on one person&rsquo;s
+          Tuesday is not telling you anything.
+        </LText>
+      </View>
+    </InsightPanel>
+  );
+}
+
+// -------------------------------------------------------------- 4. limits
+
+/**
+ * What the numbers above cannot see.
+ *
+ * Not a disclaimer. Instructors read these screens retrospectively and come away
+ * unsure what to change, and the documented way that goes wrong is over-reading
+ * a figure the data never supported. Saying the boundary out loud is cheaper
+ * than an instructor discovering it after acting on it.
+ */
+function LimitsPanel() {
+  return (
+    <InsightPanel
+      title="What this page cannot see"
+      meaning="Worth knowing before you act on anything above."
+      action="Treat every panel as the start of a conversation with a student, not a verdict about one."
+    >
+      <View style={styles.panelBody}>
+        <Limit>
+          <LText variant="body" style={styles.prose}>
+            <LText variant="body" style={styles.strong}>When</LText> anything was finished. A skill
+            cleared in week two and one cleared yesterday look identical here, so nothing on this
+            page can tell you what has been forgotten or what needs revisiting.
+          </LText>
+        </Limit>
+        <Limit>
+          <LText variant="body" style={styles.prose}>
+            <LText variant="body" style={styles.strong}>Whether anyone is getting worse.</LText> These
+            are today&rsquo;s figures with nothing to compare them to. A student sliding for three
+            weeks and one who has always been where they are look the same.
+          </LText>
+        </Limit>
+        <Limit>
+          <LText variant="body" style={styles.prose}>
+            <LText variant="body" style={styles.strong}>How hard anything was.</LText> Cardinal Skill
+            records that a skill was finished, not how many attempts it took, so a skill everybody
+            struggled through and one everybody breezed are the same number here.
+          </LText>
+        </Limit>
+        <Limit>
+          <LText variant="body" style={styles.prose}>
+            <LText variant="body" style={styles.strong}>Why somebody stopped.</LText> Only that they
+            did. Illness, a heavy week elsewhere, and giving up all read as the same silence.
+          </LText>
+        </Limit>
+      </View>
+    </InsightPanel>
+  );
+}
+
+function Limit({ children }: { children: React.ReactNode }) {
+  return (
+    <View style={styles.limitRow}>
+      <Icon name="minus" size={16} tone="muted" />
+      <View style={styles.rowStack}>{children}</View>
+    </View>
+  );
+}
+
+/** "1 student", "4 students" — plural agreement without a library. */
+function countOf(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
 // -------------------------------------------------------------------- import
 
 /**
@@ -2525,6 +2893,36 @@ const styles = StyleSheet.create({
     gap: lms.space.lg,
     maxWidth: 420,
   },
+
+  // Class insights. The action line sits on its own washed foot so it reads as
+  // the panel's conclusion rather than another row of body copy.
+  insightAction: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: lms.space.md,
+    padding: lms.space.lg,
+    backgroundColor: c.brandWash,
+    borderTopWidth: 1,
+    borderTopColor: c.line,
+  },
+  limitRow: { flexDirection: 'row', alignItems: 'flex-start', gap: lms.space.md },
+
+  // One bar per band of the class. One hue at one intensity: the bands are
+  // positions on a scale, not four things competing, and a darker-where-bigger
+  // ramp would invite reading a value off the colour.
+  bandRow: { flexDirection: 'row', alignItems: 'center', gap: lms.space.md, minHeight: 28 },
+  bandLabel: { width: 118, flexShrink: 0 },
+  bandTrack: {
+    flex: 1,
+    minWidth: 60,
+    height: 14,
+    borderRadius: lms.radius.xs,
+    backgroundColor: c.surfaceSunk,
+    overflow: 'hidden',
+  },
+  bandFill: { height: '100%', borderRadius: lms.radius.xs, backgroundColor: c.brand },
+  // Wide enough for "12 of 24" so the bars all end on the same line.
+  bandCount: { width: 92, flexShrink: 0, textAlign: 'right' },
 
   // Fixed, not flexible: `flex: 1` here would give the rail flex-basis 0 and let
   // it split the screen with the main column, and 244 would mean nothing.

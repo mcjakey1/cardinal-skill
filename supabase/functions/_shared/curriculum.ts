@@ -195,6 +195,8 @@ The candidate failed validation: ${failure}
 
 Return exactly ${exactCount} nodes. Count the final nodes array before responding. Preserve valid competencies, split broad competencies into distinct progressive skills, and add only skills supported by the outline. Do not satisfy the count with duplicates, administrative material, exams, or invented subject matter. Every node unit must exactly match one primary topic string from the cleaned outline. Every other outline topic must be named explicitly in a node label, description, or mission when related topics share a node. Return the entire repaired JSON object, not a patch.
 
+When the validation failure names omitted syllabus topics, copy each named topic verbatim into at least one node's unit, label, description, or mission. Do not replace those named topics with a broader umbrella or a paraphrase.
+
 <cleanedSyllabus>
 ${JSON.stringify(outline)}
 </cleanedSyllabus>
@@ -265,7 +267,35 @@ function topicCoverageCount(nodes: readonly SyllabusCoverageNode[], topicKey: st
     return { node, matched: expected.filter((token) => tokens.has(token)) };
   }).filter(({ matched }) => matched.length > 0);
   const covered = new Set(contributing.flatMap(({ matched }) => matched));
-  return expected.every((token) => covered.has(token)) ? contributing.length : 0;
+  if (expected.every((token) => covered.has(token))) return contributing.length;
+
+  // Contraposition and contradiction are the two standard indirect-proof
+  // methods. Curriculum generators often use that precise umbrella for a
+  // combined syllabus row, so accept it without accepting generic proof nodes.
+  if (
+    expected.includes('proof')
+    && expected.includes('contraposition')
+    && expected.includes('contradiction')
+  ) {
+    const indirectProofNodes = nodes.filter((node) => {
+      const tokens = nodeTopicTokens(node);
+      return tokens.has('indirect') && tokens.has('proof');
+    });
+    if (indirectProofNodes.length > 0) return indirectProofNodes.length;
+  }
+
+  return 0;
+}
+
+function nodeTopicTokens(node: SyllabusCoverageNode): Set<string> {
+  const searchable = [
+    node.unit,
+    node.label,
+    node.description,
+    node.mission?.title,
+    node.mission?.description,
+  ].map(comparableTopic).join(' ');
+  return new Set(meaningfulTopicTokens(searchable));
 }
 
 function meaningfulTopicTokens(value: string): string[] {

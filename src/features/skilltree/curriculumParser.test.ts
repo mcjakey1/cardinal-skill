@@ -132,6 +132,19 @@ test('one compound proof topic may progress across sibling nodes', () => {
   ], [{ week: 4, topics: ['Proof by Contraposition & Contradiction'] }]));
 });
 
+test('an indirect-proofs node covers the combined contraposition and contradiction topic', () => {
+  assert.doesNotThrow(() => requireSyllabusCoverage([{
+    unit: 'Indirect Proofs',
+    label: 'Indirect Proof Methods',
+    description: 'Choose and construct an indirect proof for a proposition.',
+  }], [{ week: 4, topics: ['Proof by Contraposition & Contradiction'] }]));
+
+  assert.throws(() => requireSyllabusCoverage([{
+    unit: 'Proof Methods',
+    label: 'Proof Strategies',
+  }], [{ week: 4, topics: ['Proof by Contraposition & Contradiction'] }]), /omitted syllabus coverage/i);
+});
+
 test('duplicate provider node ids fail before edge normalization', () => {
   assert.throws(
     () => requireUniqueParserNodeIds([{ id: 'logic' }, { id: 'logic' }]),

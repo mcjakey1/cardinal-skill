@@ -22,10 +22,12 @@ import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
 import { validateGraph } from '@/features/skilltree/validation';
 import {
-  importedCourseTitle,
+  checkParserStatus,
   instructorImportError,
-  syllabusFileAccepted,
-} from '@/features/skilltree/instructorCourseImport';
+  readSyllabusFile,
+  runSyllabusImport,
+  type SyllabusDocument,
+} from '@/lib/syllabusImport';
 import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
 import {
   fetchInstructorVerification,
@@ -43,9 +45,6 @@ import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
 import { supabase } from '@/lib/supabase';
-import { bytesToBase64 } from '@/lib/base64';
-import { callEdgeFunction } from '@/lib/edgeFunctions';
-import { extractTextFromPDF } from '@/lib/pdfTextExtraction';
 import { lms } from '@/theme/lms';
 import { DitherField } from '@/ui/Dither';
 import { LmsFileDropzone, type LmsFileSelection } from '@/ui/LmsFileDropzone';
@@ -1826,18 +1825,27 @@ function Insights({ course }: { course: CourseRow }) {
 
 // -------------------------------------------------------------------- import
 
-type SelectedSyllabusDocument = {
-  name: string;
-  mediaType: 'application/pdf';
-  base64: string;
-};
+/**
+ * Importing a syllabus, instructor side.
+ *
+ * The parse itself is the same run the student check-in screen performs — one
+ * module, `@/lib/syllabusImport`, so the two cannot drift. What differs is only
+ * what happens once the course exists: a verified instructor's import is
+ * published to the official catalog before the workspace moves on.
+ *
+ * Nothing here reports progress it has not seen. Each step is announced when it
+ * actually starts, every failure says what to do next, and a course that parsed
+ * is never thrown away because a later step failed.
+ */
 
-interface InstructorParseResult {
-  course_id: string;
-  node_count: number;
-  mission_count: number;
-  edge_count: number;
-}
+type ImportPhase = 'idle' | 'creating' | 'parsing' | 'publishing' | 'done';
+
+const PHASE_COPY: Record<Exclude<ImportPhase, 'idle'>, { label: string; percent: number }> = {
+  creating: { label: 'Setting up the new course…', percent: 12 },
+  parsing: { label: 'Reading the syllabus and building the course tree…', percent: 55 },
+  publishing: { label: 'Publishing the course to the official catalog…', percent: 88 },
+  done: { label: 'Done. Opening the course…', percent: 100 },
+};
 
 function ImportSyllabus({
   liveSession,
@@ -1851,13 +1859,30 @@ function ImportSyllabus({
   const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
-  const [document, setDocument] = useState<SelectedSyllabusDocument | null>(null);
+  const [document, setDocument] = useState<SyllabusDocument | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileStatus, setFileStatus] = useState('No file selected');
   const [fileTone, setFileTone] = useState<'idle' | 'ok' | 'bad'>('idle');
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<ImportPhase>('idle');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [failure, setFailure] = useState<string | null>(null);
   const [publishFailure, setPublishFailure] = useState<string | null>(null);
+  // Set only once a course has parsed and saved. While it holds an id the
+  // course exists and must never be imported a second time: a fresh press
+  // would parse the same syllabus into a duplicate course.
+  const [unpublishedCourseId, setUnpublishedCourseId] = useState<string | null>(null);
+
+  // Ask the parser whether it is awake before anyone picks a file. An import
+  // that was going to fail on a parser that is off should say so on arrival,
+  // not four minutes into a spinner.
+  const parser = useQuery({
+    queryKey: ['parser-status'],
+    queryFn: checkParserStatus,
+    enabled: liveSession,
+    retry: false,
+    staleTime: 60_000,
+  });
 
   // Read up front so the screen can say, before the instructor presses anything,
   // whether this import will reach students. The same key backs the chart
@@ -1868,127 +1893,128 @@ function ImportSyllabus({
     enabled: liveSession,
   });
 
-  const ready = liveSession && (text.trim().length > 0 || Boolean(document)) && !busy;
+  useEffect(() => {
+    if (!busy) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  const ready =
+    liveSession && !unpublishedCourseId && (text.trim().length > 0 || Boolean(document)) && !busy;
 
   const readFile = async (file: LmsFileSelection) => {
     setFailure(null);
-    if (!syllabusFileAccepted(file.name)) {
-      setDocument(null);
-      setFileName(null);
-      setFileStatus('Choose a PDF, TXT, or Markdown file.');
-      setFileTone('bad');
-      return;
-    }
-
     setFileName(file.name);
-    setFileStatus('Reading file…');
+    setFileStatus('Reading the file…');
     setFileTone('idle');
     try {
-      const response = await fetch(file.uri);
-      if (!response.ok) throw new Error(`The file could not be read (HTTP ${response.status}).`);
-      if (/\.pdf$/i.test(file.name) || file.mimeType === 'application/pdf') {
-        const buffer = await response.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        if (bytes.byteLength > 15_000_000) throw new Error('That PDF is larger than 15 MB.');
-        setDocument({ name: file.name, mediaType: 'application/pdf', base64: bytesToBase64(bytes) });
-        try {
-          const extracted = await extractTextFromPDF(buffer);
-          setText(extracted?.text ?? '');
-        } catch {
-          // Scanned and native PDFs remain usable through the server parser.
-          setText('');
-        }
-        setFileStatus(`${Math.ceil(bytes.byteLength / 1024)} KB PDF ready to import`);
-      } else {
-        const body = await response.text();
-        if (!body.trim()) throw new Error('That file does not contain any syllabus text.');
-        setText(body);
-        setDocument(null);
-        setFileStatus(`${body.length.toLocaleString()} characters ready to import`);
-      }
+      const selection = await readSyllabusFile(file);
+      setDocument(selection.document);
+      setText(selection.text);
+      setFileStatus(selection.status);
       setFileTone('ok');
     } catch (cause) {
+      // The reason belongs on the picker, next to the file it is about. The
+      // notice below is reserved for a failed import, and nothing was imported.
       setDocument(null);
       setFileName(null);
-      setFileStatus('The file could not be read. Paste the syllabus text instead.');
+      setFileStatus(instructorImportError(cause));
       setFileTone('bad');
-      setFailure(instructorImportError(cause));
+    }
+  };
+
+  /**
+   * Publish when this account may. Returns false only when publishing was owed
+   * and did not happen, which is the one case that keeps the instructor here.
+   */
+  const publishWhenVerified = async (courseId: string): Promise<boolean> => {
+    try {
+      // `fetchQuery` rather than the hook above, so a still-loading
+      // verification cannot silently skip publication.
+      const verified = await queryClient.fetchQuery({
+        queryKey: ['instructor-verification'],
+        queryFn: fetchInstructorVerification,
+      });
+      // The server RPC stays the only thing that can flip the kind: an
+      // unverified caller's course simply stays the private practice course it
+      // was created as.
+      if (verified) await publishOfficialCourse(courseId);
+      await queryClient.invalidateQueries({ queryKey: ['course-catalog'] });
+      setPublishFailure(null);
+      return true;
+    } catch (cause) {
+      setPublishFailure(instructorImportError(cause));
+      return false;
     }
   };
 
   const submit = async () => {
-    if (!liveSession) return;
+    if (!liveSession || unpublishedCourseId) return;
     setBusy(true);
+    setPhase('creating');
     setFailure(null);
     setPublishFailure(null);
-    let createdCourseId: string | null = null;
-    let parsed = false;
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error('Your session expired. Sign in again to import a syllabus.');
-      const provisionalTitle = importedCourseTitle(title, fileName);
-      const { data: course, error: courseError } = await supabase
-        .from('courses')
-        .insert({ title: provisionalTitle, owner_id: auth.user.id })
-        .select('id')
-        .single();
-      if (courseError || !course) throw courseError ?? new Error('No course was returned.');
-      createdCourseId = course.id;
-
-      const extractedText = text.trim();
-      const result = await callEdgeFunction<InstructorParseResult>(
-        'parse-syllabus',
+      const outcome = await runSyllabusImport(
+        { titleOverride: title, fileName, text, document },
         {
-          courseId: course.id,
-          syllabusText: extractedText || undefined,
-          documentBase64: extractedText ? undefined : document?.base64,
-          documentMediaType: extractedText ? undefined : document?.mediaType,
-          documentName: extractedText ? undefined : document?.name,
+          onStage: (stage) => {
+            if (stage === 'creating' || stage === 'parsing') setPhase(stage);
+          },
         },
-        210_000,
       );
-      if (typeof result.node_count !== 'number') {
-        throw new Error('The parser did not return a saved course tree.');
-      }
-      parsed = true;
 
-      // An import by a verified instructor is meant to reach students, so
-      // publication is not a second button they have to find. The server RPC
-      // stays the only thing that can flip the kind: an unverified caller's
-      // course simply stays the private practice course it was created as.
-      // `fetchQuery` rather than the hook above so a still-loading verification
-      // cannot silently skip publication.
-      let catalogError: string | null = null;
-      try {
-        const verified = await queryClient.fetchQuery({
-          queryKey: ['instructor-verification'],
-          queryFn: fetchInstructorVerification,
-        });
-        if (verified) await publishOfficialCourse(course.id);
-      } catch (cause) {
-        catalogError = instructorImportError(cause);
-      }
-      setPublishFailure(catalogError);
-
+      setPhase('publishing');
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
         queryClient.invalidateQueries({ queryKey: ['courses'] }),
-        queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
       ]);
 
-      // Stay put when publication failed. Navigating on to the chart would hide
-      // the one message saying students cannot see this course yet.
-      if (catalogError) return;
-      onDrawn(course.id);
-    } catch (cause) {
-      if (createdCourseId && !parsed) {
-        await supabase.from('courses').delete().eq('id', createdCourseId);
+      // An import by a verified instructor is meant to reach students, so
+      // publication is not a second button they have to find.
+      if (!(await publishWhenVerified(outcome.courseId))) {
+        // Stay put. Navigating on to the chart would hide the one message
+        // saying students cannot see this course yet — and the course is real,
+        // so the way forward is to publish it again, never to import it again.
+        setUnpublishedCourseId(outcome.courseId);
+        setPhase('idle');
+        return;
       }
+
+      setPhase('done');
+      onDrawn(outcome.courseId);
+    } catch (cause) {
+      setPhase('idle');
       setFailure(instructorImportError(cause));
+      // A parse can fail because the parser went away mid-run; re-ask, so the
+      // banner above the form tells the truth on the next attempt.
+      void parser.refetch();
     } finally {
       setBusy(false);
     }
   };
+
+  const retryPublish = async () => {
+    if (!unpublishedCourseId) return;
+    setBusy(true);
+    setPhase('publishing');
+    const published = await publishWhenVerified(unpublishedCourseId);
+    setPhase('idle');
+    setBusy(false);
+    if (published) {
+      const courseId = unpublishedCourseId;
+      setUnpublishedCourseId(null);
+      onDrawn(courseId);
+    }
+  };
+
+  const parserOffline = liveSession && parser.isError;
 
   return (
     <>
@@ -1996,6 +2022,19 @@ function ImportSyllabus({
         title="Import a syllabus"
         lede="Upload a PDF, text, or Markdown syllabus. Cardinal reads its topics and prerequisites into a course tree, then publishes it to the official catalog when this account is a verified instructor."
       />
+
+      {parserOffline ? (
+        <Notice tone="error" title="The syllabus reader is not answering">
+          <View style={styles.noticeActions}>
+            <LText variant="small">
+              {instructorImportError(parser.error)} Nothing has been lost. Try again in a moment, and
+              if it keeps failing, tell whoever set up this project that the syllabus parser is
+              unreachable.
+            </LText>
+            <LButton label="Try again" icon="refresh-cw" onPress={() => void parser.refetch()} />
+          </View>
+        </Notice>
+      ) : null}
 
       {liveSession && verification.data === false ? (
         <Notice tone="attention" title="This import will stay private">
@@ -2010,9 +2049,9 @@ function ImportSyllabus({
           <View style={styles.noticeActions}>
             <LText variant="small">
               Importing still works, but this screen cannot say whether the new course will reach
-              students. Check the database connection and try again.
+              students. {instructorImportError(verification.error)}
             </LText>
-            <LButton label="Retry verification" size="sm" onPress={() => void verification.refetch()} />
+            <LButton label="Check again" icon="refresh-cw" onPress={() => void verification.refetch()} />
           </View>
         </Notice>
       ) : null}
@@ -2024,7 +2063,7 @@ function ImportSyllabus({
               You are using the local instructor demo. Syllabus parsing and saved courses require a
               Supabase instructor account so the new course has a verified owner.
             </LText>
-            <LButton label="Go to sign in" icon="log-in" size="sm" onPress={onSignIn} />
+            <LButton label="Go to sign in" icon="log-in" onPress={onSignIn} />
           </View>
         </Notice>
       ) : null}
@@ -2064,39 +2103,82 @@ function ImportSyllabus({
             hint="Paste text instead of uploading a file, or review text extracted from an uploaded document."
           />
 
+          {phase !== 'idle' ? (
+            <>
+              <Meter percent={PHASE_COPY[phase].percent} />
+              <LText variant="small" accessibilityLiveRegion="polite">
+                {PHASE_COPY[phase].label}
+                {elapsedSeconds > 0 ? ` (${elapsedSeconds} seconds so far)` : ''}
+              </LText>
+              <LText variant="small" tone="muted">
+                A long syllabus can take two or three minutes. Leave this screen open.
+              </LText>
+            </>
+          ) : null}
+
           {failure ? (
             <Notice tone="error" title="Nothing was saved">
-              {failure}
+              <View style={styles.noticeActions}>
+                <LText variant="small">
+                  {failure} No course was created, so you can fix the problem above and press the
+                  button again.
+                </LText>
+              </View>
             </Notice>
           ) : null}
 
           {publishFailure ? (
-            <Notice tone="error" title="Course created, but not published">
-              {publishFailure} The course and its tree are saved under Courses. Students cannot find
-              it until you publish it from the chart toolbar.
+            <Notice tone="error" title="The course was created, but students cannot see it yet">
+              <View style={styles.noticeActions}>
+                <LText variant="small">
+                  {publishFailure} The course and its tree are saved under Courses — do not import
+                  the syllabus again, or you will end up with two copies. Publish it here, or later
+                  from the chart toolbar.
+                </LText>
+                <View style={styles.rowWrap}>
+                  <LButton
+                    label={busy ? 'Publishing…' : 'Publish it now'}
+                    icon="upload-cloud"
+                    variant="primary"
+                    disabled={busy}
+                    onPress={retryPublish}
+                  />
+                  <LButton
+                    label="Open the course anyway"
+                    disabled={busy}
+                    onPress={() => {
+                      const courseId = unpublishedCourseId;
+                      setUnpublishedCourseId(null);
+                      if (courseId) onDrawn(courseId);
+                    }}
+                  />
+                </View>
+              </View>
             </Notice>
           ) : null}
 
-          <View style={styles.rowWrap}>
-            <LButton
-              label={busy
-                ? 'Generating course tree…'
-                : verification.data
-                  ? 'Generate and publish course'
-                  : 'Generate course tree'}
-              variant="primary"
-              icon="git-branch"
-              disabled={!ready}
-              onPress={submit}
-            />
-            <LText variant="small" tone="muted">
-              {verification.data
-                ? 'The tree is generated and the course is published to the official catalog, where every signed-in student can find and join it.'
-                : verification.data === false
-                  ? 'The course is created privately. Publishing it to students needs a verified instructor account.'
-                  : 'Checking whether this account can publish to the official catalog.'}
-            </LText>
-          </View>
+          {unpublishedCourseId ? null : (
+            <View style={styles.rowWrap}>
+              <LButton
+                label={busy
+                  ? 'Working…'
+                  : verification.data
+                    ? 'Generate and publish course'
+                    : 'Generate course tree'}
+                variant="primary"
+                icon="git-branch"
+                disabled={!ready}
+                onPress={submit}
+              />
+              <LText variant="small" tone="muted">
+                {verification.data
+                  ? 'The tree is generated and the course is published to the official catalog, where every signed-in student can find and join it.'
+                  : verification.data === false
+                    ? 'The course is created privately. Publishing it to students needs a verified instructor account.'
+                    : 'Checking whether this account can publish to the official catalog.'}
+              </LText>
+            </View>
+          )}
         </View>
       </Panel>
     </>

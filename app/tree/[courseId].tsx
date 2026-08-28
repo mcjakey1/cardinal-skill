@@ -26,6 +26,7 @@ import { missionDifficulty } from '@/features/skilltree/missionBoard';
 import { MAX_NAME, resolveQuestName, type NameSource } from '@/features/skilltree/naming';
 import { learnerSignals, nodeSignal } from '@/features/skilltree/observed';
 import {
+  deriveStatuses,
   evaluateSkillUnlockState,
   levelForXp,
   progressRatio,
@@ -106,6 +107,7 @@ export default function TreeScreen() {
   const prefs = usePrefs();
   const wide = useWide();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [infoExpanded, setInfoExpanded] = useState(true);
   const [justCompleted, setJustCompleted] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -142,6 +144,7 @@ export default function TreeScreen() {
   useEffect(() => {
     setEditMode(edit === '1');
     setSelectedId(null);
+    setInfoExpanded(false);
     setLinkMode(false);
     setLinkSourceId(null);
   }, [courseId, edit]);
@@ -466,6 +469,63 @@ export default function TreeScreen() {
     status,
     selected ? nodeProgress(selected, missions, completedMissionIds, isMastered) : 0,
   );
+  const progressByNode = Object.fromEntries(
+    tree.nodes.map((node) => [
+      node.id,
+      nodeProgress(node, missions, completedMissionIds, masteredIds.includes(node.id)),
+    ]),
+  );
+  const nodeStatuses = deriveStatuses(tree, masteredIds).status;
+  const outlineNodes = tree.nodes.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  const selectedOutlineIndex = Math.max(0, outlineNodes.findIndex((node) => node.id === selectedId));
+  const renderOutlineRow = (node: SkillNode, index: number) => {
+    const nodeStatus = displayStatus(
+      nodeStatuses.get(node.id) ?? 'locked',
+      progressByNode[node.id] ?? 0,
+    );
+    const isCurrent = node.id === selectedId;
+    return (
+      <Pressable
+        key={node.id}
+        onPress={() => {
+          if (isCurrent) {
+            setInfoExpanded((expanded) => !expanded);
+            return;
+          }
+          void selectNode(node);
+        }}
+        accessibilityRole="button"
+        accessibilityState={{ selected: isCurrent, expanded: isCurrent ? infoExpanded : undefined }}
+        accessibilityLabel={`${index + 1}. ${node.title}. ${nodeStatus.replace('_', ' ')}. ${isCurrent && infoExpanded ? 'Collapse' : 'Expand'} information.`}
+        style={({ pressed }) => [
+          styles.outlineRow,
+          {
+            backgroundColor: isCurrent ? t.brand : t.panel,
+            borderColor: isCurrent ? t.brand : t.line,
+            opacity: pressed ? 0.82 : 1,
+          },
+        ]}
+      >
+        <View style={[styles.outlineMarker, { backgroundColor: isCurrent ? t.brandInk : t.well }]}>
+          <PixelIcon
+            name={nodeStatus === 'mastered' ? 'check' : nodeStatus === 'locked' ? 'lock' : 'play'}
+            size={12}
+            colour={isCurrent ? t.brandInk : nodeStatus === 'mastered' ? t.earnedText : t.inkMuted}
+          />
+        </View>
+        <View style={styles.outlineCopy}>
+          <PixelText variant="body" colour={isCurrent ? t.brandInk : t.ink} numberOfLines={2}>
+            {node.title}
+          </PixelText>
+          <PixelText variant="micro" colour={isCurrent ? t.brandInk : t.inkMuted}>
+            {nodeStatus === 'mastered' ? 'MASTERED' : nodeStatus === 'locked' ? 'LOCKED' : 'READY'}
+            {' · '}{node.xpReward} XP
+          </PixelText>
+        </View>
+        <PixelIcon name="play" size={12} colour={isCurrent ? t.brandInk : t.info} />
+      </Pressable>
+    );
+  };
 
   // Every prerequisite, not just the unmet ones. Seeing "2 of 3 mastered" while
   // still locked tells a student how close they are; a list that only appears
@@ -477,12 +537,6 @@ export default function TreeScreen() {
         .filter((n): n is SkillNode => Boolean(n))
     : [];
   const prereqsMastered = prereqNodes.filter((p) => masteredIds.includes(p.id)).length;
-  const progressByNode = Object.fromEntries(
-    tree.nodes.map((node) => [
-      node.id,
-      nodeProgress(node, missions, completedMissionIds, masteredIds.includes(node.id)),
-    ]),
-  );
 
   const claimMission = async (missionId: string, title: string, xpReward: number, done: boolean) => {
     await toggleMission(missionId, !done);
@@ -528,6 +582,7 @@ export default function TreeScreen() {
       return;
     }
     setSelectedId(node.id);
+    setInfoExpanded(true);
     setRenaming(false);
     setConfirmingHelp(false);
     setHelpNote(null);
@@ -850,31 +905,45 @@ export default function TreeScreen() {
       {selected && eligibility ? (
         <>
         <Animated.View
-          key={selected.id}
           entering={prefs.motionOff ? undefined : SlideInRight.duration(240).easing(Easing.out(Easing.cubic))}
           exiting={prefs.motionOff ? undefined : SlideOutRight.duration(200).easing(Easing.in(Easing.cubic))}
           style={wide ? styles.dockWide : styles.dock}
         >
         <Window
-          title={selected.title}
+          title="Course outline"
           onClose={() => setSelectedId(null)}
           style={styles.detailWindow}
         >
-          <View style={styles.rowBetween}>
-            <View style={styles.headerTags}>
-              <PixelText variant="micro" colour={t.info}>
-                {selected.trackId ? 'UNIVERSAL SKILL' : 'COURSE SKILL'}
-              </PixelText>
-              <StatusTag status={detailStatus} />
-            </View>
-            <PixelText variant="label" colour={t.earnedText}>
-              {selected.xpReward} XP TOTAL
-            </PixelText>
-          </View>
-
           {/* Capped on a phone so the window cannot swallow the chart; on a wide
               screen it has its own column and can use the height it has. */}
           <StableScrollView style={wide ? styles.sheetScrollWide : styles.sheetScroll}>
+            <View style={styles.outlineIntro}>
+              <PixelText variant="label" colour={t.ink}>COURSE OUTLINE</PixelText>
+              <PixelText variant="micro" colour={t.inkMuted}>
+                {masteredIds.length} OF {tree.nodes.length} NODES MASTERED
+              </PixelText>
+            </View>
+            <View style={styles.outlineList}>
+              {outlineNodes.slice(0, selectedOutlineIndex).map(renderOutlineRow)}
+              {outlineNodes[selectedOutlineIndex]
+                ? renderOutlineRow(outlineNodes[selectedOutlineIndex], selectedOutlineIndex)
+                : null}
+            </View>
+            {infoExpanded ? <>
+            <View style={styles.selectedNodeHeader}>
+              <View style={styles.rowBetween}>
+                <View style={styles.headerTags}>
+                  <PixelText variant="micro" colour={t.info}>
+                    {selected.trackId ? 'UNIVERSAL SKILL' : 'COURSE SKILL'}
+                  </PixelText>
+                  <StatusTag status={detailStatus} />
+                </View>
+                <PixelText variant="label" colour={t.earnedText}>
+                  {selected.xpReward} XP TOTAL
+                </PixelText>
+              </View>
+              <PixelText variant="title" colour={t.ink}>{selected.title}</PixelText>
+            </View>
             {editMode ? (
               <View style={styles.editProperties}>
                 {editingProperties && original ? (
@@ -1230,6 +1299,12 @@ export default function TreeScreen() {
                 </PixelText>
               </CollapsibleSection>
             )}
+            </> : null}
+            <View style={styles.outlineList}>
+              {outlineNodes.slice(selectedOutlineIndex + 1).map((node, offset) =>
+                renderOutlineRow(node, selectedOutlineIndex + offset + 1),
+              )}
+            </View>
           </StableScrollView>
 
           {/* A node made of missions is finished by doing them, so it gets no
@@ -1619,6 +1694,24 @@ const styles = StyleSheet.create({
   },
   sheetScroll: { maxHeight: 260 },
   sheetScrollWide: { maxHeight: 460 },
+  outlineIntro: { gap: space.hair, paddingBottom: space.cell },
+  outlineList: { gap: space.xs },
+  outlineRow: {
+    minHeight: touch,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.cell,
+    borderWidth: bevel,
+    paddingHorizontal: space.cell,
+  },
+  outlineMarker: {
+    width: touch - space.cell,
+    height: touch - space.cell,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  outlineCopy: { flex: 1, minWidth: 0, gap: space.hair },
+  selectedNodeHeader: { gap: space.xs, marginTop: space.md, paddingTop: space.md, borderTopWidth: bevel },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTags: { gap: space.xs },
   naming: { gap: space.xs, marginBottom: space.cell },

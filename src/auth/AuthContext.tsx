@@ -3,10 +3,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 import { supabase } from '@/lib/supabase';
 import { clearCourseCaches } from '@/lib/courseCache';
+import { fetchInstructorVerification } from '@/features/skilltree/courseCatalog';
 import {
   authErrorMessage,
   buildSession,
   normalizeSession,
+  resolveSessionRole,
+  type RoleEvidence,
   type SessionInput,
   type UserSession,
 } from './session';
@@ -28,6 +31,40 @@ interface RegistrationResult {
 }
 
 const SESSION_KEY = 'cardinal.auth-session.v1';
+
+/**
+ * Ask the server what this account is. Returns null when nobody is signed in
+ * or a read fails, which leaves the stored role alone.
+ *
+ * Only an official course counts as ownership: a student who uploads a syllabus
+ * owns a private practice course, and that must not read as teaching.
+ */
+async function readRoleEvidence(): Promise<RoleEvidence | null> {
+  try {
+    // The local session, not getUser(): metadata is already in it, and a
+    // demo-free launch on a dead network should not wait on a round trip.
+    const { data: auth } = await supabase.auth.getSession();
+    const user = auth.session?.user;
+    if (!user) return null;
+    const [verifiedInstructor, courses] = await Promise.all([
+      fetchInstructorVerification(),
+      supabase
+        .from('courses')
+        .select('id')
+        .eq('owner_id', user.id)
+        .eq('course_kind', 'official')
+        .limit(1),
+    ]);
+    if (courses.error) throw courses.error;
+    return {
+      metadataRole: user.user_metadata?.role,
+      verifiedInstructor,
+      ownsOfficialCourse: (courses.data ?? []).length > 0,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const AuthContext = createContext<AuthValue>({
   ready: false,
@@ -56,6 +93,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return;
           }
           setSession(saved);
+          // A launch starts on the persisted role and corrects it in the
+          // background; the last launch already saved the corrected value.
+          if (saved?.source === 'supabase') {
+            void readRoleEvidence().then((evidence) => {
+              const corrected = resolveSessionRole(saved, evidence);
+              if (!live || !corrected || corrected === saved) return;
+              setSession(corrected);
+              void AsyncStorage.setItem(SESSION_KEY, JSON.stringify(corrected));
+            });
+          }
         } catch {
           setSession(null);
         }
@@ -70,7 +117,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const persist = useCallback(async (input: SessionInput, source: UserSession['source']) => {
-    const next = buildSession(input, source);
+    const claimed = buildSession(input, source);
+    // Correct the role before the first screen is chosen, so an instructor who
+    // signed in through the student tab still lands in the workspace.
+    const next = source === 'supabase'
+      ? resolveSessionRole(claimed, await readRoleEvidence()) ?? claimed
+      : claimed;
     setSession(next);
     await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(next));
     return next;

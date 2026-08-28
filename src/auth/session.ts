@@ -45,6 +45,41 @@ export function buildSession(
   };
 }
 
+/**
+ * What the account actually is, as far as the server will say.
+ *
+ * The role on a stored session is only the tab the user picked on the sign-in
+ * form, so an instructor who signed in through the student tab loses the way
+ * back to their workspace. These three facts outrank that claim.
+ */
+export interface RoleEvidence {
+  /** `role` from the user metadata written at sign-up. */
+  metadataRole: unknown;
+  verifiedInstructor: boolean;
+  ownsOfficialCourse: boolean;
+}
+
+/**
+ * The session with its role corrected against the server, or the same object
+ * when nothing needs to change, so callers can skip a needless write.
+ *
+ * `evidence` is null when there is no server answer — a demo session, or a
+ * request that failed — and the stored role then stands. Being offline is not
+ * grounds for a demotion.
+ */
+export function resolveSessionRole(
+  session: UserSession | null,
+  evidence: RoleEvidence | null,
+): UserSession | null {
+  if (!session || session.source !== 'supabase' || !evidence) return session;
+  const role: AuthRole = evidence.verifiedInstructor
+    || evidence.ownsOfficialCourse
+    || evidence.metadataRole === 'instructor'
+    ? 'instructor'
+    : 'student';
+  return role === session.role ? session : { ...session, role };
+}
+
 export function authErrorMessage(message: string): string {
   const normalized = message.toLowerCase();
   if (normalized.includes('invalid login credentials')) {

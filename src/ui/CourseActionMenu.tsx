@@ -291,7 +291,7 @@ export function CourseActionMenu({
                       Every signed-in learner can discover and join it from Community.
                     </PixelText>
                     <PixelText variant="micro" colour={t.warning}>
-                      STUDENT MADE · UNOFFICIAL SCORING · AUTHOR EXCLUDED FROM LADDER
+                      STUDENT MADE · UNOFFICIAL SCORING · AUTHOR OPT-IN
                     </PixelText>
                   </>
                 )}

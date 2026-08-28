@@ -92,20 +92,18 @@ export function LeaderboardView({
         <View style={styles.privacyCopy}>
           <PixelText variant="label">
             {viewerIsAuthor
-              ? 'Learner leaderboard'
+              ? 'Community leaderboard'
               : isInstructor ? 'Instructor ranking is off by default' : 'Leaderboard visibility'}
           </PixelText>
           <PixelText variant="micro" colour={t.inkMuted}>
             {viewerIsAuthor
-              ? 'You can inspect learner ranks, but course authors never appear on their own ladder.'
+              ? 'Join to rank with learners in this course. Your author role remains visible in the course catalog.'
               : isInstructor
               ? 'Join to rank with the class in courses you do not own. You never appear in a course you wrote.'
               : 'Only students who explicitly join are visible to classmates. Your own rank remains visible to you.'}
           </PixelText>
         </View>
-        {viewerIsAuthor ? (
-          <PixelText variant="micro" colour={t.warning}>AUTHOR EXCLUDED</PixelText>
-        ) : visibilityError ? (
+        {visibilityError ? (
           <PixelButton
             label="Retry visibility"
             tone="panel"

@@ -193,7 +193,7 @@ type Roster =
 
 /**
  * PostgREST when a function is absent from its schema cache, Postgres when the
- * function is not there at all. `0029_roster_contacts.sql` has not reached every
+ * function is not there at all. `0030_roster_contacts.sql` has not reached every
  * project yet, and its absence should cost the email column, not the panel.
  */
 const FUNCTION_MISSING = ['PGRST202', '42883'];
@@ -1640,9 +1640,9 @@ const FLAG_LABEL = {
  * effort estimate, because those are inferences about a person rather than facts
  * about their work.
  *
- * The address is new, and `0029_roster_contacts.sql` is where the case for it is
+ * The address is new, and `0030_roster_contacts.sql` is where the case for it is
  * argued. Two things follow from that file and are enforced here rather than
- * left to the reader: a database without 0029 loses the column and not the
+ * left to the reader: a database without 0030 loses the column and not the
  * panel, and a row the database marked `enrolled: false` is a registered account
  * standing in for a roster, never a student on this course.
  */
@@ -1759,7 +1759,7 @@ function Students({ course }: { course: CourseRow }) {
         <Notice tone="attention" title="Email addresses are not available yet">
           Names and progress loaded, but this database has not had the roster update applied, so
           there are no addresses to show. Ask whoever manages your Cardinal Skill database to apply
-          migration 0029.
+          migration 0030.
         </Notice>
       ) : null}
 

@@ -92,7 +92,7 @@ test('a contact with no progress row is kept, not dropped', () => {
   assert.equal(view.rows[1]!.progress, 0);
 });
 
-test('a database without 0029 degrades to the old roster instead of failing', () => {
+test('a database without 0030 degrades to the old roster instead of failing', () => {
   const view = mergeRoster(null, [figures('a')]);
 
   assert.equal(view.mode, 'no-contacts');

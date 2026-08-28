@@ -50,13 +50,18 @@ export default function Record() {
   const { session } = useAuth();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
-  const { view: requestedView, reset: viewReset } = useLocalSearchParams<{ view?: string; reset?: string }>();
-  const [scopeId, setScopeId] = useState(prefs.lastCourseId ?? 'all');
-  const [view, setView] = useState<RecordView>('dossier');
+  const {
+    courseId: requestedCourseId,
+    view: requestedView,
+    reset: viewReset,
+  } = useLocalSearchParams<{ courseId?: string; view?: string; reset?: string }>();
+  const [scopeId, setScopeId] = useState(requestedCourseId ?? prefs.lastCourseId ?? 'all');
+  const [view, setView] = useState<RecordView>(requestedView === 'leaderboard' ? 'leaderboard' : 'dossier');
 
   useEffect(() => {
-    if (requestedView === 'dossier') setView('dossier');
-  }, [requestedView, viewReset]);
+    if (requestedCourseId) setScopeId(requestedCourseId);
+    if (requestedView === 'dossier' || requestedView === 'leaderboard') setView(requestedView);
+  }, [requestedCourseId, requestedView, viewReset]);
 
   const { data: courses = [], isPending: coursesPending } = useQuery({
     queryKey: ['courses'],
@@ -94,7 +99,7 @@ export default function Record() {
       && scopeId !== 'all'
       && selectedCourse
       && !selectedCourse.isFixture
-      && !selectedCourse.canEdit
+      && (!selectedCourse.canEdit || selectedCourse.kind === 'community')
       && (selectedCourse.kind === 'official' || selectedCourse.kind === 'community')
       && (selectedCourse.publicationStatus === 'published'
         || selectedCourse.publicationStatus === 'archived'),
@@ -112,7 +117,7 @@ export default function Record() {
       title: 'No live ladder for Playground courses',
       message: 'Private Playground progress stays personal and never enters a competitive ranking.',
     };
-    if (selectedCourse?.canEdit) return {
+    if (selectedCourse?.canEdit && selectedCourse.kind !== 'community') return {
       title: 'Authors do not enter learner rankings',
       message: 'Course authors can edit content and inspect participation, but cannot compete against their learners.',
     };
@@ -300,6 +305,7 @@ export default function Record() {
                 error={leaderboardQuery.isError}
                 available={leaderboardAvailable}
                 courseKind={selectedCourse?.kind ?? null}
+                viewerIsAuthor={Boolean(selectedCourse?.canEdit)}
                 unavailableTitle={leaderboardUnavailable.title}
                 unavailableMessage={leaderboardUnavailable.message}
                 visibility={signedInLive ? visibilityQuery.data : null}

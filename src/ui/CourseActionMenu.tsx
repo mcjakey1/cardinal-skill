@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, Share, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as Linking from 'expo-linking';
 
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
 import type { CommunityVisibility } from '@/features/skilltree/courseCatalog';
@@ -21,7 +20,7 @@ interface Props {
   embedded?: boolean;
   onRename: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
-  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<void>;
   onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;
@@ -60,7 +59,7 @@ export function CourseActionMenu({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shareVisibility: CommunityVisibility = 'public';
-  const [shareCode, setShareCode] = useState<string | null>(null);
+  const [published, setPublished] = useState(false);
 
   useEffect(() => {
     setTitle(course.title);
@@ -78,14 +77,14 @@ export function CourseActionMenu({
     if (busy) return;
     setAction(null);
     setError(null);
-    setShareCode(null);
+    setPublished(false);
   };
 
   const choose = (next: ActionKind) => {
     setMenuOpen(false);
     setAction(next);
     setError(null);
-    setShareCode(null);
+    setPublished(false);
   };
 
   const submit = async () => {
@@ -101,7 +100,8 @@ export function CourseActionMenu({
           term: course.term ?? '',
         });
       } else if (action === 'share') {
-        setShareCode(await onShare(course.id, shareVisibility));
+        await onShare(course.id, shareVisibility);
+        setPublished(true);
         return;
       } else if (action === 'reset') {
         await onReset(course.id);
@@ -117,19 +117,6 @@ export function CourseActionMenu({
       setError(cause instanceof Error ? cause.message : 'That course action failed. Try again.');
     } finally {
       setBusy(false);
-    }
-  };
-
-  const shareInvite = async () => {
-    if (!shareCode) return;
-    setError(null);
-    try {
-      await Share.share({
-        title: course.title,
-        message: `Join ${course.title} on Cardinal Skill: ${Linking.createURL('/courses', { queryParams: { share: shareCode } })}`,
-      });
-    } catch {
-      setError('The system share sheet could not open. Copy the invite code above and try again.');
     }
   };
 
@@ -291,20 +278,10 @@ export function CourseActionMenu({
               </View>
             ) : action === 'share' ? (
               <View style={styles.confirmCopy}>
-                {shareCode ? (
-                  <>
-                    <PixelText variant="body" colour={t.ink}>
-                      This student-made course is now listed in Community.
-                    </PixelText>
-                    <View style={[styles.shareCode, { borderColor: t.line, backgroundColor: t.well }]}>
-                      <PixelText variant="micro" colour={t.info} selectable>{shareCode}</PixelText>
-                    </View>
-                    <PixelButton
-                      label="Share invite"
-                      grow={false}
-                      onPress={shareInvite}
-                    />
-                  </>
+                {published ? (
+                  <PixelText variant="body" colour={t.ink}>
+                    This student-made course is now listed in Community. Learners can discover and join it there.
+                  </PixelText>
                 ) : (
                   <>
                     <PixelText variant="body" colour={t.ink}>
@@ -343,8 +320,8 @@ export function CourseActionMenu({
 
             {action ? (
               <View style={styles.footer}>
-                <PixelButton label={shareCode ? 'Done' : 'Cancel'} tone="panel" grow={false} disabled={busy} onPress={closeDialog} />
-                {shareCode ? null : <ConfirmButton action={action} archive={course.kind !== 'practice'} busy={busy} onPress={submit} />}
+                <PixelButton label={published ? 'Done' : 'Cancel'} tone="panel" grow={false} disabled={busy} onPress={closeDialog} />
+                {published ? null : <ConfirmButton action={action} archive={course.kind !== 'practice'} busy={busy} onPress={submit} />}
               </View>
             ) : null}
           </View>
@@ -367,7 +344,7 @@ export function CourseActionMenu({
 
 function headingFor(action: ActionKind, title: string, archive: boolean): string {
   if (action === 'rename') return 'Rename course';
-  if (action === 'share') return 'Share student-made course';
+  if (action === 'share') return 'Publish student-made course';
   if (action === 'reset') return 'Reset progress?';
   if (action === 'duplicate') return 'Duplicate chart?';
   if (action === 'copyToEdit') return 'Create a Playground copy?';
@@ -430,7 +407,7 @@ function ConfirmButton({ action, archive, busy, onPress }: {
           : action === 'copyToEdit'
             ? 'Create Playground copy'
             : action === 'share'
-              ? 'Publish sharing'
+              ? 'Publish course'
           : archive ? 'Archive course' : 'Delete course';
 
   if (action !== 'delete' || archive) {
@@ -494,7 +471,6 @@ const styles = StyleSheet.create({
   close: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
   fields: { gap: space.md },
   confirmCopy: { gap: space.cell },
-  shareCode: { borderWidth: bevel, padding: space.md },
   footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: space.cell, flexWrap: 'wrap' },
   deleteButton: {
     minHeight: touch,

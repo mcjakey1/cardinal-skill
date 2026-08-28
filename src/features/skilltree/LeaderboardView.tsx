@@ -14,6 +14,7 @@ interface Props {
   error: boolean;
   available: boolean;
   courseKind: CourseKind | null;
+  viewerIsAuthor: boolean;
   unavailableTitle: string;
   unavailableMessage: string;
   visibility: boolean | null | undefined;
@@ -32,6 +33,7 @@ export function LeaderboardView({
   error,
   available,
   courseKind,
+  viewerIsAuthor,
   unavailableTitle,
   unavailableMessage,
   visibility,
@@ -89,15 +91,21 @@ export function LeaderboardView({
       <Bevel tone="panel" depth="inset" style={styles.privacy}>
         <View style={styles.privacyCopy}>
           <PixelText variant="label">
-            {isInstructor ? 'Instructor ranking is off by default' : 'Leaderboard visibility'}
+            {viewerIsAuthor
+              ? 'Learner leaderboard'
+              : isInstructor ? 'Instructor ranking is off by default' : 'Leaderboard visibility'}
           </PixelText>
           <PixelText variant="micro" colour={t.inkMuted}>
-            {isInstructor
+            {viewerIsAuthor
+              ? 'You can inspect learner ranks, but course authors never appear on their own ladder.'
+              : isInstructor
               ? 'Join to rank with the class in courses you do not own. You never appear in a course you wrote.'
               : 'Only students who explicitly join are visible to classmates. Your own rank remains visible to you.'}
           </PixelText>
         </View>
-        {visibilityError ? (
+        {viewerIsAuthor ? (
+          <PixelText variant="micro" colour={t.warning}>AUTHOR EXCLUDED</PixelText>
+        ) : visibilityError ? (
           <PixelButton
             label="Retry visibility"
             tone="panel"

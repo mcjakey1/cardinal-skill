@@ -164,6 +164,14 @@ export default function Courses() {
     params: edit ? { courseId: id, edit: '1' } : { courseId: id },
   }));
 
+  const openLeaderboard = (course: CatalogCourse) => {
+    markSeen(course.id);
+    transition(() => router.navigate({
+      pathname: '/record',
+      params: { courseId: course.id, view: 'leaderboard' },
+    }));
+  };
+
   const refreshCourses = async () => {
     await queryClient.invalidateQueries({ queryKey: ['courses'] });
   };
@@ -208,13 +216,12 @@ export default function Courses() {
 
   const share = async (courseId: string, visibility: CommunityVisibility) => {
     try {
-      const shareCode = await publishCommunityCourse(courseId, visibility);
+      await publishCommunityCourse(courseId, visibility);
       await Promise.all([
         refreshCourses(),
         queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
       ]);
       AccessibilityInfo.announceForAccessibility('Community sharing updated.');
-      return shareCode;
     } catch (cause) {
       throw cause instanceof Error
         ? cause
@@ -386,6 +393,7 @@ export default function Courses() {
                 markSeen(course.id);
                 open(course.id);
               }}
+              onLeaderboard={openLeaderboard}
               empty={
                 <Notice title={search.trim() ? 'No matching courses' : tab === 'mine' ? 'No instructor courses yet' : 'No community courses yet'}>
                   <PixelText variant="body" colour={t.ink}>

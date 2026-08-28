@@ -689,13 +689,12 @@ export default function TreeScreen() {
 
   const shareCourse = async (targetCourseId: string, visibility: CommunityVisibility) => {
     try {
-      const shareCode = await publishCommunityCourse(targetCourseId, visibility);
+      await publishCommunityCourse(targetCourseId, visibility);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['courses'] }),
         queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
       ]);
       AccessibilityInfo.announceForAccessibility('Community sharing updated.');
-      return shareCode;
     } catch (cause) {
       throw cause instanceof Error
         ? cause

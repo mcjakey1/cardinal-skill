@@ -28,7 +28,7 @@ interface Props {
   onSelect: (courseId: string) => void;
   onUpdate: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
-  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<void>;
   onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;

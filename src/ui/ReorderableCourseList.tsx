@@ -28,7 +28,7 @@ interface Props {
   onReorder: (courses: CourseOption[]) => void;
   onRename: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
-  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<void>;
   onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;
@@ -174,7 +174,7 @@ function CourseLibraryRow({
   onOpen: (courseId: string) => void;
   onRename: (courseId: string, metadata: CourseMetadata) => Promise<void>;
   onReset: (courseId: string) => Promise<void>;
-  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<string>;
+  onShare: (courseId: string, visibility: CommunityVisibility) => Promise<void>;
   onArchive: (courseId: string) => Promise<void>;
   onDuplicate: (courseId: string) => Promise<void>;
   onDelete: (courseId: string) => Promise<void>;

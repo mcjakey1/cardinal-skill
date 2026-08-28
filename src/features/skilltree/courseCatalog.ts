@@ -33,14 +33,12 @@ export async function joinPublishedCourse(courseId: string): Promise<string> {
 export async function publishCommunityCourse(
   courseId: string,
   visibility: CommunityVisibility,
-): Promise<string> {
-  const { data, error } = await supabase.rpc('publish_community_course', {
+): Promise<void> {
+  const { error } = await supabase.rpc('publish_community_course', {
     p_course_id: courseId,
     p_discoverability: visibility,
   });
   if (error) throw new Error(error.message || 'Community publishing failed.');
-  if (typeof data !== 'string') throw new Error('The shared course did not return a share code.');
-  return data;
 }
 
 export async function archiveSharedCourse(courseId: string): Promise<void> {

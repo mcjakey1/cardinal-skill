@@ -14,6 +14,7 @@ interface Props {
   newCourseIds?: ReadonlySet<string>;
   onJoin: (course: CatalogCourse) => void;
   onOpen: (course: CatalogCourse) => void;
+  onLeaderboard: (course: CatalogCourse) => void;
   empty?: React.ReactElement | null;
 }
 
@@ -25,6 +26,7 @@ export function CourseCatalogList({
   newCourseIds = NONE,
   onJoin,
   onOpen,
+  onLeaderboard,
   empty,
 }: Props) {
   return (
@@ -39,17 +41,19 @@ export function CourseCatalogList({
           busy={busyCourseId === item.id}
           isNew={newCourseIds.has(item.id)}
           onPress={() => item.isJoined ? onOpen(item) : onJoin(item)}
+          onLeaderboard={() => onLeaderboard(item)}
         />
       )}
     />
   );
 }
 
-function CatalogRow({ course, busy, isNew, onPress }: {
+function CatalogRow({ course, busy, isNew, onPress, onLeaderboard }: {
   course: CatalogCourse;
   busy: boolean;
   isNew: boolean;
   onPress: () => void;
+  onLeaderboard: () => void;
 }) {
   const t = useTheme();
   const { theme } = useAppTheme();
@@ -100,23 +104,39 @@ function CatalogRow({ course, busy, isNew, onPress }: {
         ) : null}
       </View>
 
-      <Pressable
-        onPress={onPress}
-        disabled={busy}
-        accessibilityRole="button"
-        accessibilityLabel={`${isNew ? 'New course. ' : ''}${course.isJoined ? 'Open' : 'Join'} ${course.title}`}
-        accessibilityState={{ disabled: busy }}
-        style={({ pressed }) => [
-          styles.action,
-          bevelStyle(t, course.isJoined ? 'panel' : 'brand', pressed ? 'inset' : 'raised'),
-          busy ? styles.disabled : null,
-        ]}
-      >
-        <PixelIcon name={course.isJoined ? 'play' : 'plus'} size={14} colour={course.isJoined ? t.info : t.brandInk} />
-        <PixelText variant="micro" colour={course.isJoined ? t.info : t.brandInk}>
-          {busy ? 'JOINING…' : course.isJoined ? 'OPEN COURSE' : 'JOIN COURSE'}
-        </PixelText>
-      </Pressable>
+      <View style={styles.actions}>
+        {course.kind === 'community' && course.isJoined ? (
+          <Pressable
+            onPress={onLeaderboard}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${course.title} leaderboard`}
+            style={({ pressed }) => [
+              styles.action,
+              bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+            ]}
+          >
+            <PixelIcon name="crown" size={14} colour={t.locate} />
+            <PixelText variant="micro" colour={t.locate}>LEADERBOARD</PixelText>
+          </Pressable>
+        ) : null}
+        <Pressable
+          onPress={onPress}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={`${isNew ? 'New course. ' : ''}${course.isJoined ? 'Open' : 'Join'} ${course.title}`}
+          accessibilityState={{ disabled: busy }}
+          style={({ pressed }) => [
+            styles.action,
+            bevelStyle(t, course.isJoined ? 'panel' : 'brand', pressed ? 'inset' : 'raised'),
+            busy ? styles.disabled : null,
+          ]}
+        >
+          <PixelIcon name={course.isJoined ? 'play' : 'plus'} size={14} colour={course.isJoined ? t.info : t.brandInk} />
+          <PixelText variant="micro" colour={course.isJoined ? t.info : t.brandInk}>
+            {busy ? 'JOINING…' : course.isJoined ? 'OPEN COURSE' : 'JOIN COURSE'}
+          </PixelText>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -136,6 +156,7 @@ const styles = StyleSheet.create({
   titleLine: { minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
   title: { minWidth: 0, flexShrink: 1 },
   badge: { flexShrink: 0, borderWidth: bevel, paddingHorizontal: space.cell, paddingVertical: space.hair },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.cell },
   action: {
     minHeight: touch,
     flexDirection: 'row',

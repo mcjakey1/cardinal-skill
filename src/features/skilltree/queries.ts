@@ -24,6 +24,13 @@ export interface TreeSnapshot {
   completedMissionIds: string[];
 }
 
+/** Distinct cache contracts for authoring, learner, and strict mission reads. */
+export const treeQueryKeys = {
+  authoring: (courseId: string) => ['tree', 'authoring', courseId] as const,
+  live: (courseId: string) => ['tree', 'live', courseId] as const,
+  missions: (courseId: string) => ['tree', 'missions', courseId] as const,
+};
+
 const NODE_COLUMNS =
   'id, course_id, track_id, title, description, kind, icon_key, xp_reward, syllabus_topic, universal_skill, learning_objectives, x, y, sort_order, quest_title, quest_subtitle, title_override, achievement_title, achievement_description, parent_node_id, graded, archived';
 const LEGACY_NODE_COLUMNS = NODE_COLUMNS.replace(', archived', '');

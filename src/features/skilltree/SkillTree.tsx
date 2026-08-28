@@ -442,7 +442,9 @@ function SkillTreeCanvas({
 
   // The route stays mounted behind other tabs. A navigation focus request must
   // therefore move the camera again, not only when this component first mounts.
-  const focusedRequest = useRef<number | null>(null);
+  // The default key describes the already-restored viewport; only a later
+  // navigation request should move the camera to active work.
+  const focusedRequest = useRef<number | null>(focusRequestKey);
   useEffect(() => {
     if (
       focusedRequest.current === focusRequestKey

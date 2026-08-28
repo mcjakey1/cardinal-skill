@@ -36,9 +36,7 @@ export function missionDifficulty(mission: Mission, node: SkillNode): MissionDif
   // the label. Recover that original signal for already-imported courses.
   if (mission.xpReward >= 75) return 'hard';
   if (mission.xpReward <= 30) return 'easy';
-  if (mission.kind === 'assessment' || mission.kind === 'project') return 'hard';
-  if (mission.kind === 'assignment') return 'medium';
-  return 'easy';
+  return 'medium';
 }
 
 export function filterMissionRows(

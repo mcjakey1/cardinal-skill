@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  attachMissingSyllabusCoverage,
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
   missionDifficultyForTier,
   requireGranularSkillCount,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
+  requireUniqueParserNodeIds,
   repairNodeTarget,
   scaleMission,
   syllabusGraphRepairPrompt,
@@ -98,27 +98,29 @@ test('dense syllabus subtopics may share a node only when their content names ea
   );
 });
 
-test('the final parser deterministically attaches one omitted dense subtopic to its outline unit', () => {
-  const coverage = [{
-    week: 13,
-    topics: ['Boolean Functions & Expressions', 'Logic Gates', 'Simplification Techniques'],
-  }];
-  const candidate = [
-    { unit: 'Logic Gates', label: 'Digital Logic Gates', description: 'Model common gates.' },
-    { unit: 'Graph Coloring', label: 'Graph Coloring', description: 'Solve scheduling problems.' },
-    {
-      unit: 'Simplification Techniques',
-      label: 'Boolean Simplification',
-      description: 'Minimize expressions with algebra and K-maps.',
-    },
-  ];
+test('coverage validation never invents omitted content in an unrelated node', () => {
+  assert.throws(
+    () => requireSyllabusCoverage(
+      [{ unit: 'Logic Gates' }, { unit: 'Graph Coloring' }],
+      [{ week: 13, topics: ['Boolean Functions & Expressions'] }],
+    ),
+    /omitted syllabus coverage/i,
+  );
+});
 
-  const repaired = attachMissingSyllabusCoverage(candidate, coverage);
-  assert.match(repaired[2]!.description, /Includes Boolean Functions & Expressions/i);
-  assert.equal(repaired[0]!.description, candidate[0]!.description);
-  assert.equal(repaired[1]!.description, candidate[1]!.description);
-  assert.doesNotThrow(() => requireSyllabusCoverage(repaired, coverage));
-  assert.equal(candidate[0]!.description, 'Model common gates.');
+test('coverage matching handles common singulars and ignores table filler', () => {
+  assert.doesNotThrow(() => requireSyllabusCoverage(
+    [{ unit: 'Random Process' }, { unit: 'Error Analysis' }],
+    [{ week: 1, topics: ['Random Processes', 'Error Analyses', 'And The'] }],
+  ));
+});
+
+test('duplicate provider node ids fail before edge normalization', () => {
+  assert.throws(
+    () => requireUniqueParserNodeIds([{ id: 'logic' }, { id: 'logic' }]),
+    /duplicate node ids/i,
+  );
+  assert.doesNotThrow(() => requireUniqueParserNodeIds([{ id: 'logic' }, { id: 'sets' }]));
 });
 
 test('coverage repair can add room for omitted syllabus concepts', () => {
@@ -137,6 +139,14 @@ test('coverage repair can add room for omitted syllabus concepts', () => {
       'The graph omitted syllabus coverage: A; B; C; D.',
     ),
     26,
+  );
+  assert.equal(
+    repairNodeTarget(
+      { min: 20, max: 26 },
+      20,
+      'The graph omitted syllabus coverage: Sec. 2 Filters; Z-Transform.',
+    ),
+    22,
   );
 });
 

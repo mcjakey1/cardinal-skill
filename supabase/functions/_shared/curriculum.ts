@@ -137,7 +137,9 @@ export function requireSyllabusCoverage(
   for (const row of coverage) {
     for (const topic of row.topics) {
       const key = comparableTopic(topic);
-      if (!key) continue;
+      // Wrapped table fragments such as "And The" are extraction noise, not a
+      // competency that a generated graph could meaningfully demonstrate.
+      if (!key || meaningfulTopicTokens(key).length === 0) continue;
       const entry = expected.get(key) ?? { label: topic.trim(), weeks: new Set<number>() };
       entry.weeks.add(row.week);
       expected.set(key, entry);
@@ -170,65 +172,6 @@ export function requireSyllabusCoverage(
       );
     }
   }
-}
-
-/**
- * Preserve source coverage when the model groups a dense outline into fewer
- * nodes than there are subtopics. The missing label is attached to the closest
- * node from the same coverage row (then nearest week) before strict validation.
- * This is source-backed enrichment, not invented curriculum content.
- */
-export function attachMissingSyllabusCoverage<T extends SyllabusCoverageNode>(
-  nodes: readonly T[],
-  coverage: readonly AcademicCoverageRow[],
-): T[] {
-  if (nodes.length === 0) return [];
-  const rows = coverage.flatMap((row) => row.topics.map((topic) => ({
-    week: row.week,
-    key: comparableTopic(topic),
-    label: topic.trim(),
-    siblingKeys: new Set(row.topics.map(comparableTopic).filter(Boolean)),
-  }))).filter((row) => row.key && row.label);
-  const weekByTopic = new Map(rows.map((row) => [row.key, row.week]));
-  const additions = new Map<number, string[]>();
-  const attachedKeys = new Set<string>();
-
-  for (const missing of rows) {
-    if (nodes.some((node) => nodeCoversTopic(node, missing.key))) continue;
-    if (attachedKeys.has(missing.key)) continue;
-    attachedKeys.add(missing.key);
-    const expectedTokens = new Set(meaningfulTopicTokens(missing.key));
-    let bestIndex = 0;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    nodes.forEach((node, index) => {
-      const unitKey = comparableTopic(node.unit);
-      const unitWeek = weekByTopic.get(unitKey);
-      const sameRow = missing.siblingKeys.has(unitKey) ? 1 : 0;
-      const distance = unitWeek === undefined ? 52 : Math.abs(unitWeek - missing.week);
-      const nodeTokens = new Set(meaningfulTopicTokens([
-        comparableTopic(node.unit),
-        comparableTopic(node.label),
-        comparableTopic(node.description),
-      ].join(' ')));
-      const overlap = [...expectedTokens].filter((token) => nodeTokens.has(token)).length;
-      const score = sameRow * 10_000 + overlap * 100 - distance * 10 - index / 100;
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = index;
-      }
-    });
-    additions.set(bestIndex, [...(additions.get(bestIndex) ?? []), missing.label]);
-  }
-
-  return nodes.map((node, index) => {
-    const topics = additions.get(index);
-    if (!topics?.length) return node;
-    const prefix = `Includes ${topics.join(', ')}.`;
-    const description = typeof node.description === 'string' && node.description.trim()
-      ? `${prefix} ${node.description.trim()}`
-      : prefix;
-    return { ...node, description };
-  });
 }
 
 export function syllabusGraphRepairPrompt({
@@ -267,7 +210,7 @@ export function repairNodeTarget(
   failure: string,
 ): number {
   const boundedCandidate = Math.max(range.min, Math.min(range.max, Math.round(candidateCount) || 0));
-  const omitted = failure.match(/graph omitted syllabus coverage:\s*([^.]*)/i)?.[1]
+  const omitted = failure.match(/graph omitted syllabus coverage:\s*(.*?)(?:\.\s*$|$)/i)?.[1]
     ?.split(';')
     .filter((topic) => topic.trim()).length ?? 0;
   const repeated = failure.match(/requires at least\s+(\d+)\s+progressive skills;.*returned\s+(\d+)/i);
@@ -304,7 +247,39 @@ function meaningfulTopicTokens(value: string): string[] {
   return comparableTopic(value)
     .split(' ')
     .filter((token) => token && !ignored.has(token))
-    .map((token) => token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token);
+    .map(singularTopicToken);
+}
+
+/** Whether an extracted outline cell contains an assessable academic term. */
+export function isMeaningfulSyllabusTopic(value: unknown): boolean {
+  return meaningfulTopicTokens(comparableTopic(value)).length > 0;
+}
+
+/** Reject provider IDs before any edge can ambiguously target a duplicate. */
+export function requireUniqueParserNodeIds(nodes: readonly { id?: unknown }[]): void {
+  const ids = nodes
+    .map((node) => typeof node.id === 'string' ? node.id.trim() : '')
+    .filter(Boolean);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('The graph contains duplicate node ids. Every node id must be unique.');
+  }
+}
+
+function singularTopicToken(token: string): string {
+  const irregular: Record<string, string> = {
+    analyses: 'analysis',
+    crises: 'crisis',
+    hypotheses: 'hypothesis',
+    matrices: 'matrix',
+    theses: 'thesis',
+  };
+  if (irregular[token]) return irregular[token]!;
+  if (token.endsWith('ies') && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (/(?:sses|xes|zes|ches|shes)$/.test(token)) return token.slice(0, -2);
+  if (token.length > 3 && token.endsWith('s') && !/(?:ss|us|is)$/.test(token)) {
+    return token.slice(0, -1);
+  }
+  return token;
 }
 
 function comparableTopic(value: unknown): string {

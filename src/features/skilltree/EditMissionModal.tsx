@@ -76,7 +76,14 @@ export function EditMissionModal({
   };
 
   return (
-    <Modal transparent visible={Boolean(row)} animationType="none" onRequestClose={saving ? undefined : onClose}>
+    <Modal
+      transparent
+      visible={Boolean(row)}
+      animationType="none"
+      onRequestClose={() => {
+        if (!saving) onClose();
+      }}
+    >
       <KeyboardAvoidingView
         // iOS does not resize the root view for its keyboard; padding keeps the save controls reachable.
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}

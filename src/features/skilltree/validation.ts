@@ -95,14 +95,22 @@ export function validateGraph(nodes: SkillNode[], prereqs: Prereq[]): GraphValid
       adjacency.get(nodeId)!.add(prereqId);
       adjacency.get(prereqId)!.add(nodeId);
     }
-    const connected = new Set<string>();
-    const pending = [[...seen][0]!];
-    while (pending.length > 0) {
-      const id = pending.pop()!;
-      if (connected.has(id)) continue;
-      connected.add(id);
-      for (const next of adjacency.get(id)!) pending.push(next);
+    const unvisited = new Set(seen);
+    const components: string[][] = [];
+    while (unvisited.size > 0) {
+      const component: string[] = [];
+      const pending = [unvisited.values().next().value!];
+      while (pending.length > 0) {
+        const id = pending.pop()!;
+        if (!unvisited.delete(id)) continue;
+        component.push(id);
+        for (const next of adjacency.get(id)!) pending.push(next);
+      }
+      components.push(component);
     }
+    const primary = components.reduce((largest, component) =>
+      component.length > largest.length ? component : largest, components[0]!);
+    const connected = new Set(primary);
     const orphaned = [...seen].filter((id) => !connected.has(id));
     if (orphaned.length > 0) {
       errors.push({

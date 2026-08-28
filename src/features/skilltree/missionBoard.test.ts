@@ -69,3 +69,8 @@ test('legacy missions recover parser difficulty from their scaled XP', () => {
   const legacy = row('legacy-hard', 'open', 85, 30, 3);
   assert.equal(missionDifficulty(legacy.mission, legacy.node), 'hard');
 });
+
+test('legacy mid-band rewards match the database medium backfill', () => {
+  const legacy = row('legacy-medium', 'open', 50, 20, 2);
+  assert.equal(missionDifficulty(legacy.mission, legacy.node), 'medium');
+});

@@ -25,7 +25,7 @@ import { applyMissionUpdate, type MissionUpdate } from '@/features/skilltree/mis
 import { persistMissionUpdate, synchronizeEditedMission } from '@/features/skilltree/missionMutations';
 import { effectiveMissionCompletionIds, missionStates } from '@/features/skilltree/missions';
 import { deriveStatuses } from '@/features/skilltree/progression';
-import { fetchMissionBoardTree, type TreeSnapshot } from '@/features/skilltree/queries';
+import { fetchMissionBoardTree, treeQueryKeys, type TreeSnapshot } from '@/features/skilltree/queries';
 import { rollUpProgress } from '@/features/skilltree/rollup';
 import { usePrefs } from '@/lib/prefs';
 import { useMultiCourseProgress } from '@/lib/progress';
@@ -66,7 +66,7 @@ export default function Missions() {
   );
   const treeQueries = useQueries({
     queries: visibleCourseIds.map((id) => ({
-      queryKey: ['tree', id],
+      queryKey: treeQueryKeys.missions(id),
       queryFn: () => fetchMissionBoardTree(id),
     })),
   });
@@ -198,7 +198,8 @@ export default function Missions() {
     if (!editing) return;
     setSaving(true);
     setSaveError(null);
-    const key = ['tree', editing.courseId] as const;
+    const key = treeQueryKeys.missions(editing.courseId);
+    await queryClient.cancelQueries({ queryKey: key });
     const previous = queryClient.getQueryData<TreeSnapshot>(key);
     queryClient.setQueryData<TreeSnapshot>(key, (current) => current ? applyMissionUpdate(current, update) : current);
     try {

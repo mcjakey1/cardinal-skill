@@ -272,7 +272,7 @@ export default function Upload() {
           documentMediaType: extractedText ? undefined : document?.mediaType,
           documentName: extractedText ? undefined : document?.name,
         },
-        140_000,
+        210_000,
         {
           onRequest: ({ endpoint, requestBytes }) => {
             trace('NETWORK', `POST ${endpointPath(endpoint)} · ${requestBytes} REQUEST BYTES`);

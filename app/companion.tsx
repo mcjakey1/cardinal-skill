@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { missionsForNode } from '@/features/skilltree/missions';
 import { resolveQuestName, type ResolvedName } from '@/features/skilltree/naming';
-import { fetchTree } from '@/features/skilltree/queries';
+import { fetchLiveTree, treeQueryKeys } from '@/features/skilltree/queries';
 import type { SkillNode } from '@/features/skilltree/types';
 import { usePrefs } from '@/lib/prefs';
 import { useQuestNames } from '@/lib/questNames';
@@ -121,8 +121,8 @@ export default function Companion() {
   const hasParams = Boolean(courseId && nodeId);
 
   const { data, isPending } = useQuery({
-    queryKey: ['tree', courseId],
-    queryFn: () => fetchTree(courseId!),
+    queryKey: treeQueryKeys.live(courseId ?? ''),
+    queryFn: () => fetchLiveTree(courseId!),
     enabled: Boolean(courseId),
   });
   const { overrides } = useQuestNames(courseId);

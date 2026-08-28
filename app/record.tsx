@@ -27,7 +27,7 @@ import {
   setLeaderboardVisibility,
 } from '@/features/skilltree/recordQueries';
 import { XP_PER_LEVEL, levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
-import { fetchLiveTree } from '@/features/skilltree/queries';
+import { fetchLiveTree, treeQueryKeys } from '@/features/skilltree/queries';
 import { rollUpProgress } from '@/features/skilltree/rollup';
 import { StampsList } from '@/features/skilltree/StampsList';
 import type { Tree } from '@/features/skilltree/types';
@@ -79,7 +79,7 @@ export default function Record() {
 
   const treeQueries = useQueries({
     queries: activeCourseIds.map((courseId) => ({
-      queryKey: ['tree', courseId],
+      queryKey: treeQueryKeys.live(courseId),
       queryFn: () => fetchLiveTree(courseId),
     })),
   });

@@ -1880,7 +1880,7 @@ function ImportSyllabus({
           documentMediaType: extractedText ? undefined : document?.mediaType,
           documentName: extractedText ? undefined : document?.name,
         },
-        140_000,
+        210_000,
       );
       if (typeof result.node_count !== 'number') {
         throw new Error('The parser did not return a saved course tree.');

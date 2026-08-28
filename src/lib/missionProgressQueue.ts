@@ -22,3 +22,21 @@ export function pruneSyncedMissionProgress(
   });
   return next;
 }
+
+/**
+ * A successful server delete makes its local tombstone obsolete. Preserve only
+ * an unmark created after the operation currently being acknowledged.
+ */
+export function pruneSyncedMissionUnmarks(
+  current: Readonly<Record<string, string>>,
+  synced: readonly (readonly [string, PendingMissionProgress])[],
+): Record<string, string> {
+  const next = { ...current };
+  synced.forEach(([missionId, operation]) => {
+    const unmarkedAt = next[missionId];
+    if (!operation.done && unmarkedAt && unmarkedAt <= operation.queuedAt) {
+      delete next[missionId];
+    }
+  });
+  return next;
+}

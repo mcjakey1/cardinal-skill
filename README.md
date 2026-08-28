@@ -80,6 +80,17 @@ npx supabase functions deploy suggest-subtree
 npx supabase functions deploy parse-syllabus
 ```
 
+Official publishing requires a server-managed instructor verification row. In
+the Supabase SQL editor, an administrator provisions or revokes an instructor
+with the service-role-only function introduced by migration `0027`:
+
+```sql
+select public.set_instructor_verification('instructor-auth-user-uuid', true);
+-- Revoke later with the same call and false.
+```
+
+Never expose this operation through the student or instructor client.
+
 `BAI_API_KEY`, `GEMINI_API_KEY`, and the Supabase service-role key must never use an `EXPO_PUBLIC_` name or appear in client code.
 
 ## AI pipeline

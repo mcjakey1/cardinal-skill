@@ -4,12 +4,13 @@ import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
 import { parseJsonObjectText } from '../_shared/bai.ts';
 import { normalizeTieredCourseDag } from '../_shared/courseGraph.ts';
 import {
-  attachMissingSyllabusCoverage,
+  isMeaningfulSyllabusTopic,
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
   missionDifficultyForTier,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
+  requireUniqueParserNodeIds,
   repairNodeTarget,
   scaleMission,
   syllabusGraphRepairPrompt,
@@ -208,7 +209,7 @@ Deno.serve(async (req) => {
       prompt: outlinePrompt,
       maxTokens: 6_000,
       seed: sourceSeed,
-      timeoutMs: 60_000,
+      timeoutMs: 45_000,
       operation: 'extract-syllabus-outline',
       responseJsonSchema: OUTLINE_SCHEMA,
       document: pdf
@@ -256,7 +257,7 @@ Deno.serve(async (req) => {
     prompt,
     maxTokens: 16_000,
     seed: sourceSeed,
-    timeoutMs: 90_000,
+    timeoutMs: 70_000,
   };
   let responseText = '';
   let parsed: ParsedTree;
@@ -534,7 +535,9 @@ function normalizeOutline(input: SyllabusOutlineInput): SyllabusOutline {
     const topics = Array.isArray(row?.topics)
       ? [...new Set(row.topics
         .map((topic) => clean(topic, 300))
-        .filter((topic) => topic && !isAssessmentOnlyTopic(topic)))]
+        .filter((topic) => topic
+          && !isAssessmentOnlyTopic(topic)
+          && isMeaningfulSyllabusTopic(topic)))]
       : [];
     return week > 0 && topics.length > 0 ? [{ week, topics }] : [];
   });
@@ -562,8 +565,9 @@ function isAssessmentOnlyTopic(topic: string): boolean {
 function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): ParsedTree {
   if (!Array.isArray(input.nodes)) throw new Error('The parser must return academic skills as an array.');
   requireSyllabusScaledSkillCount(input.nodes, outline.estimatedWeeks);
-  const coveredNodes = attachMissingSyllabusCoverage(input.nodes, outline.coverage);
-  requireSyllabusCoverage(coveredNodes, outline.coverage);
+  requireSyllabusCoverage(input.nodes, outline.coverage);
+  const coveredNodes = input.nodes;
+  requireUniqueParserNodeIds(coveredNodes);
   const usedKeys = new Set<string>();
   const keyByInputId = new Map<string, string>();
   const normalizedKeys = coveredNodes.map((node, index) => {
@@ -584,8 +588,10 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
     prereqsByKey.get(target)?.push(source);
   }
 
+  const rawNodeByKey = new Map<string, ParsedCourseGraphNode>();
   const nodes = normalizeTieredCourseDag(coveredNodes.map((node, index): ParsedNode => {
     const key = normalizedKeys[index]!;
+    rawNodeByKey.set(key, node);
     const title = compactLabel(node.label);
     const description = clean(node.description, 600) || `Apply ${title} in a focused example.`;
     const missionTitle = clean(node.mission?.title, 160) || `Practice ${title}`;
@@ -623,7 +629,29 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
         difficulty: missionScale.difficulty.toLowerCase() as ParsedMission['difficulty'],
       }],
     };
-  }));
+  })).map((node) => {
+    const rawNode = rawNodeByKey.get(node.key)!;
+    const mission = node.missions[0]!;
+    const difficulty = missionDifficultyForTier(
+      node.tier,
+      `${node.title} ${node.description} ${mission.title} ${mission.description}`,
+      rawNode.mission?.difficulty,
+    );
+    const scaled = scaleMission(
+      difficulty,
+      rawNode.mission?.estimatedMinutes,
+      rawNode.mission?.xpReward,
+    );
+    return {
+      ...node,
+      missions: [{
+        ...mission,
+        estimated_minutes: scaled.estimatedMinutes,
+        xp: scaled.xpReward,
+        difficulty: scaled.difficulty.toLowerCase() as ParsedMission['difficulty'],
+      }],
+    };
+  });
   return {
     course_code: clean(input.courseCode, 32),
     course_name: clean(input.courseTitle, 160),

@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SkillTree } from '@/features/skilltree/SkillTree';
 import { NodeEditorPanel } from '@/features/skilltree/NodeEditorPanel';
 import { linkRefusal, mintId, missionsEqual, type NodeEdit } from '@/features/skilltree/nodeEditing';
-import { MIN_COHORT, STALE_DAYS, activityFlag } from '@/features/skilltree/cohort';
+import { MIN_COHORT, STALE_DAYS } from '@/features/skilltree/cohort';
 import {
   mergeRoster,
   rosterFlag,
@@ -1916,10 +1916,18 @@ function Insights({ course }: { course: CourseRow }) {
     // reads as withheld, and a panel that says "at least 20 students" for half a
     // second before settling on nine has told the instructor something false.
     if (roster.data?.kind !== 'ready' || !tree.data || reach.data?.kind !== 'ready') return null;
+    // Only when those rows are actually this course's class. The roster falls
+    // back to listing registered accounts while nothing is enrolled, which is
+    // the right thing for a contact list and the wrong thing for every figure
+    // here: "eight students are stuck on this skill" about people who were
+    // never given the course is a false statement, not a sparse one. The
+    // no-contacts mode is still the enrolled class — it only means 0029 has not
+    // been applied, so no email came back.
+    if (roster.data.view.mode === 'registered') return null;
     const nodes = tree.data.tree.nodes.filter((n) => !n.archived);
     return {
       now,
-      students: roster.data.rows,
+      students: roster.data.view.rows,
       nodes: nodes.map((n) => ({
         id: n.id,
         // The same name precedence every other screen uses — override, then

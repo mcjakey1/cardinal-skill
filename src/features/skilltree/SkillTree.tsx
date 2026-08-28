@@ -3,6 +3,7 @@ import {
   AccessibilityInfo,
   type LayoutChangeEvent,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -22,7 +23,7 @@ import Animated, {
 import Svg, { Defs, G, Marker, Path, Polygon, Polyline, Rect } from 'react-native-svg';
 
 import { ChartTools } from '@/ui/ChartTools';
-import { Bevel, PixelText, bevelStyle, type PressState } from '@/ui/pixel';
+import { Bevel, PixelInput, PixelText, bevelStyle, type PressState } from '@/ui/pixel';
 import { useAppTheme } from '@/theme/ThemeProvider';
 import { useTheme } from '@/theme/useTheme';
 import { instanceNamespace } from '@/theme/dither';
@@ -53,6 +54,7 @@ import type { Prereq, SkillNode, Tree } from './types';
 import { autoLayout, hasOverlappingNodePositions } from './autoLayout';
 import { displayStatus, type DisplayStatus } from './nodeVisualState';
 import { currentFocusNodes } from './chartFocus';
+import { nodeChoices } from './nodeFinder';
 import { miniMapGeometry, projectToMiniMap } from './minimap';
 import { CanvasGestureSurface, type WheelPoint } from './CanvasGestureSurface';
 import { useCanvasViewport } from './CanvasViewportProvider';
@@ -322,7 +324,6 @@ function SkillTreeCanvas({
   onDeleteNode,
 }: Props) {
   const { theme } = useAppTheme();
-  const t = useTheme();
   // Arrowheads are document-wide definitions on the web, and two charts can be
   // mounted at once — the student's tree and the instructor's authoring canvas.
   // A shared name means the second chart points its edges at the first chart's
@@ -337,6 +338,9 @@ function SkillTreeCanvas({
   const cameraScale = useSharedValue(restoredViewport.current?.scale ?? 1);
   /** Set only while a node is being dragged, so the commit happens once at the end. */
   const [dragging, setDragging] = useState<{ id: string; x: number; y: number } | null>(null);
+  /** The go-to-a-node list, and what has been typed into its search box. */
+  const [finding, setFinding] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
 
   const laidOutTree = tree;
 
@@ -454,6 +458,24 @@ function SkillTreeCanvas({
     focusCurrentWork(true);
   }, [focusCurrentWork, focusRequestKey, nodes.length, viewport.height, viewport.width]);
 
+  /**
+   * Put one node in the middle of the screen.
+   *
+   * The camera controls are pan, pinch and zoom, which are all relative: they
+   * move you from where you are, and none of them answers "take me to the node
+   * called X". On a chart wider than the screen that is a hunt, and it is worse
+   * in edit mode, where the reason to reach a node is to change it.
+   */
+  const centreOnNode = useCallback((nodeId: string) => {
+    const node = byId.get(nodeId);
+    if (!node) return;
+    setCamera(
+      focusTransform(boundsOf([{ x: node.px, y: node.py }], CELL + LABEL_BLOCK), viewport),
+      true,
+      motion.unlock,
+    );
+  }, [byId, setCamera, viewport]);
+
   const focusedNodeRequest = useRef<string | null>(null);
   useEffect(() => {
     const request = focusNodeId ? `${focusNodeId}:${focusNodeRequestKey}` : null;
@@ -488,8 +510,14 @@ function SkillTreeCanvas({
   );
 
   const canvasGesture = useMemo(() => {
+    // Never disabled by edit mode. It was, and that was the whole bug: the one
+    // mode where nodes get dragged around was the one mode where the chart
+    // could not be moved to reach them, leaving zoom-out as the only way to see
+    // anything off screen. A drag that starts on a cell is claimed by that
+    // cell's own gesture (`NodeCell`), which is the only case this ever had to
+    // give way to; the dead ground around a short label still pans, exactly as
+    // `styles.cellWrap` says it should.
     const pan = Gesture.Pan()
-      .enabled(!editMode)
       .maxPointers(1)
       .minDistance(DRAG_SLOP)
       .onBegin(() => {
@@ -529,7 +557,7 @@ function SkillTreeCanvas({
       });
 
     return Gesture.Simultaneous(pan, pinch);
-  }, [cameraScale, cameraX, cameraY, editMode, panStartX, panStartY, persistCamera, pinchStartScale, pinchStartX, pinchStartY]);
+  }, [cameraScale, cameraX, cameraY, panStartX, panStartY, persistCamera, pinchStartScale, pinchStartX, pinchStartY]);
 
   const cameraStyle = useAnimatedStyle(() => ({
     transform: [
@@ -550,6 +578,12 @@ function SkillTreeCanvas({
     const next = zoomAbout(current, nextScale / current.scale, point);
     setCamera(next, false);
   }, [cameraScale, cameraX, cameraY, setCamera]);
+
+  /** Both ways out of edit mode go through here, so neither leaves a panel open. */
+  const toggleEditMode = useCallback((next: boolean) => {
+    if (!next) setFinding(false);
+    onToggleEditMode?.(next);
+  }, [onToggleEditMode]);
 
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -700,27 +734,21 @@ function SkillTreeCanvas({
       </Pressable>
       </CanvasGestureSurface>
 
-      {linkMode && onCancelLink ? (
-        <Bevel tone="panel" style={styles.linkBanner}>
-          <PixelText variant="micro" colour={theme.textPrimary}>
-            {linkNotice ?? 'CLICK TARGET NODE TO CONNECT'}
-          </PixelText>
-          <Pressable
-            onPress={onCancelLink}
-            accessibilityRole="button"
-            accessibilityLabel="Cancel connecting nodes"
-            style={({ pressed }: PressState) => [styles.linkCancel, bevelStyle(t, 'panel', pressed ? 'inset' : 'raised')]}
-          >
-            <PixelText variant="micro" colour={theme.nodeCompleted.border}>CANCEL</PixelText>
-          </Pressable>
-        </Bevel>
-      ) : linkNotice ? (
-        <Bevel tone="panel" style={styles.linkBanner}>
-          <PixelText variant="micro" colour={theme.textPrimary}>{linkNotice}</PixelText>
-        </Bevel>
-      ) : null}
-
       <View style={styles.chartHud} pointerEvents="box-none">
+        {/* Inside the rail rather than floating over the canvas, so the list
+            cannot cover the button that opened it. */}
+        {editMode && finding ? (
+          <NodeFinder
+            choices={nodeChoices(nodes, findQuery)}
+            query={findQuery}
+            onQuery={setFindQuery}
+            onPick={(id) => {
+              setFinding(false);
+              centreOnNode(id);
+            }}
+            onClose={() => setFinding(false)}
+          />
+        ) : null}
         <View style={styles.hudControls} pointerEvents="box-none">
           {editMode && onAddNode && onToggleLinkMode ? (
             <EditToolbar
@@ -729,6 +757,10 @@ function SkillTreeCanvas({
               selected={Boolean(selectedId)}
               reduceMotion={Boolean(reduceMotion)}
               deleteLabel={deleteLabel}
+              finding={finding}
+              linkNotice={linkNotice}
+              onCancelLink={onCancelLink}
+              onFind={() => setFinding((open) => !open)}
               onAdd={() => {
                 if (nodes.length === 0) {
                   focusedRequest.current = null;
@@ -744,12 +776,12 @@ function SkillTreeCanvas({
               onLink={onToggleLinkMode}
               onDelete={onDeleteNode}
               onReset={onResetLayout}
-              onExit={() => onToggleEditMode?.(false)}
+              onExit={() => toggleEditMode(false)}
             />
           ) : null}
           <ChartTools
             editMode={editMode}
-            onToggleEditMode={onToggleEditMode}
+            onToggleEditMode={onToggleEditMode ? toggleEditMode : undefined}
             onZoomIn={() => zoom(1.25)}
             onZoomOut={() => zoom(0.8)}
             onFit={fit}
@@ -771,25 +803,123 @@ function SkillTreeCanvas({
   );
 }
 
-function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLabel, onAdd, onLink, onDelete, onReset, onExit }: {
+/**
+ * Every node on the chart as a list of names, each of which takes the camera to
+ * it.
+ *
+ * The list is the accessible half of the mini-map: the same "get me over there"
+ * job, done with names and 44dp rows instead of four-pixel marks, which is the
+ * version that works for someone who cannot aim a drag precisely or read a
+ * thumbnail.
+ */
+function NodeFinder({
+  choices,
+  query,
+  onQuery,
+  onPick,
+  onClose,
+}: {
+  choices: readonly { id: string; title: string }[];
+  query: string;
+  onQuery: (next: string) => void;
+  onPick: (id: string) => void;
+  onClose: () => void;
+}) {
+  const t = useTheme();
+  return (
+    <Bevel tone="panel" style={styles.finder} accessibilityLabel="Go to a node">
+      <View style={styles.finderHead}>
+        <PixelText variant="label" colour={t.ink}>GO TO A NODE</PixelText>
+        <Pressable
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close the go to a node list"
+          style={({ pressed }: PressState) => [
+            styles.finderClose,
+            bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+          ]}
+        >
+          <PixelText variant="label" colour={t.ink}>CLOSE</PixelText>
+        </Pressable>
+      </View>
+
+      <PixelInput
+        label="Search by name"
+        value={query}
+        onChangeText={onQuery}
+        placeholder="Type part of a name"
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
+
+      <ScrollView style={styles.finderList} contentContainerStyle={styles.finderRows}>
+        {choices.length === 0 ? (
+          <PixelText variant="body" colour={t.inkMuted}>
+            No node has that in its name.
+          </PixelText>
+        ) : (
+          choices.map((choice) => (
+            <Pressable
+              key={choice.id}
+              onPress={() => onPick(choice.id)}
+              accessibilityRole="button"
+              accessibilityLabel={`Go to ${choice.title}`}
+              style={({ pressed, hovered }: PressState) => [
+                styles.finderRow,
+                bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+                pressed || !hovered ? null : { backgroundColor: t.well },
+              ]}
+            >
+              <PixelText variant="label" colour={t.ink}>{choice.title}</PixelText>
+            </Pressable>
+          ))
+        )}
+      </ScrollView>
+    </Bevel>
+  );
+}
+
+/**
+ * The tools that only exist while the chart is being edited.
+ *
+ * Written for someone who does not already know this chart. Every control says
+ * what it does in words rather than a glyph, at the same size as body text
+ * rather than the HUD's micro; the strip states which mode it is in instead of
+ * leaving that to the pressed-in icon three controls away; and the way out is
+ * the last control, named for the thing it finishes rather than the mode it
+ * leaves. The line beside the title is the running commentary — normally that a
+ * canvas can be dragged, which nothing about a canvas says and which is exactly
+ * the trouble this mode used to land people in, and during a connection what to
+ * click next or why the last click was refused. It reads there rather than in a
+ * floating banner because a banner over an unbounded canvas has nowhere to sit
+ * that the controls are not already using.
+ */
+function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLabel, finding, linkNotice, onAdd, onFind, onLink, onDelete, onReset, onExit, onCancelLink }: {
   linkMode: boolean;
   linkSourceId?: string | null;
   selected: boolean;
   reduceMotion: boolean;
   deleteLabel?: string;
+  finding: boolean;
+  linkNotice?: string | null;
   onAdd: () => void;
+  onFind: () => void;
   onLink: () => void;
   onDelete?: () => void;
   onReset?: () => void;
   onExit: () => void;
+  onCancelLink?: () => void;
 }) {
   const t = useTheme();
   const actions = [
-    { label: '+ ADD NODE', onPress: onAdd, disabled: false },
-    { label: linkMode && linkSourceId ? 'PICK TARGET' : 'CONNECT', onPress: onLink, disabled: false },
-    { label: deleteLabel ?? 'DELETE NODE', onPress: onDelete, disabled: !selected },
-    { label: 'RESET POSITIONS', onPress: onReset, disabled: !onReset },
-    { label: 'EXIT EDIT', onPress: onExit, disabled: false },
+    { label: 'ADD NODE', hint: 'Add a new node in the middle of the view', onPress: onAdd, disabled: false, tone: 'brand' as const },
+    { label: 'GO TO NODE', hint: 'Find a node by name and move the chart to it', onPress: onFind, disabled: false, tone: finding ? ('earned' as const) : ('brand' as const) },
+    linkMode && linkSourceId
+      ? { label: 'PICK THE NEXT NODE', hint: 'Click the node that comes after the one you picked', onPress: onLink, disabled: false, tone: 'earned' as const }
+      : { label: 'CONNECT NODES', hint: 'Join the selected node to the one that comes after it', onPress: onLink, disabled: false, tone: 'brand' as const },
+    { label: deleteLabel ?? 'DELETE NODE', hint: selected ? undefined : 'Select a node on the chart first', onPress: onDelete, disabled: !selected, tone: 'brand' as const },
+    { label: 'RESET POSITIONS', hint: 'Put every node back where it was laid out', onPress: onReset, disabled: false, tone: 'brand' as const },
+    { label: 'DONE EDITING', hint: 'Leave edit mode and go back to reading the chart', onPress: onExit, disabled: false, tone: 'earned' as const },
   ];
   return (
     <Animated.View
@@ -798,23 +928,66 @@ function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLab
       style={styles.editToolbar}
     >
     <Bevel tone="panel" style={styles.editToolbarInner} accessibilityLabel="Tree edit tools">
-      {actions.map((action) => (
+      <View style={styles.editHead} accessibilityLiveRegion="polite">
+        <Bevel tone="earned" depth="inset" style={styles.editBadge}>
+          <PixelText variant="label" colour={t.tone.earned.ink}>EDIT MODE IS ON</PixelText>
+        </Bevel>
+        {linkNotice ? (
+          // Plain ink, not the alarm colour: the same channel carries "Nodes
+          // connected" and "A node cannot require itself", and one tone that
+          // reads correctly for both beats colouring by guesswork.
+          <PixelText variant="label" colour={t.ink}>{linkNotice}</PixelText>
+        ) : linkMode ? (
+          <PixelText variant="label" colour={t.tone.earned.ink}>
+            NOW CLICK THE NODE THAT COMES AFTER IT
+          </PixelText>
+        ) : (
+          <PixelText variant="micro" colour={t.inkMuted}>
+            DRAG THE BACKGROUND TO MOVE THE CHART
+          </PixelText>
+        )}
+        {linkMode && onCancelLink ? (
+          <Pressable
+            onPress={onCancelLink}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel connecting nodes"
+            style={({ pressed }: PressState) => [
+              styles.editBadge,
+              bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+            ]}
+          >
+            <PixelText variant="label" colour={t.ink}>CANCEL</PixelText>
+          </Pressable>
+        ) : null}
+      </View>
+      <View style={styles.editActions}>
+      {/* A tool with no handler is not offered at all. Greyed out forever reads
+          as broken, and the instructor canvas has no reset: its node positions
+          are real coordinates that publish, not a device-local arrangement. */}
+      {actions.filter((action) => action.onPress).map((action) => (
         <Pressable
           key={action.label}
           onPress={action.onPress}
           disabled={action.disabled}
           accessibilityRole="button"
           accessibilityLabel={action.label}
+          accessibilityHint={action.hint}
           accessibilityState={{ disabled: action.disabled }}
           style={({ pressed }: PressState) => [
             styles.editAction,
-            bevelStyle(t, action.disabled ? 'panel' : 'brand', pressed ? 'inset' : 'raised'),
+            bevelStyle(t, action.disabled ? 'panel' : action.tone, pressed ? 'inset' : 'raised'),
             action.disabled ? { opacity: 0.45 } : null,
           ]}
         >
-          <PixelText variant="micro" colour={action.disabled ? t.inkMuted : t.brandInk}>{action.label}</PixelText>
+          <PixelText
+            variant="label"
+            colour={action.disabled ? t.inkMuted : t.tone[action.tone].ink}
+          >
+            {action.label}
+          </PixelText>
         </Pressable>
       ))}
+      </View>
     </Bevel>
     </Animated.View>
   );
@@ -1217,29 +1390,43 @@ const styles = StyleSheet.create({
   },
   editToolbar: { maxWidth: '100%', flexShrink: 1, overflow: 'visible' },
   editToolbarInner: {
+    alignItems: 'flex-end',
+    gap: space.xs,
+    padding: space.xs,
+    overflow: 'visible',
+  },
+  editHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: space.cell,
+  },
+  editBadge: { minHeight: touch - space.md, justifyContent: 'center', paddingHorizontal: space.cell },
+  // ponytail: wraps to about five rows on a 420dp phone, which is the price of
+  // labels a person can read. Collapse the tray behind one "Edit tools" button
+  // below `lms.wide` if editing on a phone ever becomes a real workflow.
+  editActions: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
     flexWrap: 'wrap',
     gap: space.xs,
-    padding: space.xs,
-    overflow: 'visible',
   },
-  editAction: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
-  linkBanner: {
-    position: 'absolute',
-    zIndex: 2,
-    top: space.cell,
-    left: '20%',
-    right: '20%',
-    minHeight: touch,
+  editAction: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.md },
+  finder: { width: 264, maxWidth: '50%', flexShrink: 0, padding: space.cell, gap: space.cell },
+  finderHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: space.cell,
-    paddingHorizontal: space.cell,
   },
-  linkCancel: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
+  finderClose: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
+  // Bounded rather than flexed: the HUD rail sizes to its content, so a
+  // `flex: 1` list would have no height to fill and would collapse to one row.
+  finderList: { maxHeight: 264 },
+  finderRows: { gap: space.xs },
+  finderRow: { minHeight: touch, justifyContent: 'center', paddingHorizontal: space.cell },
   node: { position: 'absolute', zIndex: 1, width: LABEL_WIDTH, alignItems: 'center' },
   halo: {
     position: 'absolute',

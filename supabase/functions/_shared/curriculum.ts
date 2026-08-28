@@ -139,7 +139,7 @@ export function requireSyllabusCoverage(
       const key = comparableTopic(topic);
       // Wrapped table fragments such as "And The" are extraction noise, not a
       // competency that a generated graph could meaningfully demonstrate.
-      if (!key || meaningfulTopicTokens(key).length === 0) continue;
+      if (!key || !isMeaningfulSyllabusTopic(topic)) continue;
       const entry = expected.get(key) ?? { label: topic.trim(), weeks: new Set<number>() };
       entry.weeks.add(row.week);
       expected.set(key, entry);
@@ -148,8 +148,8 @@ export function requireSyllabusCoverage(
 
   const actual = new Map<string, number>();
   for (const [key] of expected) {
-    const matches = nodes.filter((node) => nodeCoversTopic(node, key));
-    if (matches.length > 0) actual.set(key, matches.length);
+    const matchCount = topicCoverageCount(nodes, key);
+    if (matchCount > 0) actual.set(key, matchCount);
   }
 
   const missing = [...expected.entries()]
@@ -242,17 +242,50 @@ function nodeCoversTopic(node: SyllabusCoverageNode, topicKey: string): boolean 
   return expectedTokens.every((token) => actualTokens.has(token));
 }
 
+/**
+ * A compound syllabus row may be represented by progressive sibling nodes.
+ * Require every distinctive token to exist, but do not require one oversized
+ * node to repeat the whole source row verbatim.
+ */
+function topicCoverageCount(nodes: readonly SyllabusCoverageNode[], topicKey: string): number {
+  const direct = nodes.filter((node) => nodeCoversTopic(node, topicKey));
+  if (direct.length > 0) return direct.length;
+
+  const expected = meaningfulTopicTokens(topicKey);
+  if (expected.length < 2) return 0;
+  const contributing = nodes.map((node) => {
+    const searchable = [
+      node.unit,
+      node.label,
+      node.description,
+      node.mission?.title,
+      node.mission?.description,
+    ].map(comparableTopic).join(' ');
+    const tokens = new Set(meaningfulTopicTokens(searchable));
+    return { node, matched: expected.filter((token) => tokens.has(token)) };
+  }).filter(({ matched }) => matched.length > 0);
+  const covered = new Set(contributing.flatMap(({ matched }) => matched));
+  return expected.every((token) => covered.has(token)) ? contributing.length : 0;
+}
+
 function meaningfulTopicTokens(value: string): string[] {
   const ignored = new Set(['a', 'an', 'and', 'for', 'in', 'of', 'on', 'the', 'to', 'with']);
   return comparableTopic(value)
     .split(' ')
     .filter((token) => token && !ignored.has(token))
-    .map(singularTopicToken);
+    .map(singularTopicToken)
+    .filter(Boolean);
 }
 
 /** Whether an extracted outline cell contains an assessable academic term. */
 export function isMeaningfulSyllabusTopic(value: unknown): boolean {
-  return meaningfulTopicTokens(comparableTopic(value)).length > 0;
+  const comparable = comparableTopic(value);
+  if (
+    /^introduction to (?:the )?course$/.test(comparable)
+    || /\borientation\b.*\b(?:course|syllabus)\b/.test(comparable)
+    || /^(?:course|class) (?:policies|requirements|expectations)$/.test(comparable)
+  ) return false;
+  return meaningfulTopicTokens(comparable).length > 0;
 }
 
 /** Reject provider IDs before any edge can ambiguously target a duplicate. */
@@ -272,8 +305,13 @@ function singularTopicToken(token: string): string {
     hypotheses: 'hypothesis',
     matrices: 'matrix',
     theses: 'thesis',
+    contrapositive: 'contraposition',
+    simplification: 'simplify',
+    simplified: 'simplify',
+    simplifying: 'simplify',
   };
   if (irregular[token]) return irregular[token]!;
+  if (token === 'technique' || token === 'techniques') return '';
   if (token.endsWith('ies') && token.length > 4) return `${token.slice(0, -3)}y`;
   if (/(?:sses|xes|zes|ches|shes)$/.test(token)) return token.slice(0, -2);
   if (token.length > 3 && token.endsWith('s') && !/(?:ss|us|is)$/.test(token)) {

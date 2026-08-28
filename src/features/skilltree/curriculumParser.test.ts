@@ -115,6 +115,23 @@ test('coverage matching handles common singulars and ignores table filler', () =
   ));
 });
 
+test('coverage ignores course orientation and generic technique wording', () => {
+  assert.doesNotThrow(() => requireSyllabusCoverage(
+    [{ unit: 'Boolean Simplification', description: 'Simplify Boolean expressions.' }],
+    [{
+      week: 1,
+      topics: ['Orientation and Introduction to the Course', 'Simplification Techniques'],
+    }],
+  ));
+});
+
+test('one compound proof topic may progress across sibling nodes', () => {
+  assert.doesNotThrow(() => requireSyllabusCoverage([
+    { unit: 'Proof by Contraposition', description: 'Construct a contrapositive proof.' },
+    { unit: 'Proof by Contradiction', description: 'Derive and resolve a contradiction.' },
+  ], [{ week: 4, topics: ['Proof by Contraposition & Contradiction'] }]));
+});
+
 test('duplicate provider node ids fail before edge normalization', () => {
   assert.throws(
     () => requireUniqueParserNodeIds([{ id: 'logic' }, { id: 'logic' }]),

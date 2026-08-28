@@ -4,12 +4,14 @@ import { test } from 'node:test';
 import {
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
+  expandSharedLeadTopic,
   missionDifficultyForTier,
   requireGranularSkillCount,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
   requireUniqueParserNodeIds,
   repairNodeTarget,
+  repairGenerationSeed,
   scaleMission,
   syllabusGraphRepairPrompt,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
@@ -23,6 +25,22 @@ test('dynamic syllabus trees support mini-modules through comprehensive curricul
   assert.equal(requireGranularSkillCount(new Array(MAX_PARSED_SKILLS).fill(null)).length, 40);
   assert.throws(() => requireGranularSkillCount(new Array(5).fill(null)), /between 6 and 40/);
   assert.throws(() => requireGranularSkillCount(new Array(41).fill(null)), /between 6 and 40/);
+});
+
+test('shared-lead compound topics become explicit graph competencies', () => {
+  assert.deepEqual(
+    expandSharedLeadTopic('Proof by Contraposition & Contradiction'),
+    ['Proof by Contraposition', 'Proof by Contradiction'],
+  );
+  assert.deepEqual(
+    expandSharedLeadTopic('Paths, Circuits & Connectivity'),
+    ['Paths, Circuits & Connectivity'],
+  );
+});
+
+test('a repair uses a different but stable valid Gemini seed', () => {
+  assert.equal(repairGenerationSeed(41), 42);
+  assert.equal(repairGenerationSeed(0x7fff_ffff), 1);
 });
 
 test('a 14-week DSP syllabus cannot collapse to ten weekly-heading nodes', () => {

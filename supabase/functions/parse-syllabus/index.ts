@@ -11,6 +11,8 @@ import {
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
   requireUniqueParserNodeIds,
+  expandSharedLeadTopic,
+  repairGenerationSeed,
   repairNodeTarget,
   scaleMission,
   syllabusGraphRepairPrompt,
@@ -303,6 +305,7 @@ Deno.serve(async (req) => {
     try {
       responseText = await requestGeminiCompletion({
         ...completionInput,
+        seed: repairGenerationSeed(sourceSeed),
         system: `${SYLLABUS_GRAPH_SYSTEM_PROMPT}\nThis is a validation repair. Return exactly ${repairTarget} nodes and verify every graph rule before responding.\nRequired JSON shape:\n${JSON.stringify(repairSchema)}`,
         prompt: syllabusGraphRepairPrompt({
           outline,
@@ -535,6 +538,7 @@ function normalizeOutline(input: SyllabusOutlineInput): SyllabusOutline {
     const topics = Array.isArray(row?.topics)
       ? [...new Set(row.topics
         .map((topic) => clean(topic, 300))
+        .flatMap(expandSharedLeadTopic)
         .filter((topic) => topic
           && !isAssessmentOnlyTopic(topic)
           && isMeaningfulSyllabusTopic(topic)))]

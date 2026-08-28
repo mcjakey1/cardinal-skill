@@ -92,6 +92,7 @@ Table recovery:
 - Reconstruct wrapped cells, repeated headers, blank cells, and page breaks.
 - Return one coverage item for every numbered instructional week.
 - Preserve every distinct academic topic listed in a week as a separate string in that week's topics array.
+- Expand compressed parallel topics that share a lead-in around an ampersand into separate topic strings, repeating the shared lead-in for each topic.
 - When a row says continuation or cont'n, repeat the full parent topic in that week instead of returning the continuation marker.
 - Do not merge several weeks into one row, even when their printed topic is identical.
 - Format courseTitle and every topic string in proper Title Case while preserving established acronyms in uppercase.
@@ -104,6 +105,23 @@ export async function stableGenerationSeed(source: string): Promise<number> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
   const value = new DataView(digest).getUint32(0, false) & 0x7fff_ffff;
   return value || 1;
+}
+
+/** Expand forms such as "Proof by A & B" without splitting ordinary title pairs. */
+export function expandSharedLeadTopic(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const topic = value.trim();
+  if (!topic) return [];
+  const sharedLead = topic.match(/^(.+\bby)\s+([^&,;]+?)\s*&\s*([^&,;]+)$/i);
+  if (!sharedLead) return [topic];
+  const [, lead, left, right] = sharedLead;
+  return [`${lead} ${left}`.trim(), `${lead} ${right}`.trim()];
+}
+
+/** Keep repair deterministic while avoiding the failed first sample verbatim. */
+export function repairGenerationSeed(seed: number): number {
+  const bounded = Math.max(1, Math.min(0x7fff_ffff, Math.round(Number(seed) || 1)));
+  return bounded === 0x7fff_ffff ? 1 : bounded + 1;
 }
 
 export function requireGranularSkillCount<T>(nodes: readonly T[]): readonly T[] {

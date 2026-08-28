@@ -47,6 +47,7 @@ import { bytesToBase64 } from '@/lib/base64';
 import { callEdgeFunction } from '@/lib/edgeFunctions';
 import { extractTextFromPDF } from '@/lib/pdfTextExtraction';
 import { lms } from '@/theme/lms';
+import { AdminArea } from '@/ui/AdminArea';
 import { DitherField } from '@/ui/Dither';
 import { LmsFileDropzone, type LmsFileSelection } from '@/ui/LmsFileDropzone';
 import {
@@ -87,7 +88,7 @@ import {
  * read-only example workspace and names that boundary at the action itself.
  */
 
-type Section = 'courses' | 'tree' | 'students' | 'insights' | 'import' | 'settings';
+type Section = 'courses' | 'tree' | 'students' | 'insights' | 'import' | 'settings' | 'admin';
 
 const NAV: { key: Section; label: string; icon: IconName }[] = [
   { key: 'courses', label: 'Courses', icon: 'book-open' },
@@ -104,6 +105,7 @@ const SECTION_LABEL: Record<Section, string> = {
   insights: 'Class insights',
   import: 'Import syllabus',
   settings: 'Settings',
+  admin: 'Admin',
 };
 
 interface CourseRow {
@@ -476,6 +478,7 @@ export default function Instructor() {
                 onSignOut={signOut}
               />
             )}
+            {section === 'admin' && <AdminArea liveSession={liveSession} />}
           </ScrollView>
         )}
       </View>
@@ -546,6 +549,14 @@ function Rail({
       </View>
 
       <View style={styles.railFoot}>
+        {/* Sits by Settings rather than in NAV: it is not a teaching task, and
+            the page behind it is closed until a password opens it. */}
+        <RailCell
+          label="Admin"
+          icon="shield"
+          active={section === 'admin'}
+          onPress={() => onGo('admin')}
+        />
         <RailCell
           label="Settings"
           icon="settings"

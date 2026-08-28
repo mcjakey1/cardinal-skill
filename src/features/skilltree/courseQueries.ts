@@ -64,6 +64,13 @@ export async function fetchCourseOptions(): Promise<CourseOption[]> {
         source_course_id?: unknown;
       }),
       id: row.id, courseCode: row.course_code, title: row.title, term: row.term,
+      // Ownership, not authority. An administrator's writes do pass RLS on any
+      // course (0028 widened `owns_course`), but `canEdit` is read here as
+      // "you wrote this": `record.tsx` turns it into `viewerIsAuthor` and
+      // `courseLibrary` builds your own library from it. Widening it would put
+      // every course on the site in an administrator's library and credit them
+      // as its author. Administrative authoring is the instructor workspace,
+      // which scopes itself through `authorableCourses`.
       canEdit: row.owner_id === auth.user?.id,
       canDelete: row.owner_id === auth.user?.id,
       canRemove: Boolean(auth.user?.id) && row.owner_id !== auth.user?.id,

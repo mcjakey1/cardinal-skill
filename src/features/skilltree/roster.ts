@@ -142,3 +142,27 @@ export function rosterFlag(row: RosterEntry, now: Date): 'not-started' | 'stale'
   if (!row.enrolled) return null;
   return activityFlag(row, now);
 }
+
+/**
+ * The roster, narrowed to whoever was named.
+ *
+ * An administrator reads a student's progress on a course they had no part in,
+ * so they arrive knowing a name and nothing else — no row to click, no class
+ * they recognise. Search is how that name becomes a person.
+ *
+ * Blank returns everyone rather than nobody: an empty box is not a filter, and
+ * a roster that vanished until something was typed would read as an empty
+ * course. Order is left alone, so whatever `sortRoster` decided still holds.
+ */
+export function findPeople<T extends { displayName: string; email?: string | null }>(
+  query: string,
+  people: readonly T[],
+): T[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...people];
+  return people.filter(
+    (person) =>
+      person.displayName.toLowerCase().includes(needle)
+      || (person.email ?? '').toLowerCase().includes(needle),
+  );
+}

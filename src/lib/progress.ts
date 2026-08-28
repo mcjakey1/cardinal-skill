@@ -101,21 +101,16 @@ async function queueMissionProgress(courseId: string, missionId: string, done: b
   await AsyncStorage.setItem(pendingKey(courseId), JSON.stringify({ ...pending, [missionId]: operation }));
 }
 
-async function syncMissionProgress(userId: string, missionId: string, done: boolean): Promise<void> {
-  let result = await supabase.rpc('set_mission_completion', {
+// The database owns what a completion means — 0023 moved the write behind
+// `set_mission_completion` / `set_node_completion` so XP and leaderboards are
+// derived from one place. The client only asks. A missing function is a broken
+// deployment, and should be loud rather than quietly written around.
+async function syncMissionProgress(missionId: string, done: boolean): Promise<void> {
+  const { error } = await supabase.rpc('set_mission_completion', {
     p_mission_id: missionId,
     p_done: done,
   });
-  if (result.error?.code === 'PGRST202' || result.error?.code === '42883') {
-    result = done
-      ? await supabase.from('mission_progress').upsert({
-          user_id: userId,
-          mission_id: missionId,
-          verified_by: 'self',
-        }, { onConflict: 'user_id,mission_id' })
-      : await supabase.from('mission_progress').delete().eq('mission_id', missionId);
-  }
-  if (result.error) throw result.error;
+  if (error) throw error;
 }
 
 async function syncNodeProgress(nodes: CompletionLog): Promise<void> {
@@ -129,22 +124,6 @@ async function syncNodeProgress(nodes: CompletionLog): Promise<void> {
       p_completed_at: completedAt,
     }),
   ));
-  const missingRpc = results.some(({ error }) =>
-    error?.code === 'PGRST202' || error?.code === '42883');
-  if (missingRpc) {
-    const { error } = await supabase.from('node_progress').upsert(
-      entries.map(([nodeId, completedAt]) => ({
-        user_id: data.user!.id,
-        node_id: nodeId,
-        status: 'mastered' as const,
-        completed_at: completedAt,
-        verified_by: 'self',
-      })),
-      { onConflict: 'user_id,node_id' },
-    );
-    if (error) throw error;
-    return;
-  }
   const failure = results.find(({ error }) => error)?.error;
   if (failure) throw failure;
 }
@@ -166,7 +145,7 @@ async function flushMissionProgress(courseIds: readonly string[]): Promise<Synce
   if (!data.user) return [];
 
   const results = await Promise.allSettled(entries.map(([, missionId, operation]) =>
-    syncMissionProgress(data.user!.id, missionId, operation.done),
+    syncMissionProgress(missionId, operation.done),
   ));
   const synced = entries.filter((_, index) => results[index]?.status === 'fulfilled');
   if (synced.length === 0) return [];

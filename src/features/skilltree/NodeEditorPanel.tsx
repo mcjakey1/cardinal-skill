@@ -11,13 +11,29 @@
  * snapshot, the instructor pushes ops onto the publish draft. That split is
  * deliberate and this component must never reach past it for storage itself.
  *
- * It draws in the student's tokens on both surfaces, for the same reason the
- * canvas does — this is the editing surface, and an instructor needs to see the
- * node as it is delivered while they change it.
+ * IT DRAWS IN TWO SKINS, AND THE LINE BETWEEN THEM IS THE ONE `DESIGN.md` DRAWS.
+ * That document licenses exactly one crossing between the two design systems:
+ * "the authoring canvas, which draws the tree exactly as delivered so an author
+ * can see what they ship". The canvas is the artifact. This panel is the tooling
+ * around it, and on the instructor surface it wears that workspace's tokens.
+ *
+ * This was one skin until it was looked at. The pixel inks — `t.ink`,
+ * `t.inkMuted` — are calibrated against the dark panel ground they were drawn
+ * for, and the instructor workspace is a light one, so `Readout` in particular
+ * put grey-on-cream at a ratio nobody could read. Every control kept its own
+ * dark ground and stayed legible, which is why the failure looked arbitrary.
+ *
+ * The live preview is the exception inside the exception: it keeps the student's
+ * tokens on both surfaces, because it is the node as delivered. That is the
+ * crossing `DESIGN.md` names, and it is the only thing here that gets it.
+ *
+ * Two skins, one tree. Everything below is written once and reads `kit`, so the
+ * surfaces cannot drift into two panels with different behaviour — which is the
+ * thing this file exists to prevent.
  */
 
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { Pressable, ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { Easing, SlideInRight, SlideOutRight } from 'react-native-reanimated';
 
 import { useAppTheme } from '@/theme/ThemeProvider';
@@ -25,6 +41,8 @@ import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { SubjectPixelIcon } from '@/ui/SubjectPixelIcon';
 import { PixelButton, PixelIcon, PixelInput, PixelText, StatusTag, Toggle, bevelStyle } from '@/ui/pixel';
+import { Field, Icon, LButton, LText } from '@/ui/lms';
+import { lms } from '@/theme/lms';
 
 import { missionDraftTotal, type MissionDraft } from './missionEditing';
 import type { DisplayStatus } from './nodeVisualState';
@@ -46,6 +64,7 @@ export function NodeEditorPanel({
   status = 'available',
   reduceMotion,
   canSetUniversal = true,
+  surface = 'student',
   onUnlink,
   onSave,
   onCancel,
@@ -68,6 +87,13 @@ export function NodeEditorPanel({
    * edit the publish cannot carry, so the scope is shown and not offered.
    */
   canSetUniversal?: boolean;
+  /**
+   * Which design system the tooling wears. The student chart is 'student'; the
+   * instructor workspace is 'workspace'. It changes the skin and nothing else —
+   * same fields, same rules, same `onSave` payload, because learning one of
+   * these screens still has to be enough to use the other.
+   */
+  surface?: NodeEditorSurface;
   /** Drop one prerequisite edge. Local on the student chart, an op on the draft. */
   onUnlink: (prereqId: string) => void;
   onSave: (edit: NodeEdit) => void | Promise<void>;
@@ -75,6 +101,7 @@ export function NodeEditorPanel({
 }) {
   const t = useTheme();
   const { theme } = useAppTheme();
+  const kit = surface === 'workspace' ? workspaceKit(t) : studentKit(t);
   const [form, setForm] = useState(() => nodeEditForm(node, missions));
 
   const problems = nodeEditProblems(form);
@@ -125,19 +152,17 @@ export function NodeEditorPanel({
       exiting={reduceMotion ? undefined : SlideOutRight.duration(200).easing(Easing.in(Easing.cubic))}
       style={styles.form}
     >
-      <PixelInput label="Node title" value={form.title} onChangeText={(v) => set('title', v)} />
-      {problems.title ? (
-        <PixelText variant="micro" colour={t.alarm}>{problems.title}</PixelText>
-      ) : null}
+      <kit.Input label="Node title" value={form.title} onChangeText={(v) => set('title', v)} />
+      {problems.title ? <kit.Problem>{problems.title}</kit.Problem> : null}
 
-      <PixelInput
+      <kit.Input
         label="Topic / description"
         value={form.description}
         onChangeText={(v) => set('description', v)}
         multiline
       />
 
-      <PixelText variant="micro" colour={t.info}>KIND</PixelText>
+      <kit.Caption>Kind</kit.Caption>
       <View style={styles.chips}>
         {NODE_KINDS.map((kind) => {
           const active = kind === form.kind;
@@ -148,32 +173,32 @@ export function NodeEditorPanel({
               accessibilityRole="radio"
               accessibilityState={{ checked: active }}
               accessibilityLabel={kind}
-              style={({ pressed }) => [
-                styles.chip,
-                bevelStyle(t, active ? 'brand' : 'panel', pressed || active ? 'inset' : 'raised'),
-              ]}
+              style={({ pressed }) => [styles.chip, kit.choice(active, pressed)]}
             >
-              <PixelText variant="micro" colour={active ? t.brandInk : t.inkMuted}>
-                {kind.toUpperCase()}
-              </PixelText>
+              <kit.ChoiceText active={active}>
+                {surface === 'workspace' ? kindLabel(kind) : kind.toUpperCase()}
+              </kit.ChoiceText>
             </Pressable>
           );
         })}
       </View>
 
       {usesMissionRewards ? (
-        <Readout label="NODE TOTAL XP" value={`${nodeTotal} XP`} detail="SUM OF MISSION REWARDS" />
+        <Readout
+          kit={kit}
+          label="Node total XP"
+          value={`${nodeTotal} XP`}
+          detail="Sum of mission rewards"
+        />
       ) : (
         <>
-          <PixelInput
+          <kit.Input
             label="Node total XP"
             value={form.xp}
             onChangeText={(v) => set('xp', v)}
-            keyboardType="number-pad"
+            numeric
           />
-          {problems.xp ? (
-            <PixelText variant="micro" colour={t.alarm}>{problems.xp}</PixelText>
-          ) : null}
+          {problems.xp ? <kit.Problem>{problems.xp}</kit.Problem> : null}
         </>
       )}
 
@@ -185,13 +210,14 @@ export function NodeEditorPanel({
         />
       ) : (
         <Readout
-          label="SKILL SCOPE"
-          value={form.universal ? 'UNIVERSAL SKILL' : 'COURSE SKILL'}
-          detail="A PUBLISHED NODE BELONGS TO ITS COURSE"
+          kit={kit}
+          label="Skill scope"
+          value={form.universal ? 'Universal skill' : 'Course skill'}
+          detail="A published node belongs to its course."
         />
       )}
 
-      <PixelText variant="micro" colour={t.info}>PIXEL ICON</PixelText>
+      <kit.Caption>Pixel icon</kit.Caption>
       <ScrollView horizontal contentContainerStyle={styles.iconChoices} showsHorizontalScrollIndicator={false}>
         {PIXEL_ICON_KEYS.map((icon) => {
           const active = form.iconKey === icon;
@@ -202,12 +228,9 @@ export function NodeEditorPanel({
               accessibilityRole="radio"
               accessibilityLabel={icon.replaceAll('_', ' ')}
               accessibilityState={{ checked: active }}
-              style={({ pressed }) => [
-                styles.iconChoice,
-                bevelStyle(t, active ? 'brand' : 'panel', pressed || active ? 'inset' : 'raised'),
-              ]}
+              style={({ pressed }) => [styles.iconChoice, kit.choice(active, pressed)]}
             >
-              <SubjectPixelIcon icon={icon} size={20} colour={active ? t.brandInk : t.inkMuted} />
+              <SubjectPixelIcon icon={icon} size={20} colour={kit.choiceInk(active)} />
             </Pressable>
           );
         })}
@@ -238,28 +261,19 @@ export function NodeEditorPanel({
       </View>
 
       <View style={styles.missionTools}>
-        <PixelText variant="micro" colour={t.info}>REQUIRES</PixelText>
+        <kit.Caption>Requires</kit.Caption>
         {prereqs.length === 0 ? (
-          <PixelText variant="micro" colour={t.inkMuted}>
-            NOTHING YET. USE CONNECT ON THE CHART.
-          </PixelText>
+          <kit.Note>Nothing yet. Use connect on the chart.</kit.Note>
         ) : (
           prereqs.map((prereq) => (
-            <View key={prereq.id} style={[styles.prereqRow, { borderColor: theme.border }]}>
-              <PixelText variant="body" colour={t.ink} style={styles.grow} numberOfLines={1}>
-                {prereq.title}
-              </PixelText>
-              <Pressable
+            <View key={prereq.id} style={[styles.prereqRow, { borderColor: kit.rowBorder }]}>
+              <View style={styles.grow}>
+                <kit.Value>{prereq.title}</kit.Value>
+              </View>
+              <kit.Remove
+                label={`Disconnect ${prereq.title}`}
                 onPress={() => onUnlink(prereq.id)}
-                accessibilityRole="button"
-                accessibilityLabel={`Disconnect ${prereq.title}`}
-                style={({ pressed }) => [
-                  styles.missionDelete,
-                  bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
-                ]}
-              >
-                <PixelIcon name="close" size={12} colour={t.alarm} />
-              </Pressable>
+              />
             </View>
           ))
         )}
@@ -267,77 +281,254 @@ export function NodeEditorPanel({
 
       <View style={styles.missionTools}>
         <View style={styles.rowBetween}>
-          <PixelText variant="micro" colour={t.info}>MISSIONS &amp; REWARDS</PixelText>
-          <PixelText variant="micro" colour={t.earnedText}>{missionTotal} XP</PixelText>
+          <kit.Caption>Missions &amp; rewards</kit.Caption>
+          <kit.Total>{missionTotal} XP</kit.Total>
         </View>
         {form.missions.map((mission) => (
-          <View key={mission.id} style={[styles.missionRow, { borderColor: theme.border }]}>
+          <View key={mission.id} style={[styles.missionRow, { borderColor: kit.rowBorder }]}>
             <View style={styles.missionTitle}>
-              <PixelInput
+              <kit.Input
                 label="Mission title"
                 value={mission.title}
                 onChangeText={(title) => setMission(mission.id, { title })}
               />
             </View>
             <View style={styles.missionXp}>
-              <PixelInput
+              <kit.Input
                 label="XP"
                 value={mission.xpReward}
-                keyboardType="number-pad"
+                numeric
                 onChangeText={(xpReward) => setMission(mission.id, { xpReward })}
               />
             </View>
-            <Pressable
+            <kit.Remove
+              label={`Delete ${mission.title}`}
               onPress={() =>
                 setForm((current) => ({
                   ...current,
                   missions: current.missions.filter((m) => m.id !== mission.id),
                 }))
               }
-              accessibilityRole="button"
-              accessibilityLabel={`Delete ${mission.title}`}
-              style={({ pressed }) => [
-                styles.missionDelete,
-                bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
-              ]}
-            >
-              <PixelIcon name="close" size={12} colour={t.alarm} />
-            </Pressable>
+            />
           </View>
         ))}
-        <PixelButton tone="panel" label="+ Add mission" onPress={addMission} />
+        <kit.Button label="Add mission" onPress={addMission} />
       </View>
 
-      <PixelButton
+      <kit.Button
         label="Save properties"
+        primary
         disabled={!canSave}
         onPress={() => void onSave(nodeEditResult(form, node))}
       />
       {/* Dropping the hand-typed name is not the same as typing a different one:
           the generated name only comes back when the override is gone. */}
       {node.titleOverride ? (
-        <PixelButton
-          tone="panel"
+        <kit.Button
           label={node.questTitle ? 'Use the generated name' : 'Use the syllabus title'}
           disabled={!canSave}
           onPress={() => void onSave({ ...nodeEditResult(form, node), titleOverride: null })}
         />
       ) : null}
-      <PixelButton tone="panel" label="Cancel editing" onPress={onCancel} />
+      <kit.Button label="Cancel editing" onPress={onCancel} />
     </Animated.View>
   );
 }
 
+/** Sentence case for the workspace, which does not shout its controls. */
+function kindLabel(kind: string): string {
+  return kind.charAt(0).toUpperCase() + kind.slice(1).toLowerCase();
+}
+
 /** A labelled fact the editor states rather than asks for. */
-function Readout({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  const t = useTheme();
+function Readout({
+  kit,
+  label,
+  value,
+  detail,
+}: {
+  kit: Kit;
+  label: string;
+  value: string;
+  detail?: string;
+}) {
   return (
     <View style={styles.readout}>
-      <PixelText variant="micro" colour={t.inkMuted}>{label}</PixelText>
-      <PixelText variant="body" colour={t.ink}>{value}</PixelText>
-      {detail ? <PixelText variant="micro" colour={t.inkMuted}>{detail}</PixelText> : null}
+      <kit.ReadoutLabel>{label}</kit.ReadoutLabel>
+      <kit.Value>{value}</kit.Value>
+      {detail ? <kit.Note>{detail}</kit.Note> : null}
     </View>
   );
+}
+
+// ------------------------------------------------------------------- the skins
+
+export type NodeEditorSurface = 'student' | 'workspace';
+
+type PixelTheme = ReturnType<typeof useTheme>;
+
+/**
+ * The parts that differ between the two surfaces, and nothing else.
+ *
+ * Deliberately small. Anything that can be written once for both — every field,
+ * every rule, every handler — is written once above and is not in here. What is
+ * in here is colour, typeface and control chrome: the things `DESIGN.md` says
+ * must not blend.
+ */
+interface Kit {
+  /** A label above a value. Never the value itself. */
+  Caption: (p: { children: ReactNode }) => ReactNode;
+  /** A fact the panel states. */
+  Value: (p: { children: ReactNode }) => ReactNode;
+  /**
+   * A sentence, not a label. Kept apart from `Caption` because the workspace's
+   * micro token is uppercased with letter spacing — right for "SKILL SCOPE" and
+   * wrong for a sentence, which it turns into shouting.
+   */
+  Note: (p: { children: ReactNode }) => ReactNode;
+  /** The word inside a KIND or icon choice. */
+  ChoiceText: (p: { active: boolean; children: ReactNode }) => ReactNode;
+  /**
+   * The label over a stated fact. Quieter than `Caption` on the student
+   * surface, where a section heading is cyan and a readout's label was always
+   * muted grey — keeping them apart is what stops this refactor from restyling
+   * the student chart, which nobody asked for.
+   */
+  ReadoutLabel: (p: { children: ReactNode }) => ReactNode;
+  /** Something is wrong with what was typed. */
+  Problem: (p: { children: ReactNode }) => ReactNode;
+  /** A running total, called out. */
+  Total: (p: { children: ReactNode }) => ReactNode;
+  Input: (p: {
+    label: string;
+    value: string;
+    onChangeText: (v: string) => void;
+    multiline?: boolean;
+    numeric?: boolean;
+  }) => ReactNode;
+  Button: (p: {
+    label: string;
+    onPress: () => void;
+    primary?: boolean;
+    disabled?: boolean;
+  }) => ReactNode;
+  /** The KIND and icon choosers. */
+  choice: (active: boolean, pressed: boolean) => StyleProp<ViewStyle>;
+  choiceInk: (active: boolean) => string;
+  /** Prerequisite and mission rows. */
+  rowBorder: string;
+  Remove: (p: { label: string; onPress: () => void }) => ReactNode;
+}
+
+function studentKit(t: PixelTheme): Kit {
+  return {
+    Caption: ({ children }) => <PixelText variant="micro" colour={t.info}>{children}</PixelText>,
+    Value: ({ children }) => <PixelText variant="body" colour={t.ink}>{children}</PixelText>,
+    Note: ({ children }) => <PixelText variant="micro" colour={t.inkMuted}>{children}</PixelText>,
+    ChoiceText: ({ active, children }) => (
+      <PixelText variant="micro" colour={active ? t.brandInk : t.inkMuted}>{children}</PixelText>
+    ),
+    ReadoutLabel: ({ children }) => (
+      <PixelText variant="micro" colour={t.inkMuted}>{children}</PixelText>
+    ),
+    Problem: ({ children }) => <PixelText variant="micro" colour={t.alarm}>{children}</PixelText>,
+    Total: ({ children }) => <PixelText variant="micro" colour={t.earnedText}>{children}</PixelText>,
+    Input: ({ label, value, onChangeText, multiline, numeric }) => (
+      <PixelInput
+        label={label}
+        value={value}
+        onChangeText={onChangeText}
+        multiline={multiline}
+        keyboardType={numeric ? 'number-pad' : undefined}
+      />
+    ),
+    Button: ({ label, onPress, primary, disabled }) => (
+      <PixelButton
+        label={label}
+        tone={primary ? undefined : 'panel'}
+        disabled={disabled}
+        onPress={onPress}
+      />
+    ),
+    choice: (active, pressed) => bevelStyle(t, active ? 'brand' : 'panel', pressed || active ? 'inset' : 'raised'),
+    choiceInk: (active) => (active ? t.brandInk : t.inkMuted),
+    rowBorder: t.line,
+    Remove: ({ label, onPress }) => (
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        style={({ pressed }) => [styles.missionDelete, bevelStyle(t, 'panel', pressed ? 'inset' : 'raised')]}
+      >
+        <PixelIcon name="close" size={12} colour={t.alarm} />
+      </Pressable>
+    ),
+  };
+}
+
+/**
+ * The instructor's skin. `lms.type.micro` is already uppercase with the letter
+ * spacing the brief sets, so a caption needs no styling of its own — which is
+ * the check that this is the workspace's own grammar and not the pixel one
+ * repainted.
+ */
+function workspaceKit(_t: PixelTheme): Kit {
+  const c = lms.colour;
+  return {
+    Caption: ({ children }) => <LText variant="micro" tone="muted">{children}</LText>,
+    Value: ({ children }) => <LText variant="small" style={styles.workspaceValue}>{children}</LText>,
+    Note: ({ children }) => <LText variant="small" tone="muted">{children}</LText>,
+    ChoiceText: ({ active, children }) => (
+      <LText variant="small" tone={active ? 'brand' : 'muted'} style={styles.workspaceChoiceText}>
+        {children}
+      </LText>
+    ),
+    ReadoutLabel: ({ children }) => <LText variant="micro" tone="muted">{children}</LText>,
+    Problem: ({ children }) => <LText variant="small" tone="attention">{children}</LText>,
+    Total: ({ children }) => <LText variant="micro" tone="brand">{children}</LText>,
+    Input: ({ label, value, onChangeText, multiline, numeric }) => (
+      <Field
+        label={label}
+        value={value}
+        onChangeText={onChangeText}
+        tall={multiline}
+        keyboardType={numeric ? 'number-pad' : undefined}
+        style={styles.workspaceInput}
+      />
+    ),
+    Button: ({ label, onPress, primary, disabled }) => (
+      <LButton
+        label={label}
+        variant={primary ? 'primary' : 'default'}
+        disabled={disabled}
+        onPress={onPress}
+        style={styles.workspaceButton}
+      />
+    ),
+    choice: (active, pressed) => [
+      styles.workspaceChoice,
+      {
+        backgroundColor: active ? c.brandWash : pressed ? c.surfaceHover : c.surface,
+        borderColor: active ? c.brand : c.line,
+      },
+    ],
+    choiceInk: (active) => (active ? c.brand : c.inkMuted),
+    rowBorder: c.line,
+    Remove: ({ label, onPress }) => (
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        style={({ pressed }) => [
+          styles.missionDelete,
+          styles.workspaceChoice,
+          { backgroundColor: pressed ? c.surfaceHover : c.surface, borderColor: c.line },
+        ]}
+      >
+        <Icon name="x" size={14} tone="attention" />
+      </Pressable>
+    ),
+  };
 }
 
 const styles = StyleSheet.create({
@@ -382,4 +573,11 @@ const styles = StyleSheet.create({
   missionTitle: { minWidth: 0, flex: 1 },
   missionXp: { width: 88 },
   missionDelete: { width: touch, height: touch, alignItems: 'center', justifyContent: 'center' },
+
+  // The workspace skin. Hairlines and 5px controls, per `src/theme/lms.ts`.
+  workspaceChoice: { borderWidth: 1, borderRadius: lms.radius.sm },
+  workspaceChoiceText: { fontWeight: '600' },
+  workspaceValue: { fontWeight: '600' },
+  workspaceInput: { minHeight: lms.touch },
+  workspaceButton: { minHeight: lms.touch, justifyContent: 'center' },
 });

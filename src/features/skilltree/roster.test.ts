@@ -4,6 +4,7 @@ import { test } from 'node:test';
 // Explicit .ts extension: `node --test` strips types but does not resolve
 // extensionless specifiers the way Metro does.
 import {
+  findPeople,
   mergeRoster,
   rosterFlag,
   sortRoster,
@@ -129,4 +130,42 @@ test('a registered account is never flagged for work it was never set', () => {
   // The same rows, once they are actually on the course, still flag.
   assert.equal(rosterFlag(entry({ enrolled: true, mastered: 0 }), now), 'not-started');
   assert.equal(rosterFlag(entry({ enrolled: true, mastered: 3, lastActive: stale }), now), 'stale');
+});
+
+// ------------------------------------------------------- finding one student
+
+const CLASS: RosterEntry[] = [
+  entry({ userId: 'a', displayName: 'A. Reyes', email: 'a.reyes@example.edu' }),
+  entry({ userId: 'b', displayName: 'Bea Okafor', email: 'b.okafor@example.edu' }),
+  entry({ userId: 'c', displayName: 'C. Lindqvist', email: null }),
+];
+
+const found = (query: string) => findPeople(query, CLASS).map((r) => r.userId);
+
+test('an empty search is not a filter — it is everyone', () => {
+  assert.deepEqual(found(''), ['a', 'b', 'c']);
+  assert.deepEqual(found('   '), ['a', 'b', 'c']);
+});
+
+test('a name is matched however it was typed', () => {
+  assert.deepEqual(found('okafor'), ['b']);
+  assert.deepEqual(found('OKAFOR'), ['b']);
+  assert.deepEqual(found('  Bea  '), ['b']);
+});
+
+test('an address finds the person it belongs to', () => {
+  assert.deepEqual(found('a.reyes@example.edu'), ['a']);
+  assert.deepEqual(found('@example.edu'), ['a', 'b']);
+});
+
+test('a student with no address on file is still findable by name', () => {
+  assert.deepEqual(found('lindqvist'), ['c']);
+});
+
+test('a name nobody has finds nobody, rather than everybody', () => {
+  assert.deepEqual(found('zzz'), []);
+});
+
+test('the roster order survives the search', () => {
+  assert.deepEqual(found('.'), ['a', 'b', 'c']);
 });

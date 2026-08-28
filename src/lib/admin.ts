@@ -7,6 +7,15 @@
  */
 
 /**
+ * Type-only, so `node --test` strips it and this module stays reachable from a
+ * test with no bundler resolving `@/`.
+ */
+import type {
+  CourseKind,
+  CoursePublicationStatus,
+} from '@/features/skilltree/courseDistribution';
+
+/**
  * THE PASSWORD IS NOT SECURITY. IT IS A UI REVEAL AND NOTHING ELSE.
  *
  * Every string in this file is compiled into the app bundle and shipped to the
@@ -69,4 +78,156 @@ export function unlockAdmin(input: string): boolean {
 
 export function lockAdmin(): void {
   unlocked = false;
+}
+
+// --------------------------------------------------- publication transitions
+
+/**
+ * What `admin_set_course_publication` will accept for a course, decided here so
+ * the screen disables the action instead of showing the exception it raises.
+ */
+export interface AdminCourseAction {
+  status: CoursePublicationStatus;
+  label: string;
+  hint: string;
+}
+
+export interface AdminCoursePublication {
+  /** Empty when nothing may be done; `blocked` then says why, in a sentence. */
+  actions: AdminCourseAction[];
+  blocked: string | null;
+}
+
+export function adminCourseActions(course: {
+  kind: CourseKind;
+  publicationStatus: CoursePublicationStatus;
+}): AdminCoursePublication {
+  if (course.kind === 'practice') {
+    return {
+      actions: [],
+      blocked: 'A practice course is private to its owner and has nothing to publish.',
+    };
+  }
+  return {
+    actions: TRANSITIONS.filter((action) => action.status !== course.publicationStatus),
+    blocked: null,
+  };
+}
+
+/**
+ * One entry per status, minus whichever the course is already in. Written out
+ * rather than derived from COURSE_PUBLICATION_STATUSES because the sentences
+ * are the point: an administrator acting on someone else's course has to be
+ * told what it does to the people on it before they press it.
+ */
+const TRANSITIONS: AdminCourseAction[] = [
+  {
+    status: 'published',
+    label: 'Publish',
+    hint: 'Puts it back in the catalog where students can find and join it.',
+  },
+  {
+    status: 'draft',
+    label: 'Unpublish',
+    hint: 'Takes it out of the catalog and hands it back to its owner as a draft. Its share link stops working.',
+  },
+  {
+    status: 'archived',
+    label: 'Archive',
+    hint: 'Takes it out of the catalog and keeps every student record on it. Nothing is deleted.',
+  },
+];
+
+// ------------------------------------------------------------ error messages
+
+/**
+ * What went wrong, in words an administrator can act on.
+ *
+ * Same distinction `publishChart.ts` draws and for the same reason: a missing
+ * function is a deployment gap and a refusal is an answer, and they must not
+ * read alike. The difference here is that an admin action has no undo baseline
+ * to protect, so this returns the sentence rather than throwing — the screen
+ * shows it in a Notice beside the button that failed.
+ *
+ * Anything unrecognised is passed through untouched. A sentence invented over
+ * an error nobody planned for is worse than the raw one, because it reads as
+ * though the cause were understood.
+ */
+const NOT_APPLIED =
+  'This needs migration 0028, which has not been applied to this project yet. '
+  + 'Nothing was changed — it is a setup step, not a problem with the course.';
+
+/** Function absent from the schema cache, function absent, table absent. */
+const MISSING = ['PGRST202', '42883', '42P01', 'PGRST205'];
+
+export function adminActionMessage(error: unknown): string {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code: unknown }).code)
+    : null;
+  // `'message' in error` walks the prototype chain, so an Error instance is
+  // covered here too and needs no branch of its own.
+  const message = typeof error === 'object' && error !== null && 'message' in error
+    ? String((error as { message: unknown }).message ?? '')
+    : '';
+
+  if (code && MISSING.includes(code)) return NOT_APPLIED;
+  if (code === '42501') {
+    return message || 'Only an administrator can do that, and this account is not one.';
+  }
+  return message || 'That did not go through, and the server did not say why. Try it again.';
+}
+
+// -------------------------------------------------------- workspace scoping
+
+/**
+ * Which courses belong in an authoring workspace, and which of them may be
+ * authored.
+ *
+ * NOT A SECURITY CONTROL, and it must never be mistaken for one. RLS decides
+ * what the database hands back: 0001's `read enrolled courses` returns a course
+ * to its owner and to anyone enrolled on it, and 0028 adds every course for an
+ * administrator. This narrows what is *shown* on one screen, which is a
+ * different question with a different answer — an instructor enrolled on
+ * somebody else's course is a learner there, and a list that mixed the two
+ * would offer to edit a chart the server will refuse to save.
+ *
+ * The administrator is the exception the product asks for: they see the site
+ * and can act on it, because when something is wrong with a course whose owner
+ * is unreachable, somebody has to be able to open it.
+ */
+export function authorableCourses<T extends { ownerId: string | null }>(
+  courses: readonly T[],
+  userId: string | null,
+  isAdmin: boolean,
+): (T & { canEdit: boolean })[] {
+  if (isAdmin) return courses.map((course) => ({ ...course, canEdit: true }));
+  // No account authors nothing. A demo session has no owner id, and treating a
+  // missing one as a match would hand it every course whose owner is also null.
+  if (!userId) return [];
+  return courses
+    .filter((course) => course.ownerId === userId)
+    .map((course) => ({ ...course, canEdit: true }));
+}
+
+/**
+ * Who is left to put on a course.
+ *
+ * The account directory minus the people already enrolled. It exists because
+ * `course_roster` (0030) cannot answer this: that function returns the enrolled
+ * students when anyone is enrolled, and every registered learner only when
+ * nobody is — so the moment one student joins, everybody else vanishes from it
+ * and there is no one left to look up and add. The directory therefore comes
+ * from `profiles`, and this is what narrows it.
+ *
+ * Enrolment is `enrolled === true`, never the presence of a roster row. A row
+ * with `enrolled: false` is 0030 saying "this account exists", which is a
+ * different statement from "this account is on your course" — conflating them
+ * is what would hide the very people this panel is for.
+ */
+export function addableAccounts<T extends { userId: string }>(
+  accounts: readonly T[],
+  roster: readonly { userId: string; enrolled: boolean }[],
+): T[] {
+  const on = new Set(roster.filter((row) => row.enrolled).map((row) => row.userId));
+  return accounts.filter((account) => !on.has(account.userId));
 }

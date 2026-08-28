@@ -25,8 +25,8 @@ import { effectiveMissionCompletionIds, missionStates, nodeXpEarned, nodeXpFromM
 import { missionDifficulty } from '@/features/skilltree/missionBoard';
 import { MAX_NAME, resolveQuestName, type NameSource } from '@/features/skilltree/naming';
 import { learnerSignals, nodeSignal } from '@/features/skilltree/observed';
+import { courseOutline, type OutlineEntry } from '@/features/skilltree/courseOutline';
 import {
-  deriveStatuses,
   evaluateSkillUnlockState,
   levelForXp,
   progressRatio,
@@ -107,7 +107,8 @@ export default function TreeScreen() {
   const prefs = usePrefs();
   const wide = useWide();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [infoExpanded, setInfoExpanded] = useState(true);
+  // Starts collapsed: opening a course shows the outline, not one node's detail.
+  const [infoExpanded, setInfoExpanded] = useState(false);
   const [justCompleted, setJustCompleted] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -324,8 +325,22 @@ export default function TreeScreen() {
     [named, sourceTree?.prereqs],
   );
 
+  // The outline, the meters on the chart and the detail header all read one
+  // walk of the tree. Doing it here rather than in the body keeps it off every
+  // keystroke in the rename field.
+  const outline = useMemo(
+    () => merged && courseOutline({
+      tree,
+      missions: sourceMissions,
+      completedMissionIds: merged.completedMissionIds,
+      masteredIds: merged.masteredIds,
+      selectedId,
+    }),
+    [merged, selectedId, sourceMissions, tree],
+  );
+
   if (isPending || !editedTreeReady || !progressReady) return <Loading />;
-  if (error || !data || !merged) {
+  if (error || !data || !merged || !outline) {
     const failedTitle = courseOptions.find((course) => course.id === courseId)?.title
       ?? 'Chart unavailable';
     return (
@@ -469,34 +484,33 @@ export default function TreeScreen() {
     status,
     selected ? nodeProgress(selected, missions, completedMissionIds, isMastered) : 0,
   );
-  const progressByNode = Object.fromEntries(
-    tree.nodes.map((node) => [
-      node.id,
-      nodeProgress(node, missions, completedMissionIds, masteredIds.includes(node.id)),
-    ]),
-  );
-  const nodeStatuses = deriveStatuses(tree, masteredIds).status;
-  const outlineNodes = tree.nodes.slice().sort((a, b) => a.sortOrder - b.sortOrder);
-  const selectedOutlineIndex = Math.max(0, outlineNodes.findIndex((node) => node.id === selectedId));
-  const renderOutlineRow = (node: SkillNode, index: number) => {
-    const nodeStatus = displayStatus(
-      nodeStatuses.get(node.id) ?? 'locked',
-      progressByNode[node.id] ?? 0,
-    );
+  // Collapsing hides the node's detail, never the editor. An instructor who taps
+  // the row they are editing should not lose the panel they are typing into.
+  const detailVisible = infoExpanded || editMode;
+
+  const renderOutlineRow = ({ node, position, status: nodeStatus }: OutlineEntry) => {
     const isCurrent = node.id === selectedId;
     return (
       <Pressable
         key={node.id}
         onPress={() => {
-          if (isCurrent) {
-            setInfoExpanded((expanded) => !expanded);
+          if (!isCurrent) {
+            void selectNode(node);
             return;
           }
-          void selectNode(node);
+          // The editor is not a disclosure. An instructor mid-edit keeps it.
+          if (!editMode) setInfoExpanded((expanded) => !expanded);
         }}
         accessibilityRole="button"
-        accessibilityState={{ selected: isCurrent, expanded: isCurrent ? infoExpanded : undefined }}
-        accessibilityLabel={`${index + 1}. ${node.title}. ${nodeStatus.replace('_', ' ')}. ${isCurrent && infoExpanded ? 'Collapse' : 'Expand'} information.`}
+        accessibilityState={{
+          selected: isCurrent,
+          expanded: isCurrent && !editMode ? infoExpanded : undefined,
+        }}
+        accessibilityLabel={`${position}. ${node.title}. ${nodeStatus.replace('_', ' ')}.${
+          isCurrent && editMode
+            ? ''
+            : isCurrent && infoExpanded ? ' Collapse information.' : ' Expand information.'
+        }`}
         style={({ pressed }) => [
           styles.outlineRow,
           {
@@ -894,7 +908,7 @@ export default function TreeScreen() {
         positions={positions}
         onMoveNode={moveNode}
         onResetLayout={resetLayout}
-        progressByNode={progressByNode}
+        progressByNode={outline.progressByNode}
         focusRequestKey={cameraFocusRequest}
         focusNodeId={locatedNodeId}
         focusNodeRequestKey={focusRequest ?? 0}
@@ -919,16 +933,14 @@ export default function TreeScreen() {
             <View style={styles.outlineIntro}>
               <PixelText variant="label" colour={t.ink}>COURSE OUTLINE</PixelText>
               <PixelText variant="micro" colour={t.inkMuted}>
-                {masteredIds.length} OF {tree.nodes.length} NODES MASTERED
+                {outline.masteredCount} OF {outline.total} NODES MASTERED
               </PixelText>
             </View>
             <View style={styles.outlineList}>
-              {outlineNodes.slice(0, selectedOutlineIndex).map(renderOutlineRow)}
-              {outlineNodes[selectedOutlineIndex]
-                ? renderOutlineRow(outlineNodes[selectedOutlineIndex], selectedOutlineIndex)
-                : null}
+              {outline.before.map(renderOutlineRow)}
+              {outline.current ? renderOutlineRow(outline.current) : null}
             </View>
-            {infoExpanded ? <>
+            {detailVisible ? <>
             <View style={styles.selectedNodeHeader}>
               <View style={styles.rowBetween}>
                 <View style={styles.headerTags}>
@@ -1300,9 +1312,7 @@ export default function TreeScreen() {
             )}
             </> : null}
             <View style={styles.outlineList}>
-              {outlineNodes.slice(selectedOutlineIndex + 1).map((node, offset) =>
-                renderOutlineRow(node, selectedOutlineIndex + offset + 1),
-              )}
+              {outline.after.map(renderOutlineRow)}
             </View>
           </StableScrollView>
 

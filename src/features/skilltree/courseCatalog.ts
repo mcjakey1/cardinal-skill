@@ -49,9 +49,13 @@ export async function archiveSharedCourse(courseId: string): Promise<void> {
 }
 
 export async function fetchInstructorVerification(): Promise<boolean> {
+  // A revoked verification keeps its row — that record is what stops the
+  // sign-up trigger granting the account verification a second time — so
+  // presence alone is not the answer. `revoked_at is null` is.
   const { data, error } = await supabase
     .from('verified_instructors')
     .select('user_id')
+    .is('revoked_at', null)
     .maybeSingle();
   if (error) {
     if (error.code === '42P01' || error.code === 'PGRST205') return false;

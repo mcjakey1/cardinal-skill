@@ -1497,9 +1497,10 @@ function TreeSection({
             Check the database connection and try again. No course has been published.
           </Notice>
         ) : (
-          <Notice tone="attention" title="Instructor verification required">
-            A Supabase project role grants dashboard access, not permission to publish official courses.
-            An administrator must add this account to verified_instructors first.
+          <Notice tone="attention" title="This account cannot publish">
+            An instructor account carries publishing rights from the day it registers, so an account
+            without them either registered as a student or had them withdrawn. An administrator can
+            restore them.
           </Notice>
         )}
         {catalogError ? <Notice tone="error" title="Not published">{catalogError}</Notice> : null}
@@ -1998,9 +1999,9 @@ function ImportSyllabus({
 
       {liveSession && verification.data === false ? (
         <Notice tone="attention" title="This import will stay private">
-          Publishing to the official catalog needs administrator verification, and this account does
-          not have it yet. The course is still created and still editable — students just cannot
-          find it until an administrator adds this account to verified_instructors.
+          This account cannot publish to the official catalog: it either registered as a student, or
+          an administrator withdrew its publishing rights. The course is still created and still
+          editable — students just cannot find it until an administrator restores them.
         </Notice>
       ) : null}
 

@@ -17,6 +17,8 @@ interface Props {
   unavailableTitle: string;
   unavailableMessage: string;
   visibility: boolean | null | undefined;
+  /** Verified instructors are ranked only if they ask to be; the copy says so. */
+  isInstructor: boolean;
   visibilityPending: boolean;
   visibilityError: boolean;
   onVisibilityChange: (visible: boolean) => void;
@@ -33,6 +35,7 @@ export function LeaderboardView({
   unavailableTitle,
   unavailableMessage,
   visibility,
+  isInstructor,
   visibilityPending,
   visibilityError,
   onVisibilityChange,
@@ -85,9 +88,13 @@ export function LeaderboardView({
       </Bevel>
       <Bevel tone="panel" depth="inset" style={styles.privacy}>
         <View style={styles.privacyCopy}>
-          <PixelText variant="label">Leaderboard visibility</PixelText>
+          <PixelText variant="label">
+            {isInstructor ? 'Instructor ranking is off by default' : 'Leaderboard visibility'}
+          </PixelText>
           <PixelText variant="micro" colour={t.inkMuted}>
-            Only students who explicitly join are visible to classmates. Your own rank remains visible to you.
+            {isInstructor
+              ? 'Join to rank with the class in courses you do not own. You never appear in a course you wrote.'
+              : 'Only students who explicitly join are visible to classmates. Your own rank remains visible to you.'}
           </PixelText>
         </View>
         {visibilityError ? (

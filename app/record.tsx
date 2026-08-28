@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/auth/AuthContext';
 import { achievements, streakDays } from '@/features/skilltree/achievements';
+import { fetchInstructorVerification } from '@/features/skilltree/courseCatalog';
 import { fetchCourseOptions } from '@/features/skilltree/courseQueries';
 import { LeaderboardStickyBar } from '@/features/skilltree/LeaderboardList';
 import { LeaderboardView } from '@/features/skilltree/LeaderboardView';
@@ -134,6 +135,13 @@ export default function Record() {
   const visibilityQuery = useQuery({
     queryKey: ['leaderboard-visibility'],
     queryFn: fetchLeaderboardVisibility,
+    enabled: signedInLive,
+  });
+  // The leaderboard function leaves a verified instructor out of the candidate
+  // set until they opt in, so the control has to say that to the right people.
+  const instructorQuery = useQuery({
+    queryKey: ['instructor-verification'],
+    queryFn: fetchInstructorVerification,
     enabled: signedInLive,
   });
   const visibilityMutation = useMutation({
@@ -295,6 +303,7 @@ export default function Record() {
                 unavailableTitle={leaderboardUnavailable.title}
                 unavailableMessage={leaderboardUnavailable.message}
                 visibility={signedInLive ? visibilityQuery.data : null}
+                isInstructor={instructorQuery.data === true}
                 visibilityPending={visibilityMutation.isPending || visibilityQuery.isPending}
                 visibilityError={visibilityQuery.isError}
                 onVisibilityChange={(visible) => visibilityMutation.mutate(visible)}

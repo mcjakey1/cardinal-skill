@@ -1,11 +1,16 @@
 import Constants from 'expo-constants';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { fetchInstructorVerification } from '@/features/skilltree/courseCatalog';
+import {
+  fetchLeaderboardVisibility,
+  setLeaderboardVisibility,
+} from '@/features/skilltree/recordQueries';
 import { usePrefs } from '@/lib/prefs';
 import { clearLocal } from '@/lib/progress';
 import { BACKDROP_LABELS } from '@/theme/backdrops';
@@ -32,6 +37,27 @@ export default function System() {
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState(false);
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+
+  // The leaderboard function holds a verified instructor out of every candidate
+  // set until they opt in, and the instructor nav has no Record cell, so the way
+  // in lives here. It writes the same flag the Record screen shows.
+  const instructor = useQuery({
+    queryKey: ['instructor-verification'],
+    queryFn: fetchInstructorVerification,
+    enabled: session?.source === 'supabase',
+  });
+  const ranking = useQuery({
+    queryKey: ['leaderboard-visibility'],
+    queryFn: fetchLeaderboardVisibility,
+    enabled: instructor.data === true,
+  });
+  const setRanking = useMutation({
+    mutationFn: setLeaderboardVisibility,
+    onSuccess: async (visible) => {
+      queryClient.setQueryData(['leaderboard-visibility'], visible);
+      await queryClient.invalidateQueries({ queryKey: ['student-leaderboard'] });
+    },
+  });
 
   const wipe = async () => {
     if (!prefs.lastCourseId) return;
@@ -140,6 +166,21 @@ export default function System() {
               onPress={() => transition(() => router.navigate('/instructor'))}
             />
           </Row>
+
+          {instructor.data === true ? (
+            <Row
+              title="Rank with the class"
+              detail={setRanking.isError
+                ? 'That could not be saved. Check your connection and try again.'
+                : 'Instructors stay out of course leaderboards by default. Turn this on to rank with learners in courses you do not own.'}
+            >
+              <Toggle
+                label="Rank with the class"
+                value={ranking.data === true}
+                onChange={(on) => setRanking.mutate(on)}
+              />
+            </Row>
+          ) : null}
 
           <Row
             title="Study companion"

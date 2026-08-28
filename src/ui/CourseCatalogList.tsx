@@ -10,12 +10,23 @@ import { PixelIcon, PixelText, bevelStyle } from './pixel';
 interface Props {
   courses: readonly CatalogCourse[];
   busyCourseId: string | null;
+  /** Rows to mark as new for this student — see `isNewCatalogCourse`. */
+  newCourseIds?: ReadonlySet<string>;
   onJoin: (course: CatalogCourse) => void;
   onOpen: (course: CatalogCourse) => void;
   empty?: React.ReactElement | null;
 }
 
-export function CourseCatalogList({ courses, busyCourseId, onJoin, onOpen, empty }: Props) {
+const NONE: ReadonlySet<string> = new Set();
+
+export function CourseCatalogList({
+  courses,
+  busyCourseId,
+  newCourseIds = NONE,
+  onJoin,
+  onOpen,
+  empty,
+}: Props) {
   return (
     <FlatList
       data={courses}
@@ -26,6 +37,7 @@ export function CourseCatalogList({ courses, busyCourseId, onJoin, onOpen, empty
         <CatalogRow
           course={item}
           busy={busyCourseId === item.id}
+          isNew={newCourseIds.has(item.id)}
           onPress={() => item.isJoined ? onOpen(item) : onJoin(item)}
         />
       )}
@@ -33,9 +45,10 @@ export function CourseCatalogList({ courses, busyCourseId, onJoin, onOpen, empty
   );
 }
 
-function CatalogRow({ course, busy, onPress }: {
+function CatalogRow({ course, busy, isNew, onPress }: {
   course: CatalogCourse;
   busy: boolean;
+  isNew: boolean;
   onPress: () => void;
 }) {
   const t = useTheme();
@@ -69,6 +82,13 @@ function CatalogRow({ course, busy, onPress }: {
           <View style={[styles.badge, { borderColor: accent }]}>
             <PixelText variant="micro" colour={accent}>{courseKindLabel(course.kind).toUpperCase()}</PixelText>
           </View>
+          {/* A word, not a coloured dot: the mark has to survive a colour-blind
+              reader and a screen reader, so it says what it means. */}
+          {isNew ? (
+            <View style={[styles.badge, { borderColor: t.success }]}>
+              <PixelText variant="micro" colour={t.success}>NEW</PixelText>
+            </View>
+          ) : null}
         </View>
         <PixelText variant="micro" colour={t.inkMuted} numberOfLines={1}>
           BY {course.ownerDisplayName.toUpperCase()}{facts ? ` · ${facts.toUpperCase()}` : ''}
@@ -84,7 +104,7 @@ function CatalogRow({ course, busy, onPress }: {
         onPress={onPress}
         disabled={busy}
         accessibilityRole="button"
-        accessibilityLabel={course.isJoined ? `Open ${course.title}` : `Join ${course.title}`}
+        accessibilityLabel={`${isNew ? 'New course. ' : ''}${course.isJoined ? 'Open' : 'Join'} ${course.title}`}
         accessibilityState={{ disabled: busy }}
         style={({ pressed }) => [
           styles.action,

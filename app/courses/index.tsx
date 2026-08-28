@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Head from 'expo-router/head';
@@ -30,7 +31,9 @@ import {
   type CatalogCourse,
   type CommunityVisibility,
 } from '@/features/skilltree/courseCatalog';
+import { isNewCatalogCourse } from '@/features/skilltree/courseCatalogModel';
 import { usePrefs } from '@/lib/prefs';
+import { createStore } from '@/lib/store';
 import { space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
@@ -39,6 +42,17 @@ import { ReorderableCourseList } from '@/ui/ReorderableCourseList';
 import { Window } from '@/ui/Window';
 import { PixelButton, PixelInput, PixelText, bevelStyle } from '@/ui/pixel';
 import { usePixelTransition } from '@/ui/PixelTransition';
+
+/**
+ * Which catalog courses this student has already opened.
+ *
+ * Device-local, deliberately: the same student on a second device may see the
+ * new mark again, which is cheaper than a per-student server table for a badge.
+ * A joined course is never marked regardless, so this only carries the tap that
+ * has not round-tripped yet.
+ */
+const seenCourses = createStore<string[]>(AsyncStorage, 'cardinal.seencourses.v1', 1, []);
+const NO_SEEN_COURSES: ReadonlySet<string> = new Set();
 
 export default function Courses() {
   const t = useTheme();
@@ -54,7 +68,25 @@ export default function Courses() {
   const [orderNotice, setOrderNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [catalogNotice, setCatalogNotice] = useState<{ text: string; error: boolean } | null>(null);
   const [joiningCourseId, setJoiningCourseId] = useState<string | null>(null);
+  const [seenCourseIds, setSeenCourseIds] = useState<ReadonlySet<string>>(NO_SEEN_COURSES);
   const orderSaveVersion = useRef(0);
+
+  useEffect(() => {
+    let live = true;
+    void seenCourses.load().then((ids) => {
+      if (live) setSeenCourseIds(new Set(ids));
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const markSeen = (courseId: string) => setSeenCourseIds((current) => {
+    if (current.has(courseId)) return current;
+    const next = new Set(current).add(courseId);
+    void seenCourses.save([...next]);
+    return next;
+  });
 
   const { data, isPending, error, refetch } = useQuery({
     queryKey: ['courses'],
@@ -117,6 +149,15 @@ export default function Courses() {
       || course.ownerDisplayName.toLocaleLowerCase().includes(needle)
     ));
   }, [catalog.data, search, sharedCourse.data, tab]);
+
+  const newCourseIds = useMemo(() => {
+    const now = Date.now();
+    return new Set(
+      visibleCatalog
+        .filter((course) => isNewCatalogCourse(course, seenCourseIds, now))
+        .map((course) => course.id),
+    );
+  }, [seenCourseIds, visibleCatalog]);
 
   const open = (id: string, edit = false) => transition(() => router.navigate({
     pathname: '/tree/[courseId]',
@@ -197,6 +238,7 @@ export default function Courses() {
   const join = async (course: CatalogCourse) => {
     setJoiningCourseId(course.id);
     setCatalogNotice(null);
+    markSeen(course.id);
     try {
       const joinedCourseId = await joinPublishedCourse(course.id);
       await Promise.all([
@@ -338,8 +380,12 @@ export default function Courses() {
             <CourseCatalogList
               courses={visibleCatalog}
               busyCourseId={joiningCourseId}
+              newCourseIds={newCourseIds}
               onJoin={join}
-              onOpen={(course) => open(course.id)}
+              onOpen={(course) => {
+                markSeen(course.id);
+                open(course.id);
+              }}
               empty={
                 <Notice title={search.trim() ? 'No matching courses' : tab === 'mine' ? 'No instructor courses yet' : 'No community courses yet'}>
                   <PixelText variant="body" colour={t.ink}>

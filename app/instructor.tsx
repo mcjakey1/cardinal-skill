@@ -743,6 +743,7 @@ function Courses({
           <>
             <LText variant="small" tone="muted">
               Start with an empty chart, then add topics, prerequisites, missions, and XP in the skill-tree editor.
+              An empty course stays private to you: publish it to the official catalog from the chart toolbar once it has content.
             </LText>
             <Field
               label="Course name"
@@ -1803,6 +1804,16 @@ function ImportSyllabus({
   const [fileTone, setFileTone] = useState<'idle' | 'ok' | 'bad'>('idle');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [publishFailure, setPublishFailure] = useState<string | null>(null);
+
+  // Read up front so the screen can say, before the instructor presses anything,
+  // whether this import will reach students. The same key backs the chart
+  // toolbar's publish dialog, so the answer is fetched once per session.
+  const verification = useQuery({
+    queryKey: ['instructor-verification'],
+    queryFn: fetchInstructorVerification,
+    enabled: liveSession,
+  });
 
   const ready = liveSession && (text.trim().length > 0 || Boolean(document)) && !busy;
 
@@ -1856,6 +1867,7 @@ function ImportSyllabus({
     if (!liveSession) return;
     setBusy(true);
     setFailure(null);
+    setPublishFailure(null);
     let createdCourseId: string | null = null;
     let parsed = false;
     try {
@@ -1887,11 +1899,33 @@ function ImportSyllabus({
       }
       parsed = true;
 
+      // An import by a verified instructor is meant to reach students, so
+      // publication is not a second button they have to find. The server RPC
+      // stays the only thing that can flip the kind: an unverified caller's
+      // course simply stays the private practice course it was created as.
+      // `fetchQuery` rather than the hook above so a still-loading verification
+      // cannot silently skip publication.
+      let catalogError: string | null = null;
+      try {
+        const verified = await queryClient.fetchQuery({
+          queryKey: ['instructor-verification'],
+          queryFn: fetchInstructorVerification,
+        });
+        if (verified) await publishOfficialCourse(course.id);
+      } catch (cause) {
+        catalogError = instructorImportError(cause);
+      }
+      setPublishFailure(catalogError);
+
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
         queryClient.invalidateQueries({ queryKey: ['courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
       ]);
 
+      // Stay put when publication failed. Navigating on to the chart would hide
+      // the one message saying students cannot see this course yet.
+      if (catalogError) return;
       onDrawn(course.id);
     } catch (cause) {
       if (createdCourseId && !parsed) {
@@ -1907,8 +1941,28 @@ function ImportSyllabus({
     <>
       <PageHead
         title="Import a syllabus"
-        lede="Upload a PDF, text, or Markdown syllabus. Cardinal reads its topics and prerequisites into a draft tree for you to review."
+        lede="Upload a PDF, text, or Markdown syllabus. Cardinal reads its topics and prerequisites into a course tree, then publishes it to the official catalog when this account is a verified instructor."
       />
+
+      {liveSession && verification.data === false ? (
+        <Notice tone="attention" title="This import will stay private">
+          Publishing to the official catalog needs administrator verification, and this account does
+          not have it yet. The course is still created and still editable — students just cannot
+          find it until an administrator adds this account to verified_instructors.
+        </Notice>
+      ) : null}
+
+      {liveSession && verification.isError ? (
+        <Notice tone="error" title="Verification could not be checked">
+          <View style={styles.noticeActions}>
+            <LText variant="small">
+              Importing still works, but this screen cannot say whether the new course will reach
+              students. Check the database connection and try again.
+            </LText>
+            <LButton label="Retry verification" size="sm" onPress={() => void verification.refetch()} />
+          </View>
+        </Notice>
+      ) : null}
 
       {!liveSession ? (
         <Notice tone="attention" title="Sign in to import a live course">
@@ -1963,16 +2017,31 @@ function ImportSyllabus({
             </Notice>
           ) : null}
 
+          {publishFailure ? (
+            <Notice tone="error" title="Course created, but not published">
+              {publishFailure} The course and its tree are saved under Courses. Students cannot find
+              it until you publish it from the chart toolbar.
+            </Notice>
+          ) : null}
+
           <View style={styles.rowWrap}>
             <LButton
-              label={busy ? 'Generating course tree…' : 'Generate course tree'}
+              label={busy
+                ? 'Generating course tree…'
+                : verification.data
+                  ? 'Generate and publish course'
+                  : 'Generate course tree'}
               variant="primary"
               icon="git-branch"
               disabled={!ready}
               onPress={submit}
             />
             <LText variant="small" tone="muted">
-              The course stays a private draft until you publish it to My courses.
+              {verification.data
+                ? 'The tree is generated and the course is published to the official catalog, where every signed-in student can find and join it.'
+                : verification.data === false
+                  ? 'The course is created privately. Publishing it to students needs a verified instructor account.'
+                  : 'Checking whether this account can publish to the official catalog.'}
             </LText>
           </View>
         </View>
@@ -1998,7 +2067,8 @@ function Settings({ liveSession, onSignOut }: { liveSession: boolean; onSignOut:
           </LText>
           <LText variant="small" style={styles.prose}>
             Syllabus imports run through the authenticated Supabase parser. PDF, text, and Markdown
-            files become private draft trees that you review before publishing to students.
+            files become course trees, published to the official catalog when this account is a
+            verified instructor and kept private to you when it is not.
           </LText>
           <LText variant="small" style={styles.prose}>
             You can read progress only for students enrolled in courses you own. Those instructor

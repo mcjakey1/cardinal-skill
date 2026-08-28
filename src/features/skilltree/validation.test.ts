@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { validateGraph } from './validation.ts';
+import { slugId, validateGraph } from './validation.ts';
 import type { Prereq, SkillNode } from './types.ts';
 
 function node(id: string): SkillNode {
@@ -58,6 +58,30 @@ test('a node that requires itself is a cycle', () => {
 
   assert.equal(result.isValid, false);
   assert.equal(result.errors[0]!.type, 'cycle_detected');
+});
+
+test('a title becomes a readable id', () => {
+  assert.equal(slugId('Describing data', new Set()), 'describing_data');
+  assert.equal(slugId('Chapters 1–2', new Set()), 'chapters_1_2');
+  assert.equal(slugId('  Probability!  ', new Set()), 'probability');
+});
+
+test('an id that is already taken gets a suffix, not a collision', () => {
+  const taken = new Set(['probability']);
+  assert.equal(slugId('Probability', taken), 'probability_2');
+
+  taken.add('probability_2');
+  assert.equal(slugId('Probability', taken), 'probability_3');
+});
+
+test('a title with nothing usable in it still yields an id', () => {
+  assert.equal(slugId('—', new Set()), 'node');
+  assert.equal(slugId('', new Set()), 'node');
+});
+
+test('a very long title is truncated', () => {
+  const id = slugId('a'.repeat(80), new Set());
+  assert.equal(id.length, 32);
 });
 
 test('a clean graph reports nothing', () => {

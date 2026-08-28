@@ -5,7 +5,9 @@ import {
   fragmentMissionXp,
   effectiveMissionCompletionIds,
   isNodeMastered,
+  missionStates,
   missionsForNode,
+  nextMission,
   nodeXpEarned,
   nodeXpFromMissions,
   type MissionLike,
@@ -20,6 +22,47 @@ const FIXTURE: MissionLike[] = [
   m('m3', 'hashing', 60),
   m('m4', 'trees', 250),
 ];
+
+test('a locked node locks the work still to do, but not the work already done', () => {
+  // A node can become locked after the fact — an instructor adds a prerequisite
+  // to a node whose missions someone has already finished. The lock stops new
+  // work; it does not un-do finished work.
+  const states = missionStates(FIXTURE, 'hashing', ['m1'], false);
+
+  assert.deepEqual(
+    states.map((s) => s.state),
+    ['done', 'locked', 'locked'],
+  );
+});
+
+test('a locked node with nothing done offers nothing', () => {
+  const states = missionStates(FIXTURE, 'hashing', [], false);
+
+  assert.deepEqual(
+    states.map((s) => s.state),
+    ['locked', 'locked', 'locked'],
+    'missions are not a way around a prerequisite you have not met',
+  );
+});
+
+test('an unlocked node offers its unfinished missions and marks the rest done', () => {
+  const states = missionStates(FIXTURE, 'hashing', ['m2'], true);
+
+  assert.deepEqual(
+    states.map((s) => s.state),
+    ['open', 'done', 'open'],
+  );
+});
+
+test('the next mission is the first unfinished one, and nothing once they are all done', () => {
+  assert.equal(nextMission(FIXTURE, 'hashing', ['m1'], true)?.id, 'm2');
+  assert.equal(nextMission(FIXTURE, 'hashing', ['m1', 'm2'], true)?.id, 'm3');
+  assert.equal(nextMission(FIXTURE, 'hashing', ['m1', 'm2', 'm3'], true), undefined);
+});
+
+test('a locked node recommends no mission at all', () => {
+  assert.equal(nextMission(FIXTURE, 'hashing', [], false), undefined);
+});
 
 test('a node is worth the sum of its missions', () => {
   assert.equal(nodeXpFromMissions(FIXTURE, 'hashing'), 250);

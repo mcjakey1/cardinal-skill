@@ -11,7 +11,7 @@ const nodes = [
   { id: 'recommended' },
 ];
 
-test('camera focus keeps every concurrently active node in the section', () => {
+test('camera focus chooses the most advanced ongoing node', () => {
   const status = new Map(nodes.map((node) => [node.id, 'available']));
   const focused = currentFocusNodes(
     nodes,
@@ -19,7 +19,18 @@ test('camera focus keeps every concurrently active node in the section', () => {
     { 'active-a': 0.25, 'active-b': 0.75 },
     'recommended',
   );
-  assert.deepEqual(focused.map((node) => node.id), ['active-a', 'active-b']);
+  assert.deepEqual(focused.map((node) => node.id), ['active-b']);
+});
+
+test('equal ongoing progress keeps curriculum order deterministic', () => {
+  const status = new Map(nodes.map((node) => [node.id, 'available']));
+  const focused = currentFocusNodes(
+    nodes,
+    status,
+    { 'active-a': 0.5, 'active-b': 0.5 },
+    'recommended',
+  );
+  assert.deepEqual(focused.map((node) => node.id), ['active-a']);
 });
 
 test('camera focus falls back to one recommended node when nothing is underway', () => {

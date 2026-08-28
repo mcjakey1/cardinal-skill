@@ -29,6 +29,14 @@ test('velocity and completion estimates stay finite and actionable', () => {
   assert.equal(completionEstimateDays(0, 0), 0);
 });
 
+test('the velocity window includes the entire first calendar day', () => {
+  assert.equal(nodesPerWeek(
+    ['2026-08-01T00:01:00'],
+    new Date('2026-08-28T18:00:00'),
+    28,
+  ), 0.3);
+});
+
 test('player titles rise at stable level boundaries', () => {
   assert.equal(playerTitle(1), 'Initiate');
   assert.equal(playerTitle(4), 'Apprentice');

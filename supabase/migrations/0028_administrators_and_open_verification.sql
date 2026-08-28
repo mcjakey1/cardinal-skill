@@ -31,9 +31,14 @@
 --     verified_instructors had none. The first row is inserted out of band
 --     through the Supabase dashboard; after that an Administrator may grant the
 --     status to others through `admin_set_administrator`.
---   * Deleting a shared course. `prevent_shared_course_delete` (0022) still
---     refuses, for Administrators too — learner records outlive the course, so
---     removal is archival.
+--   * Deleting a shared course. 0027 replaced `prevent_shared_course_delete`
+--     with a delete policy that only ever matches a private practice draft,
+--     because a row trigger could not tell an owner's delete from an account
+--     erasure cascade. The administrator policies below are therefore SELECT,
+--     INSERT and UPDATE only: a permissive FOR ALL policy would have handed an
+--     Administrator the delete that 0022 and 0027 both took away, and the
+--     cascade behind it erases learner records. Removal stays archival, through
+--     `admin_set_course_publication`.
 --   * Student writes. Nothing here lets anyone rewrite a student's progress.
 --     Every read this grants an Administrator is a SELECT.
 --   * Course-kind authority for ordinary accounts. An unverified, non-admin
@@ -173,17 +178,33 @@ $$;
 
 -- Writes on the graph tables. 0013 already grants these to a course's owner
 -- through owns_course, so nodes, prerequisites and missions follow from the
--- redefinition above. Courses themselves are guarded by an owner_id equality in
--- 0001's `own courses` policy, which no function call can widen — so an
--- Administrator needs a policy of their own. Permissive policies are ORed, so
--- this adds a second way to pass and takes nothing from the first.
-create policy "administrators write any course"
+-- redefinition above. Courses themselves are guarded by owner_id equality in
+-- 0027's per-command policies, which no function call can widen — so an
+-- Administrator needs policies of their own. Permissive policies are ORed, so
+-- these add a second way to pass and take nothing from the first.
+--
+-- Read, create and update. Deliberately not DELETE: see the header. An
+-- Administrator retires a course by archiving it, which is what preserves the
+-- learner records hanging off it.
+create policy "administrators read any course"
   on public.courses
-  for all
+  for select
+  using (public.is_administrator());
+
+create policy "administrators create any course"
+  on public.courses
+  for insert
+  with check (public.is_administrator());
+
+create policy "administrators update any course"
+  on public.courses
+  for update
   using (public.is_administrator())
   with check (public.is_administrator());
 
--- Enrolling and removing students on any course.
+-- Enrolling and removing students on any course. Delete belongs here, unlike on
+-- courses: an enrollment row carries no progress of its own, so removing one
+-- takes access away and leaves the student's record whole.
 create policy "administrators write any enrollment"
   on public.enrollments
   for all
@@ -296,6 +317,52 @@ begin
   end if;
 end;
 $$;
+
+-- 0027 added a service-role provisioning boundary that revokes by DELETING the
+-- row. That was right while a row's absence was the only state there was; it is
+-- wrong now, because the sign-up trigger reads a missing row as "never granted"
+-- and an erased revocation is one re-registration away from coming back. Same
+-- function, same service_role boundary, same signature — the revocation branch
+-- now stamps the row the way the administrator path does, so the two cannot
+-- disagree about what revoked means.
+create or replace function public.set_instructor_verification(
+  p_user_id  uuid,
+  p_verified boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_user_id is null or p_verified is null then
+    raise exception 'An instructor account and verification state are required.';
+  end if;
+
+  if p_verified then
+    insert into public.verified_instructors (user_id, verified_by)
+    values (p_user_id, auth.uid())
+    on conflict (user_id) do update
+      set verified_at = now(),
+          verified_by = auth.uid(),
+          revoked_at = null,
+          revoked_by = null;
+  else
+    insert into public.verified_instructors (user_id, verified_by, revoked_at, revoked_by)
+    values (p_user_id, auth.uid(), now(), auth.uid())
+    on conflict (user_id) do update
+      set revoked_at = now(),
+          revoked_by = auth.uid();
+  end if;
+end;
+$$;
+
+revoke all on function public.set_instructor_verification(uuid, boolean) from public, anon;
+revoke all on function public.set_instructor_verification(uuid, boolean) from authenticated;
+grant execute on function public.set_instructor_verification(uuid, boolean) to service_role;
+
+comment on function public.set_instructor_verification(uuid, boolean) is
+  'Service-role provisioning boundary for official-course instructors. Revocation is a stamp, not a delete.';
 
 create or replace function public.admin_set_administrator(
   p_user_id uuid,

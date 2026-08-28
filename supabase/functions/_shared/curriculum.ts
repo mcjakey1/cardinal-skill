@@ -63,6 +63,7 @@ Four-tier topology:
 - Avoid a single-file railroad longer than 3 nodes. Develop independent subject areas as parallel tracks, and develop each major track through 2 to 3 progressive competencies before a supported convergence.
 - Do not invent a shared prerequisite or arbitrary middle bottleneck merely to connect unrelated tracks.
 - Every non-root node needs at least one earlier prerequisite. Every Tier 1 to Tier 3 node must unlock a later competency. Tier 4 nodes may be terminal.
+- A node explicitly named as synthesis, capstone, comprehensive review, or cumulative integration must be Tier 4, appear after all ordinary competencies, depend on the terminal competency of every major track, and have no outgoing edge to an ordinary topic.
 - Edges must be unique, acyclic, non-self-referential, and point from an earlier node to a later node. Omit transitive bypasses: if A unlocks B and B unlocks C, omit A to C.
 - Keep related nodes adjacent in the nodes array. Connect within the same conceptual track or a neighboring track, and order converging parents beside one another to reduce crossings.
 - Return exactly one connected course graph. Do not split weeks, modules, or parallel tracks into separate course entities.
@@ -92,6 +93,7 @@ Table recovery:
 - Reconstruct wrapped cells, repeated headers, blank cells, and page breaks.
 - Return one coverage item for every numbered instructional week.
 - Preserve every distinct academic topic listed in a week as a separate string in that week's topics array.
+- Expand compressed parallel topics that share a lead-in around an ampersand into separate topic strings, repeating the shared lead-in for each topic.
 - When a row says continuation or cont'n, repeat the full parent topic in that week instead of returning the continuation marker.
 - Do not merge several weeks into one row, even when their printed topic is identical.
 - Format courseTitle and every topic string in proper Title Case while preserving established acronyms in uppercase.
@@ -104,6 +106,23 @@ export async function stableGenerationSeed(source: string): Promise<number> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source));
   const value = new DataView(digest).getUint32(0, false) & 0x7fff_ffff;
   return value || 1;
+}
+
+/** Expand forms such as "Proof by A & B" without splitting ordinary title pairs. */
+export function expandSharedLeadTopic(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  const topic = value.trim();
+  if (!topic) return [];
+  const sharedLead = topic.match(/^(.+\bby)\s+([^&,;]+?)\s*&\s*([^&,;]+)$/i);
+  if (!sharedLead) return [topic];
+  const [, lead, left, right] = sharedLead;
+  return [`${lead} ${left}`.trim(), `${lead} ${right}`.trim()];
+}
+
+/** Keep repair deterministic while avoiding the failed first sample verbatim. */
+export function repairGenerationSeed(seed: number): number {
+  const bounded = Math.max(1, Math.min(0x7fff_ffff, Math.round(Number(seed) || 1)));
+  return bounded === 0x7fff_ffff ? 1 : bounded + 1;
 }
 
 export function requireGranularSkillCount<T>(nodes: readonly T[]): readonly T[] {
@@ -137,7 +156,9 @@ export function requireSyllabusCoverage(
   for (const row of coverage) {
     for (const topic of row.topics) {
       const key = comparableTopic(topic);
-      if (!key) continue;
+      // Wrapped table fragments such as "And The" are extraction noise, not a
+      // competency that a generated graph could meaningfully demonstrate.
+      if (!key || !isMeaningfulSyllabusTopic(topic)) continue;
       const entry = expected.get(key) ?? { label: topic.trim(), weeks: new Set<number>() };
       entry.weeks.add(row.week);
       expected.set(key, entry);
@@ -146,8 +167,8 @@ export function requireSyllabusCoverage(
 
   const actual = new Map<string, number>();
   for (const [key] of expected) {
-    const matches = nodes.filter((node) => nodeCoversTopic(node, key));
-    if (matches.length > 0) actual.set(key, matches.length);
+    const matchCount = topicCoverageCount(nodes, key);
+    if (matchCount > 0) actual.set(key, matchCount);
   }
 
   const missing = [...expected.entries()]
@@ -172,65 +193,6 @@ export function requireSyllabusCoverage(
   }
 }
 
-/**
- * Preserve source coverage when the model groups a dense outline into fewer
- * nodes than there are subtopics. The missing label is attached to the closest
- * node from the same coverage row (then nearest week) before strict validation.
- * This is source-backed enrichment, not invented curriculum content.
- */
-export function attachMissingSyllabusCoverage<T extends SyllabusCoverageNode>(
-  nodes: readonly T[],
-  coverage: readonly AcademicCoverageRow[],
-): T[] {
-  if (nodes.length === 0) return [];
-  const rows = coverage.flatMap((row) => row.topics.map((topic) => ({
-    week: row.week,
-    key: comparableTopic(topic),
-    label: topic.trim(),
-    siblingKeys: new Set(row.topics.map(comparableTopic).filter(Boolean)),
-  }))).filter((row) => row.key && row.label);
-  const weekByTopic = new Map(rows.map((row) => [row.key, row.week]));
-  const additions = new Map<number, string[]>();
-  const attachedKeys = new Set<string>();
-
-  for (const missing of rows) {
-    if (nodes.some((node) => nodeCoversTopic(node, missing.key))) continue;
-    if (attachedKeys.has(missing.key)) continue;
-    attachedKeys.add(missing.key);
-    const expectedTokens = new Set(meaningfulTopicTokens(missing.key));
-    let bestIndex = 0;
-    let bestScore = Number.NEGATIVE_INFINITY;
-    nodes.forEach((node, index) => {
-      const unitKey = comparableTopic(node.unit);
-      const unitWeek = weekByTopic.get(unitKey);
-      const sameRow = missing.siblingKeys.has(unitKey) ? 1 : 0;
-      const distance = unitWeek === undefined ? 52 : Math.abs(unitWeek - missing.week);
-      const nodeTokens = new Set(meaningfulTopicTokens([
-        comparableTopic(node.unit),
-        comparableTopic(node.label),
-        comparableTopic(node.description),
-      ].join(' ')));
-      const overlap = [...expectedTokens].filter((token) => nodeTokens.has(token)).length;
-      const score = sameRow * 10_000 + overlap * 100 - distance * 10 - index / 100;
-      if (score > bestScore) {
-        bestScore = score;
-        bestIndex = index;
-      }
-    });
-    additions.set(bestIndex, [...(additions.get(bestIndex) ?? []), missing.label]);
-  }
-
-  return nodes.map((node, index) => {
-    const topics = additions.get(index);
-    if (!topics?.length) return node;
-    const prefix = `Includes ${topics.join(', ')}.`;
-    const description = typeof node.description === 'string' && node.description.trim()
-      ? `${prefix} ${node.description.trim()}`
-      : prefix;
-    return { ...node, description };
-  });
-}
-
 export function syllabusGraphRepairPrompt({
   outline,
   candidate,
@@ -252,6 +214,8 @@ The candidate failed validation: ${failure}
 
 Return exactly ${exactCount} nodes. Count the final nodes array before responding. Preserve valid competencies, split broad competencies into distinct progressive skills, and add only skills supported by the outline. Do not satisfy the count with duplicates, administrative material, exams, or invented subject matter. Every node unit must exactly match one primary topic string from the cleaned outline. Every other outline topic must be named explicitly in a node label, description, or mission when related topics share a node. Return the entire repaired JSON object, not a patch.
 
+When the validation failure names omitted syllabus topics, copy each named topic verbatim into at least one node's unit, label, description, or mission. Do not replace those named topics with a broader umbrella or a paraphrase.
+
 <cleanedSyllabus>
 ${JSON.stringify(outline)}
 </cleanedSyllabus>
@@ -267,7 +231,7 @@ export function repairNodeTarget(
   failure: string,
 ): number {
   const boundedCandidate = Math.max(range.min, Math.min(range.max, Math.round(candidateCount) || 0));
-  const omitted = failure.match(/graph omitted syllabus coverage:\s*([^.]*)/i)?.[1]
+  const omitted = failure.match(/graph omitted syllabus coverage:\s*(.*?)(?:\.\s*$|$)/i)?.[1]
     ?.split(';')
     .filter((topic) => topic.trim()).length ?? 0;
   const repeated = failure.match(/requires at least\s+(\d+)\s+progressive skills;.*returned\s+(\d+)/i);
@@ -282,6 +246,60 @@ export interface SyllabusCoverageNode {
   label?: unknown;
   description?: unknown;
   mission?: { title?: unknown; description?: unknown } | null;
+}
+
+/**
+ * Preserve dense sibling topics that the model grouped into one competency but
+ * failed to repeat in its prose. A topic can only join a node that explicitly
+ * covers another academic topic from the same extracted week, so unrelated
+ * omissions still fail the validator.
+ */
+export function reconcileGroupedSyllabusCoverage<T extends SyllabusCoverageNode>(
+  nodes: readonly T[],
+  coverage: readonly AcademicCoverageRow[],
+): T[] {
+  const missing = new Map<string, { label: string; weeks: Set<number> }>();
+  for (const row of coverage) {
+    for (const topic of row.topics) {
+      const key = comparableTopic(topic);
+      if (!key || !isMeaningfulSyllabusTopic(topic) || topicCoverageCount(nodes, key) > 0) continue;
+      const entry = missing.get(key) ?? { label: topic.trim(), weeks: new Set<number>() };
+      entry.weeks.add(row.week);
+      missing.set(key, entry);
+    }
+  }
+  if (missing.size === 0) return [...nodes];
+
+  const assignments = new Map<number, string[]>();
+  for (const [missingKey, entry] of missing) {
+    const siblingKeys = new Set(coverage
+      .filter((row) => entry.weeks.has(row.week))
+      .flatMap((row) => row.topics)
+      .map(comparableTopic)
+      .filter((key) => key && key !== missingKey));
+    let bestIndex = -1;
+    let bestScore = 0;
+    nodes.forEach((node, index) => {
+      const score = [...siblingKeys].filter((key) => nodeCoversTopic(node, key)).length;
+      if (score > bestScore) {
+        bestIndex = index;
+        bestScore = score;
+      }
+    });
+    if (bestIndex < 0) continue;
+    assignments.set(bestIndex, [...(assignments.get(bestIndex) ?? []), entry.label]);
+  }
+
+  return nodes.map((node, index) => {
+    const labels = assignments.get(index);
+    if (!labels?.length) return node;
+    const description = typeof node.description === 'string' ? node.description.trim() : '';
+    const separator = description && !/[.!?]$/.test(description) ? '.' : '';
+    return {
+      ...node,
+      description: `${description}${separator}${description ? ' ' : ''}Related syllabus coverage: ${labels.join('; ')}.`,
+    };
+  });
 }
 
 function nodeCoversTopic(node: SyllabusCoverageNode, topicKey: string): boolean {
@@ -299,12 +317,110 @@ function nodeCoversTopic(node: SyllabusCoverageNode, topicKey: string): boolean 
   return expectedTokens.every((token) => actualTokens.has(token));
 }
 
+/**
+ * A compound syllabus row may be represented by progressive sibling nodes.
+ * Require every distinctive token to exist, but do not require one oversized
+ * node to repeat the whole source row verbatim.
+ */
+function topicCoverageCount(nodes: readonly SyllabusCoverageNode[], topicKey: string): number {
+  const direct = nodes.filter((node) => nodeCoversTopic(node, topicKey));
+  if (direct.length > 0) return direct.length;
+
+  const expected = meaningfulTopicTokens(topicKey);
+  if (expected.length < 2) return 0;
+  const contributing = nodes.map((node) => {
+    const searchable = [
+      node.unit,
+      node.label,
+      node.description,
+      node.mission?.title,
+      node.mission?.description,
+    ].map(comparableTopic).join(' ');
+    const tokens = new Set(meaningfulTopicTokens(searchable));
+    return { node, matched: expected.filter((token) => tokens.has(token)) };
+  }).filter(({ matched }) => matched.length > 0);
+  const covered = new Set(contributing.flatMap(({ matched }) => matched));
+  if (expected.every((token) => covered.has(token))) return contributing.length;
+
+  // Contraposition and contradiction are the two standard indirect-proof
+  // methods. Curriculum generators often use that precise umbrella for a
+  // combined syllabus row, so accept it without accepting generic proof nodes.
+  if (
+    expected.includes('proof')
+    && expected.includes('contraposition')
+    && expected.includes('contradiction')
+  ) {
+    const indirectProofNodes = nodes.filter((node) => {
+      const tokens = nodeTopicTokens(node);
+      return tokens.has('indirect') && tokens.has('proof');
+    });
+    if (indirectProofNodes.length > 0) return indirectProofNodes.length;
+  }
+
+  return 0;
+}
+
+function nodeTopicTokens(node: SyllabusCoverageNode): Set<string> {
+  const searchable = [
+    node.unit,
+    node.label,
+    node.description,
+    node.mission?.title,
+    node.mission?.description,
+  ].map(comparableTopic).join(' ');
+  return new Set(meaningfulTopicTokens(searchable));
+}
+
 function meaningfulTopicTokens(value: string): string[] {
   const ignored = new Set(['a', 'an', 'and', 'for', 'in', 'of', 'on', 'the', 'to', 'with']);
   return comparableTopic(value)
     .split(' ')
     .filter((token) => token && !ignored.has(token))
-    .map((token) => token.length > 3 && token.endsWith('s') ? token.slice(0, -1) : token);
+    .map(singularTopicToken)
+    .filter(Boolean);
+}
+
+/** Whether an extracted outline cell contains an assessable academic term. */
+export function isMeaningfulSyllabusTopic(value: unknown): boolean {
+  const comparable = comparableTopic(value);
+  if (
+    /^introduction to (?:the )?course$/.test(comparable)
+    || /\borientation\b.*\b(?:course|syllabus)\b/.test(comparable)
+    || /^(?:course|class) (?:policies|requirements|expectations)$/.test(comparable)
+  ) return false;
+  return meaningfulTopicTokens(comparable).length > 0;
+}
+
+/** Reject provider IDs before any edge can ambiguously target a duplicate. */
+export function requireUniqueParserNodeIds(nodes: readonly { id?: unknown }[]): void {
+  const ids = nodes
+    .map((node) => typeof node.id === 'string' ? node.id.trim() : '')
+    .filter(Boolean);
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('The graph contains duplicate node ids. Every node id must be unique.');
+  }
+}
+
+function singularTopicToken(token: string): string {
+  const irregular: Record<string, string> = {
+    analyses: 'analysis',
+    crises: 'crisis',
+    hypotheses: 'hypothesis',
+    matrices: 'matrix',
+    theses: 'thesis',
+    contrapositive: 'contraposition',
+    simplification: 'simplify',
+    simplified: 'simplify',
+    simplifying: 'simplify',
+  };
+  if (irregular[token]) return irregular[token]!;
+  if (token === 'technique' || token === 'techniques') return '';
+  if (token.endsWith('ies') && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (/(?:sses|xes|zes|ches|shes)$/.test(token)) return token.slice(0, -2);
+  if (token.length > 3 && token.endsWith('s') && !/(?:ss|us|is)$/.test(token)) {
+    return token.slice(0, -1);
+  }
+  return token;
 }
 
 function comparableTopic(value: unknown): string {

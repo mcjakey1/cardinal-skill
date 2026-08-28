@@ -73,7 +73,10 @@ export async function fetchCourseOptions(): Promise<CourseOption[]> {
   await cacheCourseList(liveCourses).catch(() => {});
   if (localOrder.pendingSync && auth.user) {
     void syncRemoteCourseOrder(liveCourses, auth.user.id)
-      .then(() => markCourseOrderSynced(liveCourses.map((course) => course.id)))
+      .then(() => markCourseOrderSynced(
+        liveCourses.map((course) => course.id),
+        localOrder.ids,
+      ))
       .catch(() => {});
   }
   return [...liveCourses, ...fixtures];

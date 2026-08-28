@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { autoLayout } from './autoLayout.ts';
+import { autoLayout, hasOverlappingNodePositions } from './autoLayout.ts';
 import type { Prereq, SkillNode } from './types.ts';
 
 function node(id: string): SkillNode {
@@ -47,6 +47,32 @@ test('siblings at the same depth do not land on top of each other', () => {
 
   assert.equal(at('b').x, at('c').x, 'same depth means same column');
   assert.notEqual(at('b').y, at('c').y, 'same column means they must differ vertically');
+});
+
+test('rendered node footprints detect label collisions, not only identical centres', () => {
+  assert.equal(hasOverlappingNodePositions([
+    { x: 100, y: 100 },
+    { x: 100, y: 100 },
+  ]), true);
+  assert.equal(hasOverlappingNodePositions([
+    { x: 100, y: 100 },
+    { x: 220, y: 150 },
+  ]), true, 'labels still overlap when both axes are inside the footprint');
+  assert.equal(hasOverlappingNodePositions([
+    { x: 100, y: 100 },
+    { x: 310, y: 100 },
+  ]), false);
+});
+
+test('automatic layout clears every rendered node collision', () => {
+  const nodes = [node('root'), node('left'), node('right')];
+  const prereqs: Prereq[] = [
+    { nodeId: 'left', prereqId: 'root' },
+    { nodeId: 'right', prereqId: 'root' },
+  ];
+
+  assert.equal(hasOverlappingNodePositions(nodes), true);
+  assert.equal(hasOverlappingNodePositions(autoLayout(nodes, prereqs).nodes), false);
 });
 
 test('every root stays on the leftmost rank even when paths merge at different depths', () => {

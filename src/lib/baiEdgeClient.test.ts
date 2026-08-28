@@ -164,7 +164,7 @@ test('extracts a JSON object from fenced or prefaced provider output', () => {
   );
   assert.throws(
     () => parseJsonObjectText('{"broken":"value}'),
-    /unterminated string/i,
+    /unterminated/i,
   );
 });
 
@@ -183,5 +183,12 @@ test('balanced JSON extraction ignores braces and escaped quotes inside strings'
       'prefix {"mission":"Compare {FIR} and \\"IIR\\" responses."} trailing {noise}',
     ),
     { mission: 'Compare {FIR} and "IIR" responses.' },
+  );
+});
+
+test('truncated outer JSON never falls through to a balanced inner fragment', () => {
+  assert.throws(
+    () => parseJsonObjectText('{"courseTitle":"DSP","nodes":[{"id":"inner"}]'),
+    /unterminated json object/i,
   );
 });

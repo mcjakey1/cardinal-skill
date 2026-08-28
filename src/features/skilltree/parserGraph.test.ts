@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   ensureSingleCourseDag,
   normalizeTieredCourseDag,
+  placeSynthesisAtCourseEnd,
   validateTieredCourseDag,
 } from '../../../supabase/functions/_shared/courseGraph.ts';
 
@@ -112,4 +113,37 @@ test('parser normalization clamps semantic tiers to the four-tier contract', () 
   ]);
 
   assert.deepEqual(nodes.map((node) => node.tier), [1, 4]);
+});
+
+test('a cumulative synthesis becomes the final convergence instead of an early prerequisite', () => {
+  const nodes = placeSynthesisAtCourseEnd([
+    { key: 'relations', title: 'Relations And Functions', tier: 1, prereq_keys: [] },
+    { key: 'posets', title: 'Posets And Partitions', tier: 2, prereq_keys: ['relations'] },
+    { key: 'counting', title: 'Counting Permutations', tier: 1, prereq_keys: [] },
+    { key: 'combinatorics', title: 'Advanced Combinatorics', tier: 2, prereq_keys: ['counting'] },
+    { key: 'synthesis', title: 'Discrete Synthesis', tier: 3, prereq_keys: ['posets', 'combinatorics'] },
+    { key: 'graph-terms', title: 'Graph Terminology', tier: 2, prereq_keys: ['synthesis'] },
+    { key: 'graph-representation', title: 'Graph Representation', tier: 3, prereq_keys: ['graph-terms'] },
+    { key: 'recurrences', title: 'Recurrence Relations', tier: 1, prereq_keys: [] },
+    { key: 'recursive-algorithms', title: 'Recursive Algorithms', tier: 3, prereq_keys: ['recurrences'] },
+  ]);
+  const synthesis = nodes.at(-1)!;
+
+  assert.equal(synthesis.key, 'synthesis');
+  assert.equal(synthesis.tier, 4);
+  assert.deepEqual(
+    new Set(synthesis.prereq_keys),
+    new Set(['posets', 'combinatorics', 'graph-representation', 'recursive-algorithms']),
+  );
+  assert.equal(nodes.find((node) => node.key === 'graph-terms')?.prereq_keys.length, 0);
+  assert.equal(nodes.some((node) => node.key !== 'synthesis' && node.prereq_keys.includes('synthesis')), false);
+});
+
+test('an advanced specialist topic is not treated as a cumulative synthesis', () => {
+  const input = [
+    { key: 'foundation', title: 'Graph Foundations', tier: 1, prereq_keys: [] },
+    { key: 'hard-topic', title: 'Advanced Graph Coloring', tier: 4, prereq_keys: ['foundation'] },
+  ];
+
+  assert.deepEqual(placeSynthesisAtCourseEnd(input), input);
 });

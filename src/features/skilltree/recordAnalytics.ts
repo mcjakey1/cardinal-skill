@@ -40,7 +40,9 @@ export function nodesPerWeek(
   today: Date = new Date(),
   windowDays = 28,
 ): number {
-  const start = addDays(today, -Math.max(1, windowDays) + 1).getTime();
+  const startDate = addDays(today, -Math.max(1, windowDays) + 1);
+  startDate.setHours(0, 0, 0, 0);
+  const start = startDate.getTime();
   const end = today.getTime();
   let completions = 0;
   for (const timestamp of masteredAt) {

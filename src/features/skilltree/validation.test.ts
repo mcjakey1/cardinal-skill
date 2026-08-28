@@ -85,3 +85,12 @@ test('disconnected course components are rejected', () => {
   assert.equal(result.errors[0]!.type, 'disconnected_graph');
   assert.deepEqual(result.errors[0]!.nodeIds, ['c']);
 });
+
+test('connectivity reports the small orphan even when it is listed first', () => {
+  const result = validateGraph(
+    [node('orphan'), node('a'), node('b')],
+    [{ nodeId: 'b', prereqId: 'a' }],
+  );
+
+  assert.deepEqual(result.errors[0]!.nodeIds, ['orphan']);
+});

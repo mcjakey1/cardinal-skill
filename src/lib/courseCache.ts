@@ -91,12 +91,15 @@ export async function cacheCourseOrder(
   })));
 }
 
-export async function markCourseOrderSynced(ids: readonly string[]): Promise<void> {
+export async function markCourseOrderSynced(
+  ids: readonly string[],
+  expectedLocalIds: readonly string[] = ids,
+): Promise<void> {
   await queueCourseOrderWrite(async () => {
     const current = await loadCachedCourseOrder();
     if (
-      current.ids.length !== ids.length
-      || current.ids.some((id, index) => id !== ids[index])
+      current.ids.length !== expectedLocalIds.length
+      || current.ids.some((id, index) => id !== expectedLocalIds[index])
     ) return;
     await AsyncStorage.setItem(COURSE_ORDER_CACHE_KEY, JSON.stringify({
       version: 1,

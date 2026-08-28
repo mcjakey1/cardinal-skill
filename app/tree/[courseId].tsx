@@ -32,7 +32,7 @@ import {
   totalXp,
 } from '@/features/skilltree/progression';
 import { HELP_SHARE } from '@/features/skilltree/subtree';
-import { fetchTree } from '@/features/skilltree/queries';
+import { fetchTree, treeQueryKeys } from '@/features/skilltree/queries';
 import {
   duplicateCourse,
   fetchCourseOptions,
@@ -147,7 +147,7 @@ export default function TreeScreen() {
   }, [courseId, edit]);
 
   const { data, isPending, error, refetch } = useQuery({
-    queryKey: ['tree', courseId],
+    queryKey: treeQueryKeys.authoring(courseId),
     queryFn: () => fetchTree(courseId),
     enabled: Boolean(courseId),
   });
@@ -156,6 +156,18 @@ export default function TreeScreen() {
     queryFn: fetchCourseOptions,
   });
   const currentCourse = courseOptions.find((course) => course.id === courseId) ?? null;
+  const requestEditMode = useCallback((next: boolean) => {
+    if (next && currentCourse && !currentCourse.isFixture && !currentCourse.canEdit) {
+      setPracticeCopyError(null);
+      setPracticeCopyOpen(true);
+      return;
+    }
+    setEditMode(next);
+    if (!next) {
+      setLinkMode(false);
+      setLinkSourceId(null);
+    }
+  }, [currentCourse]);
 
   useEffect(() => {
     if (!currentCourse || currentCourse.isFixture || currentCourse.canEdit || edit !== '1') return;
@@ -356,7 +368,7 @@ export default function TreeScreen() {
     return (
       <EmptyChart
         title={title}
-        onEdit={() => setEditMode(true)}
+        onEdit={() => requestEditMode(true)}
         onCourses={() => router.replace('/courses')}
         onUpload={() => router.navigate('/upload')}
       />
@@ -636,7 +648,7 @@ export default function TreeScreen() {
     try {
       await updateCourseMetadata(targetCourseId, metadata);
       await queryClient.invalidateQueries({ queryKey: ['courses'] });
-      await queryClient.invalidateQueries({ queryKey: ['tree', targetCourseId] });
+      await queryClient.invalidateQueries({ queryKey: ['tree'] });
       AccessibilityInfo.announceForAccessibility('Course details saved.');
     } catch {
       AccessibilityInfo.announceForAccessibility('Course details could not be saved. Check your connection and try again.');
@@ -816,18 +828,7 @@ export default function TreeScreen() {
         linkMode={linkMode}
         linkSourceId={linkSourceId}
         linkNotice={linkNotice}
-        onToggleEditMode={(next) => {
-          if (next && currentCourse && !currentCourse.isFixture && !currentCourse.canEdit) {
-            setPracticeCopyError(null);
-            setPracticeCopyOpen(true);
-            return;
-          }
-          setEditMode(next);
-          if (!next) {
-            setLinkMode(false);
-            setLinkSourceId(null);
-          }
-        }}
+        onToggleEditMode={requestEditMode}
         onAddNode={addNode}
         onToggleLinkMode={startLink}
         onCancelLink={cancelLink}

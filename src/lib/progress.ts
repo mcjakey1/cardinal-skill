@@ -10,9 +10,12 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
+import type { TreeSnapshot } from '@/features/skilltree/queries';
 import {
   pruneSyncedMissionProgress,
+  pruneSyncedMissionUnmarks,
   type MissionProgressQueue,
   type PendingMissionProgress,
 } from './missionProgressQueue';
@@ -146,7 +149,9 @@ async function syncNodeProgress(nodes: CompletionLog): Promise<void> {
   if (failure) throw failure;
 }
 
-async function flushMissionProgress(courseIds: readonly string[]): Promise<void> {
+type SyncedMissionProgress = readonly [string, string, PendingMissionProgress];
+
+async function flushMissionProgress(courseIds: readonly string[]): Promise<SyncedMissionProgress[]> {
   const queues = await Promise.all(courseIds.map(async (courseId) =>
     [courseId, await loadPendingMissionProgress(courseId)] as const,
   ));
@@ -155,32 +160,53 @@ async function flushMissionProgress(courseIds: readonly string[]): Promise<void>
       [courseId, missionId, operation] as const,
     ),
   );
-  if (entries.length === 0) return;
+  if (entries.length === 0) return [];
 
   const { data } = await supabase.auth.getUser();
-  if (!data.user) return;
+  if (!data.user) return [];
 
   const results = await Promise.allSettled(entries.map(([, missionId, operation]) =>
     syncMissionProgress(data.user!.id, missionId, operation.done),
   ));
   const synced = entries.filter((_, index) => results[index]?.status === 'fulfilled');
-  if (synced.length === 0) return;
+  if (synced.length === 0) return [];
 
   await Promise.all(courseIds.map(async (courseId) => {
     const courseSynced = synced
       .filter(([syncedCourseId]) => syncedCourseId === courseId)
       .map(([, missionId, operation]) => [missionId, operation] as const);
     if (courseSynced.length === 0) return;
-    const latest = await loadPendingMissionProgress(courseId);
-    await AsyncStorage.setItem(
-      pendingKey(courseId),
-      JSON.stringify(pruneSyncedMissionProgress(latest, courseSynced)),
-    );
+    const [latest, unmarks] = await Promise.all([
+      loadPendingMissionProgress(courseId),
+      loadLocal(courseId, 'mission-unmarks'),
+    ]);
+    await AsyncStorage.multiSet([
+      [pendingKey(courseId), JSON.stringify(pruneSyncedMissionProgress(latest, courseSynced))],
+      [key('mission-unmarks', courseId), JSON.stringify(pruneSyncedMissionUnmarks(unmarks, courseSynced))],
+    ]);
   }));
+  return synced;
+}
+
+function applySyncedMissionProgress(
+  queryClient: ReturnType<typeof useQueryClient>,
+  synced: readonly SyncedMissionProgress[],
+): void {
+  if (synced.length === 0) return;
+  queryClient.setQueriesData<TreeSnapshot>({ queryKey: ['tree'] }, (current) => {
+    if (!current) return current;
+    const completed = new Set(current.completedMissionIds);
+    synced.forEach(([, missionId, operation]) => {
+      if (operation.done) completed.add(missionId);
+      else completed.delete(missionId);
+    });
+    return { ...current, completedMissionIds: [...completed] };
+  });
 }
 
 /** Read/write access to one course's local logs, for a screen. */
 export function useLocalProgress(courseId: string | undefined) {
+  const queryClient = useQueryClient();
   const [log, setLog] = useState<CompletionLog>({});
   const [missionLog, setMissionLog] = useState<CompletionLog>({});
   const [missionUnmarks, setMissionUnmarks] = useState<CompletionLog>({});
@@ -204,14 +230,18 @@ export function useLocalProgress(courseId: string | undefined) {
         setMissionLog(missions);
         setMissionUnmarks(unmarks);
         void syncNodeProgress(nodes).catch(() => {});
-        void flushMissionProgress([courseId]);
+        void flushMissionProgress([courseId]).then(async (synced) => {
+          if (!live) return;
+          applySyncedMissionProgress(queryClient, synced);
+          setMissionUnmarks(await loadLocal(courseId, 'mission-unmarks'));
+        }).catch(() => {});
         setReady(true);
       },
     );
     return () => {
       live = false;
     };
-  }, [courseId]);
+  }, [courseId, queryClient]);
 
   const complete = useCallback(
     async (nodeId: string) => {
@@ -242,9 +272,11 @@ export function useLocalProgress(courseId: string | undefined) {
         setMissionUnmarks(unmarks);
       }
       await queueMissionProgress(courseId, missionId, done);
-      await flushMissionProgress([courseId]).catch(() => {});
+      const synced = await flushMissionProgress([courseId]).catch(() => []);
+      applySyncedMissionProgress(queryClient, synced);
+      setMissionUnmarks(await loadLocal(courseId, 'mission-unmarks'));
     },
-    [courseId],
+    [courseId, queryClient],
   );
 
   const reset = useCallback(async () => {
@@ -266,6 +298,7 @@ export interface CourseCompletionLogs {
 
 /** One hook for the aggregated Missions view; hook calls never depend on course count. */
 export function useMultiCourseProgress(courseIds: readonly string[]) {
+  const queryClient = useQueryClient();
   const idKey = courseIds.join(' ');
   const [logs, setLogs] = useState<Record<string, CourseCompletionLogs>>({});
   const [ready, setReady] = useState(false);
@@ -285,11 +318,24 @@ export function useMultiCourseProgress(courseIds: readonly string[]) {
       if (!live) return;
       setLogs(Object.fromEntries(entries));
       void syncNodeProgress(Object.assign({}, ...entries.map(([, value]) => value.nodes))).catch(() => {});
-      void flushMissionProgress(ids);
+      void flushMissionProgress(ids).then(async (synced) => {
+        if (!live) return;
+        applySyncedMissionProgress(queryClient, synced);
+        const refreshed = await Promise.all(ids.map(async (courseId) => [
+          courseId,
+          await loadLocal(courseId, 'mission-unmarks'),
+        ] as const));
+        if (!live) return;
+        const unmarksByCourse = Object.fromEntries(refreshed);
+        setLogs((current) => Object.fromEntries(Object.entries(current).map(([courseId, value]) => [
+          courseId,
+          { ...value, missionUnmarks: unmarksByCourse[courseId] ?? value.missionUnmarks },
+        ])));
+      }).catch(() => {});
       setReady(true);
     });
     return () => { live = false; };
-  }, [idKey]);
+  }, [idKey, queryClient]);
 
   const toggleMission = useCallback(async (courseId: string, missionId: string, done: boolean) => {
     const [missions, missionUnmarks] = done
@@ -310,8 +356,18 @@ export function useMultiCourseProgress(courseIds: readonly string[]) {
       },
     }));
     await queueMissionProgress(courseId, missionId, done);
-    await flushMissionProgress([courseId]).catch(() => {});
-  }, []);
+    const synced = await flushMissionProgress([courseId]).catch(() => []);
+    applySyncedMissionProgress(queryClient, synced);
+    const syncedUnmarks = await loadLocal(courseId, 'mission-unmarks');
+    setLogs((current) => ({
+      ...current,
+      [courseId]: {
+        nodes: current[courseId]?.nodes ?? {},
+        missions: current[courseId]?.missions ?? missions,
+        missionUnmarks: syncedUnmarks,
+      },
+    }));
+  }, [queryClient]);
 
   return { logs, ready, toggleMission };
 }

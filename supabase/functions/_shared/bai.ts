@@ -45,7 +45,9 @@ export function parseJsonObjectText<T>(content: string): T {
   let lastError: unknown;
   for (let start = trimmed.indexOf('{'); start >= 0; start = trimmed.indexOf('{', start + 1)) {
     const end = balancedObjectEnd(trimmed, start);
-    if (end < 0) continue;
+    // An unclosed outer object is a truncated response. Do not skip into one of
+    // its balanced child objects and mistake that fragment for the full graph.
+    if (end < 0) throw new SyntaxError('Unterminated JSON object in provider response.');
     try {
       return JSON.parse(trimmed.slice(start, end + 1)) as T;
     } catch (cause) {

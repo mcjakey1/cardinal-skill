@@ -188,7 +188,7 @@ export default function Courses() {
   const reset = async (courseId: string) => {
     try {
       await resetCourseProgress(courseId);
-      await queryClient.invalidateQueries({ queryKey: ['tree', courseId] });
+      await queryClient.invalidateQueries({ queryKey: ['tree'] });
       AccessibilityInfo.announceForAccessibility('Course progress reset to zero.');
     } catch {
       throw new Error('Progress could not be reset. Check your connection and try again.');

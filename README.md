@@ -372,14 +372,10 @@ and animation is skipped under reduce-motion.
 
 ---
 
-## Definition of done
+## Further reading
 
-A change is finished when `npm run typecheck`, `npm run lint` and `npm test` pass, it has
-been checked on web and on at least one native platform, new non-trivial logic has one
-runnable check beside it, and any new table ships its RLS policies in the same migration.
-
-The migrations are the most reliable documentation in this repository. They are written to
-explain the constraint behind each decision rather than to narrate the SQL, so when the
-question is "why is it like this", the migration that introduced it is usually the answer —
-`0001_init.sql` for the privacy boundary, `0028` for administrator authority, `0036`–`0042`
-for the audit trail and the gaps closed around it.
+- [AGENTS.md](AGENTS.md) — the working contract: stack, invariants, conventions, and the
+  definition of done. Read this first before changing anything.
+- [DESIGN.md](DESIGN.md) — the visual system, and the brief for both designs.
+- [PRODUCT.md](PRODUCT.md) — who this is for and what it is positioned against.
+- [CLAUDE.md](CLAUDE.md) — notes specific to working in this repo with Claude Code.

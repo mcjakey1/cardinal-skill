@@ -334,6 +334,10 @@ export const styles = StyleSheet.create({
   toolbar: {
     flexDirection: 'row',
     alignItems: 'center',
+    // Wraps like `rowWrap` above. Without it the chart toolbar's buttons run
+    // off a 390dp phone and take the whole document into a horizontal scroll,
+    // which slides the page out from under anything drawn over it.
+    flexWrap: 'wrap',
     gap: lms.space.sm,
     padding: lms.space.md,
     backgroundColor: c.surface,

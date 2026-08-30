@@ -66,7 +66,8 @@ export function TreeSection({
   // `modalCard` has no maxHeight and the backdrop centres it, so a card taller
   // than the viewport hangs off both ends with nothing to scroll. On a landscape
   // phone that puts Save out of reach — the exact failure the sheet exists to
-  // avoid. Bound it here rather than in `lms.tsx`, which is not ours to change.
+  // avoid. Bound per caller because the fraction is this sheet's judgement, not
+  // every dialog's; `LModal` owns the close control, which every dialog needs.
   const { height } = useWindowDimensions();
   const modalScroll = useMemo(() => ({ maxHeight: Math.round(height * 0.7) }), [height]);
   const { data, isPending, error, refetch } = useQuery({

@@ -216,6 +216,70 @@ export async function setInstructorVerification(
   if (error) throw error;
 }
 
+/**
+ * Who else holds the keys.
+ *
+ * Answerable only since 0042 widened the `administrators` select policy from
+ * `user_id = auth.uid()` to "your own row, or every row if you are an
+ * administrator". Before it, this read returned the caller and nobody else, so
+ * the panel above it could not have existed. An ordinary account calling this
+ * still gets its own row and nothing more — the policy is the control, not this
+ * function.
+ *
+ * `self` is computed here the same way `fetchAllCourses` computes `own`, so the
+ * screen can disable the one removal the RPC refuses (a lockout, `42501`)
+ * rather than letting it be pressed and explained afterwards.
+ */
+export interface AdministratorRecord {
+  userId: string;
+  grantedAt: string;
+  self: boolean;
+}
+
+export async function fetchAdministrators(): Promise<AdministratorRecord[]> {
+  const rows = await readEveryRow<{ user_id: string; granted_at: string }>(
+    'administrators',
+    'user_id, granted_at',
+    'user_id',
+    { column: 'granted_at' },
+  );
+  const { data: auth } = await supabase.auth.getUser();
+  return rows.map((row) => ({
+    userId: String(row.user_id),
+    grantedAt: String(row.granted_at),
+    self: Boolean(auth.user?.id) && String(row.user_id) === auth.user?.id,
+  }));
+}
+
+/** Make somebody an administrator, or stop them being one. */
+export async function setAdministrator(userId: string, admin: boolean): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_administrator', {
+    p_user_id: userId,
+    p_admin: admin,
+  });
+  if (error) throw error;
+}
+
+/**
+ * The accounts placed on this course as instructors rather than students.
+ *
+ * A second read because `course_roster` (0030) selects `e.role = 'student'`, so
+ * a co-instructor is simply not in it — invisible on the roster, and still
+ * offered on the "add someone" list after being added. The `eq` pair here is
+ * the shape of the question, not a security control: 0028's "administrators
+ * write any enrollment" is `for all`, so an administrator may read every
+ * enrolment row and RLS is what decides that.
+ */
+export async function fetchCourseInstructors(courseId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('enrollments')
+    .select('user_id')
+    .eq('course_id', courseId)
+    .eq('role', 'instructor');
+  if (error) throw error;
+  return (data ?? []).map((row) => String(row.user_id));
+}
+
 /** Put someone on a course, or take them off it. Progress survives removal. */
 export async function setEnrollment(
   courseId: string,

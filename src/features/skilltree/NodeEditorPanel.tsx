@@ -32,7 +32,7 @@
  * thing this file exists to prevent.
  */
 
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { Easing, SlideInRight, SlideOutRight } from 'react-native-reanimated';
 
@@ -101,7 +101,12 @@ export function NodeEditorPanel({
 }) {
   const t = useTheme();
   const { theme } = useAppTheme();
-  const kit = surface === 'workspace' ? workspaceKit(t) : studentKit(t);
+  // Memoised because `kit`'s members are rendered as components (`<kit.Input>`),
+  // and React reconciles by element type. A kit rebuilt on every render is a new
+  // set of function identities, so every keystroke unmounted the field being
+  // typed into and mounted a fresh one — the caret went with it and only the
+  // first character ever landed.
+  const kit = useMemo(() => (surface === 'workspace' ? workspaceKit(t) : studentKit(t)), [surface, t]);
   const [form, setForm] = useState(() => nodeEditForm(node, missions));
 
   const problems = nodeEditProblems(form);

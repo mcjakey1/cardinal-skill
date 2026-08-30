@@ -206,6 +206,11 @@ export default function Companion() {
             <PixelText variant="body" colour={t.ink}>
               Every reply below is canned, not generated. Nothing you type is read, saved, or sent anywhere.
             </PixelText>
+            {/* Names the one surface that does reach a model, without claiming
+                it is up — the drawer runs its own status check and says so. */}
+            <PixelText variant="body" colour={t.inkMuted}>
+              Ask AI on a chart node is the surface that calls the study model. This one never does.
+            </PixelText>
           </Bevel>
 
           <View style={styles.prompts}>

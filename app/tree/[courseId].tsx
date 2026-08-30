@@ -4,6 +4,7 @@ import Head from 'expo-router/head';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
+  Modal,
   Pressable,
   StyleSheet,
   View,
@@ -128,6 +129,7 @@ export default function TreeScreen() {
   const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
   const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const [editingProperties, setEditingProperties] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const claimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handledLocateRequest = useRef<string | null>(null);
@@ -645,16 +647,34 @@ export default function TreeScreen() {
     setEditingProperties(true);
   };
 
+  /**
+   * DELETE NODE asks first, and the question names what it is about to destroy.
+   *
+   * The delete is a rewrite of the saved chart with the node, its edges and its
+   * missions dropped, so there is nothing to undo it with — a reload reads the
+   * shortened chart back. Undo is a feature; naming the node and the XP is the
+   * fix, because "are you sure?" and "Delete Midterm? It is worth 150 XP." fail
+   * in different places, and only the second one stops the wrong tap.
+   */
+  const deleteTarget = deleteTargetId
+    ? named.find((node) => node.id === deleteTargetId) ?? null
+    : null;
+  const deleteTargetMissions = deleteTargetId
+    ? missions.filter((mission) => mission.skillId === deleteTargetId).length
+    : 0;
+
   const deleteSelectedNode = async () => {
-    if (!sourceTree || !selectedId) return;
+    const id = deleteTargetId;
+    setDeleteTargetId(null);
+    if (!sourceTree || !id) return;
     await persistEdit(
       {
-        nodes: sourceTree.nodes.filter((node) => node.id !== selectedId),
-        prereqs: sourceTree.prereqs.filter((edge) => edge.nodeId !== selectedId && edge.prereqId !== selectedId),
+        nodes: sourceTree.nodes.filter((node) => node.id !== id),
+        prereqs: sourceTree.prereqs.filter((edge) => edge.nodeId !== id && edge.prereqId !== id),
       },
-      missions.filter((mission) => mission.skillId !== selectedId),
+      missions.filter((mission) => mission.skillId !== id),
     );
-    setSelectedId(null);
+    setSelectedId((current) => (current === id ? null : current));
   };
 
   /**
@@ -904,7 +924,7 @@ export default function TreeScreen() {
         onAddNode={addNode}
         onToggleLinkMode={startLink}
         onCancelLink={cancelLink}
-        onDeleteNode={deleteSelectedNode}
+        onDeleteNode={() => setDeleteTargetId(selectedId)}
         recommendedId={next?.id ?? null}
         recentlyMasteredId={justCompleted}
         reduceMotion={prefs.motionOff}
@@ -1392,6 +1412,35 @@ export default function TreeScreen() {
         }}
         onConfirm={createPracticeCopy}
       />
+
+      {/* `Window` is already a live region, so mounting this announces the
+          question, and the modal moves focus onto Keep node. Escape and the
+          hardware back button cancel. */}
+      <Modal
+        visible={deleteTarget !== null}
+        animationType={prefs.motionOff ? 'none' : 'fade'}
+        presentationStyle="fullScreen"
+        onRequestClose={() => setDeleteTargetId(null)}
+      >
+        <View
+          style={[styles.confirmScreen, { backgroundColor: t.ground, paddingTop: insets.top }]}
+          accessibilityViewIsModal
+        >
+          <Window title="Delete node?" style={styles.confirmDialog}>
+            <PixelText variant="body" colour={t.ink}>
+              Delete {deleteTarget?.title}? It is worth {deleteTarget?.xpReward ?? 0} XP
+              {deleteTargetMissions > 0
+                ? ` and carries ${deleteTargetMissions} mission${deleteTargetMissions === 1 ? '' : 's'}`
+                : ''}
+              , and its connections go with it. This cannot be undone.
+            </PixelText>
+            <View style={styles.confirmActions}>
+              <PixelButton label="Keep node" tone="panel" grow={false} onPress={() => setDeleteTargetId(null)} />
+              <PixelButton label="Delete node" grow={false} onPress={deleteSelectedNode} />
+            </View>
+          </Window>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1668,6 +1717,9 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   centred: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.md },
   notice: { width: '100%', maxWidth: 420 },
+  confirmScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.md },
+  confirmDialog: { width: '100%', maxWidth: 540 },
+  confirmActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: space.cell },
 
   marginalia: {
     zIndex: 30,

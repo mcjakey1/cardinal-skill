@@ -136,6 +136,7 @@ export default function Instructor() {
   const wide = width >= lms.wide;
   const [section, setSection] = useState<Section>('courses');
   const [drawer, setDrawer] = useState(false);
+  const [signOutOpen, setSignOutOpen] = useState(false);
   const [chosen, setChosen] = useState<string | null>(null);
   // Where the chart was opened from, when it was opened from somewhere that has
   // its own thread to pick back up. Only Admin sets it today: an administrator
@@ -226,7 +227,10 @@ export default function Instructor() {
     setReturnTo('admin');
   };
 
+  // Both sign-out controls — the rail avatar and the Settings panel — ask first.
+  // Same question as the student screen, drawn in LMS tokens.
   const signOut = () => {
+    setSignOutOpen(false);
     transition(() => {
       set('role', null);
       void logout();
@@ -239,7 +243,7 @@ export default function Instructor() {
       onGo={go}
       onClose={() => setDrawer(false)}
       closable={!wide}
-      onSignOut={signOut}
+      onSignOut={() => setSignOutOpen(true)}
     />
   );
 
@@ -346,7 +350,7 @@ export default function Instructor() {
             {section === 'settings' && (
               <Settings
                 liveSession={liveSession}
-                onSignOut={signOut}
+                onSignOut={() => setSignOutOpen(true)}
               />
             )}
             {section === 'admin' && (
@@ -378,6 +382,19 @@ export default function Instructor() {
           <View style={styles.drawer}>{rail}</View>
         </>
       ) : null}
+
+      {/* Outside the drawer on purpose: the drawer is a later sibling, and a
+          dialog rendered inside it would open behind the navigation. */}
+      <LModal visible={signOutOpen} title="Sign out?" onRequestClose={() => setSignOutOpen(false)}>
+        <LText variant="small" tone="muted" style={styles.prose}>
+          This returns to the front door and forgets which surface this device chose. It does not
+          delete any course, draft, or student record.
+        </LText>
+        <View style={styles.rowWrap}>
+          <LButton label="Sign out" icon="log-out" variant="primary" onPress={signOut} />
+          <LButton label="Stay signed in" variant="quiet" onPress={() => setSignOutOpen(false)} />
+        </View>
+      </LModal>
     </View>
   );
 }

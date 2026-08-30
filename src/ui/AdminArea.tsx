@@ -17,19 +17,24 @@ import {
   describeAuditFilter,
   adminCourseActions,
   adminUnlocked,
+  administratorRoster,
   lockAdmin,
   nextAuditCursor,
   unlockAdmin,
   type AuditEntry,
+  type AdministratorRow,
   type AuditFilter,
   type AuditSummaryLine,
 } from '@/lib/admin';
 import { saveCsv } from '@/lib/saveCsv';
 import {
   fetchAccounts,
+  fetchAdministrators,
   fetchAllCourses,
   fetchAuditTrail,
+  fetchCourseInstructors,
   isAdministrator,
+  setAdministrator,
   setCoursePublication,
   setEnrollment,
   setInstructorVerification,
@@ -228,6 +233,7 @@ function Unlocked({
           <Courses selected={courseId} onSelect={onSelectCourse} onOpenChart={onOpenChart} />
           <People courseId={courseId} />
           <Badges />
+          <Administrators />
           <AuditLog onOpenChart={onOpenChart} onOpenPerson={onOpenPerson} />
         </>
       ) : (
@@ -519,6 +525,14 @@ const ADD_COLUMNS = [
   { key: 'act', label: '', flex: 2 },
 ];
 
+const STAFF_COLUMNS = [
+  { key: 'who', label: 'Instructor', flex: 3 },
+  { key: 'act', label: '', flex: 2 },
+];
+
+/** What `admin_set_enrollment` accepts for `p_role`, and 0001 for the column. */
+type EnrollmentRole = 'student' | 'instructor';
+
 const PEOPLE_COLUMNS = [
   { key: 'who', label: 'Student', flex: 3 },
   { key: 'progress', label: 'Progress', flex: 2 },
@@ -529,7 +543,11 @@ const PEOPLE_COLUMNS = [
 function People({ courseId }: { courseId: string | null }) {
   const client = useQueryClient();
   const [search, setSearch] = useState('');
-  const [mode, setMode] = useState<'on' | 'add'>('on');
+  const [mode, setMode] = useState<'on' | 'staff' | 'add'>('on');
+  const [addRole, setAddRole] = useState<EnrollmentRole>('student');
+  const [removing, setRemoving] = useState<
+    { userId: string; displayName: string; role: EnrollmentRole } | null
+  >(null);
 
   // The account directory, and the reason it is a second read. `course_roster`
   // answers "who is on this course" OR "who exists", never both: 0030 returns
@@ -542,20 +560,44 @@ function People({ courseId }: { courseId: string | null }) {
     enabled: Boolean(courseId),
   });
 
+  // The same rows the Courses panel above is already holding, under the same
+  // key, so this is its cache and not a second request. Two things here need
+  // them: the owner, who must not be offered as somebody to add to their own
+  // course, and the title, which every confirmation below has to name.
+  const courses = useQuery({ queryKey: ['admin-courses'], queryFn: fetchAllCourses });
+
   const roster = useQuery({
     queryKey: ['admin-roster', courseId],
     queryFn: () => fetchRoster(courseId!),
     enabled: Boolean(courseId),
   });
+  // `course_roster` returns role 'student' rows only, so a colleague placed on
+  // the course is invisible to every list here unless it is read separately.
+  const instructors = useQuery({
+    queryKey: ['admin-course-instructors', courseId],
+    queryFn: () => fetchCourseInstructors(courseId!),
+    enabled: Boolean(courseId),
+  });
   const enrol = useMutation({
-    mutationFn: ({ userId, enrolled }: { userId: string; enrolled: boolean }) =>
-      setEnrollment(courseId!, userId, enrolled),
+    mutationFn: ({
+      userId,
+      enrolled,
+      role,
+    }: {
+      userId: string;
+      enrolled: boolean;
+      role: EnrollmentRole;
+    }) => setEnrollment(courseId!, userId, enrolled, role),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['admin-roster', courseId] });
+      void client.invalidateQueries({ queryKey: ['admin-course-instructors', courseId] });
       // The Students tab reads the same two functions under its own key.
       void client.invalidateQueries({ queryKey: ['instructor-roster', courseId] });
       void client.invalidateQueries({ queryKey: ['admin-audit'] });
     },
+    // Settled, not succeeded, for the reason the Courses dialog gives: a refusal
+    // must not leave the dialog standing over the Notice that explains it.
+    onSettled: () => setRemoving(null),
   });
 
   if (!courseId) {
@@ -574,132 +616,262 @@ function People({ courseId }: { courseId: string | null }) {
 
   const view = roster.data?.kind === 'ready' ? roster.data.view : null;
   const rows = view ? sortRoster(view.rows) : [];
-  const addable = addableAccounts(accounts.data ?? [], rows);
+  const course = (courses.data ?? []).find((row) => row.id === courseId) ?? null;
+  const courseTitle = course?.title ?? 'this course';
+
+  const named = new Map((accounts.data ?? []).map((account) => [account.userId, account]));
+  const staff: { userId: string; displayName: string; email: string | null }[] = (
+    instructors.data ?? []
+  ).map(
+    (userId) => named.get(userId) ?? { userId, displayName: 'An account with no profile', email: null },
+  );
+
+  const addable = addableAccounts(accounts.data ?? [], rows, [
+    course?.ownerId,
+    ...(instructors.data ?? []),
+  ]);
   const shown = findPeople(search, mode === 'on' ? rows.filter((r) => r.enrolled) : []);
+  const shownStaff = mode === 'staff' ? findPeople(search, staff) : [];
   const shownAccounts = findPeople(search, addable);
   const now = new Date();
 
+  /** Opening or closing the dialog clears the last failure, as Courses does. */
+  const confirmRemoval = (
+    next: { userId: string; displayName: string; role: EnrollmentRole } | null,
+  ) => {
+    enrol.reset();
+    setRemoving(next);
+  };
+
   return (
-    <Panel>
-      <PanelHead
-        title="People on this course"
-        right={view ? <Badge label={`${rows.filter((r) => r.enrolled).length} enrolled`} /> : undefined}
-      />
-      <View style={styles.body}>
-        <LText variant="small" tone="muted" style={styles.prose}>
-          Search by name or address to read one student’s progress. Removing someone takes their
-          access to the course and leaves every record they earned on it.
-        </LText>
-
-        <Segmented
-          label="Who to show"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: 'on', label: `On the course (${rows.filter((r) => r.enrolled).length})` },
-            { value: 'add', label: `Add someone (${addable.length})` },
-          ]}
+    <>
+      <Panel>
+        <PanelHead
+          title="People on this course"
+          right={view ? <Badge label={`${rows.filter((r) => r.enrolled).length} enrolled`} /> : undefined}
         />
+        <View style={styles.body}>
+          <LText variant="small" tone="muted" style={styles.prose}>
+            Search by name or address to read one student’s progress. Removing someone takes their
+            access to the course and leaves every record they earned on it.
+          </LText>
 
-        <Field
-          label={mode === 'on' ? 'Find a student by name' : 'Find an account to add'}
-          value={search}
-          onChangeText={setSearch}
-          placeholder={mode === 'on' ? 'Type a name or an address' : 'Type a name'}
-          autoCapitalize="none"
-          style={styles.input}
-        />
+          <Segmented
+            label="Who to show"
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'on', label: `On the course (${rows.filter((r) => r.enrolled).length})` },
+              { value: 'staff', label: `Instructors (${staff.length})` },
+              { value: 'add', label: `Add someone (${addable.length})` },
+            ]}
+          />
 
-        {roster.isPending ? (
-          <>
-            <Skeleton width="65%" />
-            <Skeleton width="50%" />
-          </>
-        ) : roster.error ? (
-          <Notice tone="error" title="The roster did not load">
-            {adminActionMessage(roster.error)}
-          </Notice>
-        ) : roster.data?.kind === 'example' ? (
-          <Notice title="The example chart has no students">
-            It is a fixture rather than a row in the database. Choose a real course.
-          </Notice>
-        ) : roster.data?.kind === 'no-session' ? (
-          <Notice tone="attention" title="Sign-in needed">
-            A roster is only ever returned to a signed-in account.
-          </Notice>
-        ) : roster.data?.kind === 'not-owned' ? (
-          <Notice tone="attention" title="The server refused this roster">
-            An administrator may read any roster, so this account is not being treated as one.
-          </Notice>
-        ) : (
-          <>
-            {view?.mode === 'registered' ? (
-              <Notice tone="attention" title="Nobody is enrolled on this course yet">
-                These are registered accounts, not this course’s class. Adding one puts them on the
-                course for real, and the list then narrows to the people who are on it.
-              </Notice>
-            ) : null}
+          <Field
+            label={mode === 'add' ? 'Find an account to add' : 'Find someone by name'}
+            value={search}
+            onChangeText={setSearch}
+            placeholder={mode === 'add' ? 'Type a name' : 'Type a name or an address'}
+            autoCapitalize="none"
+            style={styles.input}
+          />
 
-            {enrol.error ? (
-              <Notice tone="error" title="That did not go through">
-                {adminActionMessage(enrol.error)}
-              </Notice>
-            ) : null}
+          {roster.isPending ? (
+            <>
+              <Skeleton width="65%" />
+              <Skeleton width="50%" />
+            </>
+          ) : roster.error ? (
+            <Notice tone="error" title="The roster did not load">
+              {adminActionMessage(roster.error)}
+            </Notice>
+          ) : roster.data?.kind === 'example' ? (
+            <Notice title="The example chart has no students">
+              It is a fixture rather than a row in the database. Choose a real course.
+            </Notice>
+          ) : roster.data?.kind === 'no-session' ? (
+            <Notice tone="attention" title="Sign-in needed">
+              A roster is only ever returned to a signed-in account.
+            </Notice>
+          ) : roster.data?.kind === 'not-owned' ? (
+            <Notice tone="attention" title="The server refused this roster">
+              An administrator may read any roster, so this account is not being treated as one.
+            </Notice>
+          ) : (
+            <>
+              {view?.mode === 'registered' && mode === 'on' ? (
+                <Notice tone="attention" title="Nobody is enrolled on this course yet">
+                  These are registered accounts, not this course’s class. Adding one puts them on the
+                  course for real, and the list then narrows to the people who are on it.
+                </Notice>
+              ) : null}
 
-            {mode === 'on' ? (
-              <DataTable
-                columns={PEOPLE_COLUMNS}
-                rows={shown.map((person) =>
-                  personRow(person, now, enrol.isPending, (enrolled) =>
-                    enrol.mutate({ userId: person.userId, enrolled }),
-                  ),
-                )}
-                empty={
-                  <LText variant="small" tone="muted">
-                    {search.trim()
-                      ? 'Nobody on this course by that name.'
-                      : 'Nobody is on this course yet. Add someone.'}
+              {enrol.error ? (
+                <Notice tone="error" title="That did not go through">
+                  {adminActionMessage(enrol.error)}
+                </Notice>
+              ) : null}
+
+              {mode === 'on' ? (
+                <DataTable
+                  columns={PEOPLE_COLUMNS}
+                  rows={shown.map((person) =>
+                    personRow(person, now, enrol.isPending, (enrolled) =>
+                      enrolled
+                        ? enrol.mutate({ userId: person.userId, enrolled: true, role: 'student' })
+                        : confirmRemoval({
+                            userId: person.userId,
+                            displayName: person.displayName,
+                            role: 'student',
+                          }),
+                    ),
+                  )}
+                  empty={
+                    <LText variant="small" tone="muted">
+                      {search.trim()
+                        ? 'Nobody on this course by that name.'
+                        : 'Nobody is on this course yet. Add someone.'}
+                    </LText>
+                  }
+                />
+              ) : mode === 'staff' ? (
+                <>
+                  <LText variant="small" tone="muted" style={styles.prose}>
+                    An instructor on a course is a colleague rather than a learner: they are kept out
+                    of its leaderboard and out of the student list, and they do not ask for help on
+                    it. Writing the chart still belongs to the course’s owner.
                   </LText>
-                }
-              />
-            ) : accounts.isPending ? (
-              <Skeleton width="55%" />
-            ) : accounts.error ? (
-              <Notice tone="error" title="The account list did not load">
-                {adminActionMessage(accounts.error)}
-              </Notice>
-            ) : (
-              <DataTable
-                columns={ADD_COLUMNS}
-                rows={shownAccounts.map((account) => ({
-                  key: account.userId,
-                  label: `${account.displayName}, not on this course`,
-                  cells: [
-                    <LText key="who" variant="small" style={styles.strong} numberOfLines={1}>
-                      {account.displayName}
-                    </LText>,
-                    <LButton
-                      key="act"
-                      size="sm"
-                      label="Add to the course"
-                      icon="user-plus"
-                      disabled={enrol.isPending}
-                      onPress={() => enrol.mutate({ userId: account.userId, enrolled: true })}
-                    />,
-                  ],
-                }))}
-                caption="Every account on the site that is not already on this course. Names come from profiles, which hold no address."
-                empty={
-                  <LText variant="small" tone="muted">
-                    {search.trim() ? 'No account by that name.' : 'Everybody is already on this course.'}
+                  {instructors.error ? (
+                    <Notice tone="error" title="The instructor list did not load">
+                      {adminActionMessage(instructors.error)}
+                    </Notice>
+                  ) : (
+                    <DataTable
+                      columns={STAFF_COLUMNS}
+                      rows={shownStaff.map((person) => ({
+                        key: person.userId,
+                        label: `${person.displayName}, an instructor on this course`,
+                        cells: [
+                          <LText key="who" variant="small" style={styles.strong} numberOfLines={1}>
+                            {person.displayName}
+                          </LText>,
+                          <LButton
+                            key="act"
+                            size="sm"
+                            label="Remove"
+                            icon="user-minus"
+                            variant="danger"
+                            disabled={enrol.isPending}
+                            onPress={() =>
+                              confirmRemoval({
+                                userId: person.userId,
+                                displayName: person.displayName,
+                                role: 'instructor',
+                              })
+                            }
+                          />,
+                        ],
+                      }))}
+                      empty={
+                        <LText variant="small" tone="muted">
+                          {search.trim()
+                            ? 'No instructor on this course by that name.'
+                            : 'Only its owner works on this course. Add someone as an instructor to change that.'}
+                        </LText>
+                      }
+                    />
+                  )}
+                </>
+              ) : accounts.isPending ? (
+                <Skeleton width="55%" />
+              ) : accounts.error ? (
+                <Notice tone="error" title="The account list did not load">
+                  {adminActionMessage(accounts.error)}
+                </Notice>
+              ) : (
+                <>
+                  <Segmented
+                    label="Add as"
+                    value={addRole}
+                    onChange={setAddRole}
+                    options={[
+                      { value: 'student', label: 'A student' },
+                      { value: 'instructor', label: 'An instructor' },
+                    ]}
+                  />
+                  <LText variant="small" tone="muted" style={styles.prose}>
+                    {addRole === 'instructor'
+                      ? 'An instructor is a colleague on the course. They are kept out of its leaderboard and out of the student list, and the course reads as staff work rather than as a class they are taking.'
+                      : 'A student joins the class. Their progress on this course is recorded from now on, and they appear on its leaderboard if they have opted in.'}
                   </LText>
+                  <DataTable
+                    columns={ADD_COLUMNS}
+                    rows={shownAccounts.map((account) => ({
+                      key: account.userId,
+                      label: `${account.displayName}, not on this course`,
+                      cells: [
+                        <LText key="who" variant="small" style={styles.strong} numberOfLines={1}>
+                          {account.displayName}
+                        </LText>,
+                        <LButton
+                          key="act"
+                          size="sm"
+                          label={addRole === 'instructor' ? 'Add as an instructor' : 'Add to the course'}
+                          icon="user-plus"
+                          disabled={enrol.isPending}
+                          onPress={() =>
+                            enrol.mutate({ userId: account.userId, enrolled: true, role: addRole })
+                          }
+                        />,
+                      ],
+                    }))}
+                    caption="Every account on the site that is not already on this course. Its owner is not listed — the course is already theirs. Names come from profiles, which hold no address."
+                    empty={
+                      <LText variant="small" tone="muted">
+                        {search.trim() ? 'No account by that name.' : 'Everybody is already on this course.'}
+                      </LText>
+                    }
+                  />
+                </>
+              )}
+            </>
+          )}
+        </View>
+      </Panel>
+
+      <LModal
+        visible={removing !== null}
+        title={`Take ${removing?.displayName ?? 'this person'} off ${courseTitle}?`}
+        onRequestClose={() => confirmRemoval(null)}
+      >
+        <View style={styles.body}>
+          <LText variant="small" style={styles.prose}>
+            {removing?.role === 'instructor'
+              ? `${removing.displayName} stops being an instructor on ${courseTitle} and loses access to it. Nothing they wrote on the course is removed, and you can put them back here.`
+              : `${removing?.displayName ?? 'They'} loses access to ${courseTitle}. Their progress is kept exactly as it is — nothing is deleted — and putting them back on the course restores what they had.`}
+          </LText>
+          <View style={styles.row}>
+            <LButton
+              label="Take them off"
+              icon="user-minus"
+              variant="danger"
+              disabled={enrol.isPending}
+              onPress={() => {
+                if (removing) {
+                  enrol.mutate({ userId: removing.userId, enrolled: false, role: removing.role });
                 }
-              />
-            )}
-          </>
-        )}
-      </View>
-    </Panel>
+              }}
+            />
+            <LButton
+              label="Cancel"
+              variant="quiet"
+              disabled={enrol.isPending}
+              onPress={() => confirmRemoval(null)}
+            />
+          </View>
+        </View>
+      </LModal>
+    </>
   );
 }
 
@@ -761,6 +933,7 @@ const BADGE_COLUMNS = [
 function Badges() {
   const client = useQueryClient();
   const [search, setSearch] = useState('');
+  const [revoking, setRevoking] = useState<AdminAccount | null>(null);
 
   const accounts = useQuery({ queryKey: ['admin-accounts'], queryFn: fetchAccounts });
 
@@ -771,13 +944,21 @@ function Badges() {
       void client.invalidateQueries({ queryKey: ['admin-accounts'] });
       void client.invalidateQueries({ queryKey: ['admin-audit'] });
     },
+    onSettled: () => setRevoking(null),
   });
+
+  /** Opening or closing the dialog clears the last failure, as Courses does. */
+  const confirmRevoke = (next: AdminAccount | null) => {
+    verify.reset();
+    setRevoking(next);
+  };
 
   const rows = findPeople(search, accounts.data ?? []);
   // One null means the whole read is blind, not that one account is unknown.
   const unreadable = (accounts.data ?? []).some((row) => row.verified === null);
 
   return (
+    <>
     <Panel>
       <PanelHead title="Verified instructor badges" />
       <View style={styles.body}>
@@ -823,7 +1004,12 @@ function Badges() {
             columns={BADGE_COLUMNS}
             rows={rows.map((account) =>
               badgeRow(account, verify.isPending, (verified) =>
-                verify.mutate({ userId: account.userId, verified }),
+                // Granting is undoable by the button beside it. Revoking is not
+                // undoable by re-registering, which is the whole point of it,
+                // so it is the one that asks first.
+                verified
+                  ? verify.mutate({ userId: account.userId, verified: true })
+                  : confirmRevoke(account),
               ),
             )}
             empty={
@@ -835,6 +1021,40 @@ function Badges() {
         )}
       </View>
     </Panel>
+
+    <LModal
+      visible={revoking !== null}
+      title={`Revoke ${revoking?.displayName ?? 'this account'}’s verified badge?`}
+      onRequestClose={() => confirmRevoke(null)}
+    >
+      <View style={styles.body}>
+        <LText variant="small" style={styles.prose}>
+          {revoking?.displayName ?? 'They'} can no longer publish an official course to every
+          student on the site. Courses they have already published stay where they are.
+        </LText>
+        <LText variant="small" style={styles.prose}>
+          This is permanent in one direction: the account cannot verify itself again by registering
+          a second time. Only an administrator, here, can give the badge back.
+        </LText>
+        <View style={styles.row}>
+          <LButton
+            label="Revoke the badge"
+            variant="danger"
+            disabled={verify.isPending}
+            onPress={() => {
+              if (revoking) verify.mutate({ userId: revoking.userId, verified: false });
+            }}
+          />
+          <LButton
+            label="Cancel"
+            variant="quiet"
+            disabled={verify.isPending}
+            onPress={() => confirmRevoke(null)}
+          />
+        </View>
+      </View>
+    </LModal>
+    </>
   );
 }
 
@@ -882,6 +1102,223 @@ function badgeRow(account: AdminAccount, pending: boolean, onSet: (verified: boo
             onPress={() => onSet(!account.verified)}
           />
         )}
+      </View>,
+    ],
+  };
+}
+
+// ------------------------------------------------------------ administrators
+
+const ADMINISTRATOR_COLUMNS = [
+  { key: 'who', label: 'Account', flex: 3 },
+  { key: 'holds', label: 'Administrator', flex: 2 },
+];
+
+/**
+ * Who else holds the keys, and the only screen that hands them over.
+ *
+ * `admin_set_administrator` has existed since 0028 and nothing called it, so in
+ * practice every administrator on every deployment was created by direct SQL.
+ * The panel is the missing half, not a new power — the RPC re-checks
+ * `is_administrator()` in its own body, as every action on this page does, and
+ * a client that skipped this panel would be refused all the same.
+ *
+ * The list is the other half. Until 0042 widened the select policy, an
+ * administrator opening this page read a table containing exactly themselves,
+ * and "who else can do this" had no answer anywhere in the product.
+ */
+function Administrators() {
+  const client = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [confirming, setConfirming] = useState<AdministratorRow | null>(null);
+
+  const accounts = useQuery({ queryKey: ['admin-accounts'], queryFn: fetchAccounts });
+  const admins = useQuery({ queryKey: ['administrators'], queryFn: fetchAdministrators });
+
+  const change = useMutation({
+    mutationFn: ({ userId, admin }: { userId: string; admin: boolean }) =>
+      setAdministrator(userId, admin),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['administrators'] });
+      // The badge at the top of this page reads the same record.
+      void client.invalidateQueries({ queryKey: ['is-administrator'] });
+      void client.invalidateQueries({ queryKey: ['admin-audit'] });
+    },
+    onSettled: () => setConfirming(null),
+  });
+
+  /** Opening or closing the dialog clears the last failure, as Courses does. */
+  const confirm = (next: AdministratorRow | null) => {
+    change.reset();
+    setConfirming(next);
+  };
+
+  const roster = administratorRoster(accounts.data ?? [], admins.data ?? []);
+  const shown = findPeople(search, roster);
+  const holders = roster.filter((row) => row.isAdmin).length;
+  const loading = accounts.isPending || admins.isPending;
+  const failed = accounts.error ?? admins.error;
+
+  return (
+    <>
+      <Panel>
+        <PanelHead
+          title="Administrators"
+          right={
+            admins.data ? (
+              <Badge tone="brand" icon="shield" label={`${holders} in total`} />
+            ) : undefined
+          }
+        />
+        <View style={styles.body}>
+          <LText variant="small" tone="muted" style={styles.prose}>
+            Everyone marked here can do everything on this page, on every course on the site:
+            publish, unpublish and archive any of them, put anyone on a course or take them off,
+            grant and revoke verified badges, and make somebody else an administrator.
+          </LText>
+          <LText variant="small" tone="muted" style={styles.prose}>
+            Every grant and every removal is written to the log below, including one made straight
+            against the database.
+          </LText>
+
+          <Field
+            label="Find an account"
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Type a name"
+            autoCapitalize="none"
+            style={styles.input}
+          />
+
+          {change.error ? (
+            <Notice tone="error" title="That did not go through">
+              {adminActionMessage(change.error)}
+            </Notice>
+          ) : null}
+
+          {loading ? (
+            <>
+              <Skeleton width="60%" />
+              <Skeleton width="45%" />
+            </>
+          ) : failed ? (
+            <Notice tone="error" title="The administrator list did not load">
+              {adminActionMessage(failed)}
+            </Notice>
+          ) : (
+            <DataTable
+              columns={ADMINISTRATOR_COLUMNS}
+              rows={shown.map((row) => administratorTableRow(row, change.isPending, confirm))}
+              caption="Administrators first, then every other account on the site."
+              empty={
+                <LText variant="small" tone="muted">
+                  {search.trim() ? 'No account by that name.' : 'No accounts to show.'}
+                </LText>
+              }
+            />
+          )}
+        </View>
+      </Panel>
+
+      <LModal
+        visible={confirming !== null}
+        title={
+          confirming?.isAdmin
+            ? `Remove ${confirming.displayName} as an administrator?`
+            : `Make ${confirming?.displayName ?? 'this account'} an administrator?`
+        }
+        onRequestClose={() => confirm(null)}
+      >
+        <View style={styles.body}>
+          {confirming?.isAdmin ? (
+            <LText variant="small" style={styles.prose}>
+              {confirming.displayName} keeps their account, their own courses and everything they
+              have done. They lose every power on this page: no course they do not own, no badges,
+              no roster changes. You can make them an administrator again here.
+            </LText>
+          ) : (
+            <>
+              <LText variant="small" style={styles.prose}>
+                This hands over the whole site, not one course. {confirming?.displayName ?? 'They'}{' '}
+                will be able to publish, unpublish and archive any course on it, put anyone on a
+                course or take them off, grant and revoke verified instructor badges, and make
+                other people administrators.
+              </LText>
+              <LText variant="small" style={styles.prose}>
+                Only another administrator can take it back — they will not be able to remove it
+                from themselves. This goes in the log below with your name on it.
+              </LText>
+            </>
+          )}
+          <View style={styles.row}>
+            <LButton
+              label={confirming?.isAdmin ? 'Remove them' : 'Make them an administrator'}
+              icon={confirming?.isAdmin ? 'user-minus' : 'shield'}
+              variant={confirming?.isAdmin ? 'danger' : 'primary'}
+              disabled={change.isPending}
+              onPress={() => {
+                if (confirming) change.mutate({ userId: confirming.userId, admin: !confirming.isAdmin });
+              }}
+            />
+            <LButton
+              label="Cancel"
+              variant="quiet"
+              disabled={change.isPending}
+              onPress={() => confirm(null)}
+            />
+          </View>
+        </View>
+      </LModal>
+    </>
+  );
+}
+
+function administratorTableRow(
+  row: AdministratorRow,
+  pending: boolean,
+  onChoose: (row: AdministratorRow) => void,
+) {
+  return {
+    key: row.userId,
+    label: row.isAdmin
+      ? `${row.displayName}, an administrator${row.self ? ', this account' : ''}`
+      : `${row.displayName}, not an administrator`,
+    cells: [
+      <View key="who" style={styles.rowStack}>
+        <LText variant="small" style={styles.strong} numberOfLines={1}>
+          {row.displayName}
+        </LText>
+        {row.grantedAt ? (
+          <LText variant="micro" tone="muted" numberOfLines={1}>
+            {`Since ${auditWhen(row.grantedAt)}`}
+          </LText>
+        ) : null}
+      </View>,
+      <View key="holds" style={styles.rowStack}>
+        <View style={styles.rowInline}>
+          {row.isAdmin ? (
+            <Badge tone="brand" icon="shield" label={row.self ? 'You' : 'Administrator'} />
+          ) : (
+            <Badge icon="minus" label="No" />
+          )}
+          {/* The RPC refuses this one with a 42501 rather than doing it: removing
+              your own last access is a lockout, not a moderation action. Drawn
+              disabled with the reason beside it, because a button that is
+              certain to be refused is worse than no button. */}
+          <LButton
+            size="sm"
+            label={row.isAdmin ? 'Remove' : 'Make administrator'}
+            icon={row.isAdmin ? 'user-minus' : 'shield'}
+            variant={row.isAdmin ? 'danger' : 'default'}
+            disabled={pending || row.self}
+            onPress={() => onChoose(row)}
+          />
+        </View>
+        {row.self ? (
+          <LText variant="micro" tone="muted" style={styles.prose}>
+            Ask another administrator to remove your own administrator status.
+          </LText>
+        ) : null}
       </View>,
     ],
   };

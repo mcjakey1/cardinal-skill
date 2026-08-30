@@ -399,7 +399,27 @@ export function LModal({
             card — heading, prose and the Cancel button with it — announce as one
             announcement rather than as the thing you are standing in. */}
         <View style={styles.modalCard} accessibilityViewIsModal role="dialog" aria-modal>
-          <LText variant="section">{title}</LText>
+          {/* The backdrop above is labelled Close, but the card sits on top of
+              its middle, so a press aimed at it lands on the card instead. That
+              left `onRequestClose` — Escape on web, Back on Android — as the
+              only way out, and a phone browser has neither. This is the control
+              a finger can actually reach. */}
+          <View style={styles.modalHead}>
+            <LText variant="section" style={styles.modalTitle}>
+              {title}
+            </LText>
+            <Pressable
+              onPress={onRequestClose}
+              accessibilityRole="button"
+              accessibilityLabel={`Close ${title}`}
+              style={({ pressed, hovered }: PressState) => [
+                styles.modalClose,
+                pressed || hovered ? styles.modalCloseOn : null,
+              ]}
+            >
+              <Icon name="x" size={18} />
+            </Pressable>
+          </View>
           {children}
         </View>
       </View>
@@ -667,6 +687,16 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 12,
   },
+  modalHead: { flexDirection: 'row', alignItems: 'center', gap: lms.space.md },
+  modalTitle: { flex: 1 },
+  modalClose: {
+    width: lms.touch,
+    height: lms.touch,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: lms.radius.sm,
+  },
+  modalCloseOn: { backgroundColor: c.surfaceHover },
 
   caption: { paddingHorizontal: lms.space.lg, paddingVertical: lms.space.sm },
   tableScroll: { flexGrow: 1 },

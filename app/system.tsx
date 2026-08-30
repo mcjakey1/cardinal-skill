@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { fetchInstructorVerification } from '@/features/skilltree/courseCatalog';
@@ -11,6 +11,7 @@ import {
   fetchLeaderboardVisibility,
   setLeaderboardVisibility,
 } from '@/features/skilltree/recordQueries';
+import { callEdgeFunction } from '@/lib/edgeFunctions';
 import { usePrefs } from '@/lib/prefs';
 import { clearLocal } from '@/lib/progress';
 import { BACKDROP_LABELS } from '@/theme/backdrops';
@@ -36,7 +37,7 @@ export default function System() {
   const [themePickerOpen, setThemePickerOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState(false);
-  const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [signOutOpen, setSignOutOpen] = useState(false);
 
   // The leaderboard function holds a verified instructor out of every candidate
   // set until they opt in, and the instructor nav has no Record cell, so the way
@@ -59,6 +60,29 @@ export default function System() {
     },
   });
 
+  // Ask the function, rather than assert. `study-companion` answers 503 with
+  // "not configured yet" when no provider key is set, which is what a local run
+  // hits, and this screen used to claim a live model regardless. The same probe
+  // the node drawer runs, so the two surfaces cannot disagree.
+  const companion = useQuery({
+    queryKey: ['study-companion-status'],
+    queryFn: () => callEdgeFunction<{ status: string; model?: string }>(
+      'study-companion',
+      { action: 'status' },
+      12_000,
+    ),
+    enabled: session?.source === 'supabase',
+    retry: false,
+  });
+
+  const companionDetail = session?.source !== 'supabase'
+    ? 'Replies are canned and local. Sign in with Supabase to reach the study model.'
+    : companion.isPending
+      ? 'Replies here are canned. Checking whether the study model answers…'
+      : companion.data?.status === 'online'
+        ? `Replies here are canned. Ask AI on a chart node reaches the live ${companion.data.model ?? 'study'} model.`
+        : 'Replies here are canned, and that still works. The study model is not answering, so Ask AI on a chart node will fail until it is configured.';
+
   const wipe = async () => {
     if (!prefs.lastCourseId) return;
     if (!confirming) {
@@ -70,11 +94,11 @@ export default function System() {
     setCleared(true);
   };
 
+  // Sign-out asks first, in a dialog. The label used to swap in place, which is
+  // a question nothing announces and nothing blocks: three testers in a row
+  // walked away from a shared laptop still signed in.
   const signOut = () => {
-    if (!confirmingLogout) {
-      setConfirmingLogout(true);
-      return;
-    }
+    setSignOutOpen(false);
     transition(() => {
       queryClient.clear();
       prefs.set('role', null);
@@ -155,17 +179,25 @@ export default function System() {
             />
           </Row>
 
-          <Row
-            title="Instructor view"
-            detail="Cohort progress and per-node completion counts, for whoever teaches this course."
-          >
-            <PixelButton
-              label="Open"
-              tone="panel"
-              grow={false}
-              onPress={() => transition(() => router.navigate('/instructor'))}
-            />
-          </Row>
+          {/* Only an account the server calls an instructor. `resolveSessionRole`
+              promotes on metadata, a verified-instructor row, or an owned
+              official course, and never demotes — so a real instructor keeps
+              this way in even when they signed in through the student tab. An
+              account that said "student" at sign-up never asked to teach, and
+              handing it a course-authoring workspace is not a shortcut. */}
+          {session?.role === 'instructor' ? (
+            <Row
+              title="Instructor view"
+              detail="Cohort progress and per-node completion counts, for whoever teaches this course."
+            >
+              <PixelButton
+                label="Open"
+                tone="panel"
+                grow={false}
+                onPress={() => transition(() => router.navigate('/instructor'))}
+              />
+            </Row>
+          ) : null}
 
           {instructor.data === true ? (
             <Row
@@ -182,12 +214,7 @@ export default function System() {
             </Row>
           ) : null}
 
-          <Row
-            title="Study companion"
-            detail={session?.source === 'supabase'
-              ? 'Connected to the live b.ai study model through Supabase.'
-              : 'Demo responses are local. Sign in with Supabase to use the live study model.'}
-          >
+          <Row title="Study companion" detail={companionDetail}>
             <PixelButton
               label="Open"
               tone="panel"
@@ -213,15 +240,13 @@ export default function System() {
         <Bevel tone="panel" style={styles.group}>
           <Row
             title="Sign out"
-            detail={confirmingLogout
-              ? 'This clears the app session and any Supabase authentication tokens on this device.'
-              : `End the ${session?.role ?? 'current'} session and return to authentication.`}
+            detail={`End the ${session?.role ?? 'current'} session and return to authentication.`}
           >
             <PixelButton
-              label={confirmingLogout ? 'Confirm sign out' : 'Sign out'}
-              tone={confirmingLogout ? 'brand' : 'panel'}
+              label="Sign out"
+              tone="panel"
               grow={false}
-              onPress={signOut}
+              onPress={() => setSignOutOpen(true)}
             />
           </Row>
         </Bevel>
@@ -249,6 +274,33 @@ export default function System() {
         ) : null}
       </ScrollView>
       <ThemePickerModal visible={themePickerOpen} onClose={() => setThemePickerOpen(false)} />
+
+      {/* `Window` is already a live region, so mounting the dialog announces the
+          question, and the modal moves focus onto the safe answer. Escape and
+          the hardware back button cancel. No close box: `Window` labels one
+          "Close details", which is the wrong sentence to read out here. */}
+      <Modal
+        visible={signOutOpen}
+        animationType={prefs.motionOff ? 'none' : 'fade'}
+        presentationStyle="fullScreen"
+        onRequestClose={() => setSignOutOpen(false)}
+      >
+        <View
+          style={[styles.dialogScreen, { backgroundColor: t.ground, paddingTop: insets.top }]}
+          accessibilityViewIsModal
+        >
+          <Window title="Sign out?" style={styles.dialog}>
+            <PixelText variant="body" colour={t.ink}>
+              This ends the {session?.role ?? 'current'} session on this device and clears its
+              Supabase tokens. Nothing you have completed is deleted.
+            </PixelText>
+            <View style={styles.dialogActions}>
+              <PixelButton label="Stay signed in" tone="panel" grow={false} onPress={() => setSignOutOpen(false)} />
+              <PixelButton label="Sign out" grow={false} onPress={signOut} />
+            </View>
+          </Window>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -282,4 +334,7 @@ const styles = StyleSheet.create({
   group: { padding: space.md, gap: space.md },
   row: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   rowText: { flex: 1, gap: space.hair },
+  dialogScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.md },
+  dialog: { width: '100%', maxWidth: 540 },
+  dialogActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: space.cell },
 });

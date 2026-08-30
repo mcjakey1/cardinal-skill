@@ -226,13 +226,83 @@ export function authorableCourses<T extends { ownerId: string | null }>(
  * with `enrolled: false` is 0030 saying "this account exists", which is a
  * different statement from "this account is on your course" — conflating them
  * is what would hide the very people this panel is for.
+ *
+ * `alreadyOn` carries the people the roster cannot speak for: the course's
+ * owner, who is not enrolled on their own course and must not be offered as
+ * somebody missing from it, and any co-instructor, because `course_roster`
+ * returns `role = 'student'` rows only — an instructor enrolment is invisible
+ * to it and would otherwise stay on this list after being added.
  */
 export function addableAccounts<T extends { userId: string }>(
   accounts: readonly T[],
   roster: readonly { userId: string; enrolled: boolean }[],
+  alreadyOn: readonly (string | null | undefined)[] = [],
 ): T[] {
   const on = new Set(roster.filter((row) => row.enrolled).map((row) => row.userId));
+  for (const id of alreadyOn) if (id) on.add(id);
   return accounts.filter((account) => !on.has(account.userId));
+}
+
+/**
+ * Who holds the keys, and who could be given them.
+ *
+ * `administrators` is a list of ids; the names live in `profiles`. Merged here
+ * rather than in a join because the two reads have different policies behind
+ * them and one of them can come back short: 0042 widened `administrators` so an
+ * administrator reads every row, while `profiles` opens through 0005's
+ * `teaches_student`. An administrator whose profile row is not returned would
+ * drop out of an inner join — and the account the directory cannot name is
+ * precisely the one an audit needs to see. So the id carries the row and the
+ * name is what may be missing.
+ *
+ * Administrators first, because "who else can do this" is the question the
+ * panel exists to answer and scrolling a whole directory to find out is not an
+ * answer.
+ */
+export interface AdministratorRow {
+  userId: string;
+  displayName: string;
+  isAdmin: boolean;
+  /** When they were given it. Null for an account that has not been. */
+  grantedAt: string | null;
+  /** The signed-in administrator's own row: the one they may not remove. */
+  self: boolean;
+}
+
+export function administratorRoster(
+  accounts: readonly { userId: string; displayName: string }[],
+  administrators: readonly { userId: string; grantedAt: string; self: boolean }[],
+): AdministratorRow[] {
+  const held = new Map(administrators.map((row) => [row.userId, row]));
+  const named = new Set(accounts.map((account) => account.userId));
+
+  const rows: AdministratorRow[] = accounts.map((account) => {
+    const grant = held.get(account.userId);
+    return {
+      userId: account.userId,
+      displayName: account.displayName,
+      isAdmin: Boolean(grant),
+      grantedAt: grant?.grantedAt ?? null,
+      self: grant?.self ?? false,
+    };
+  });
+
+  for (const grant of administrators) {
+    if (named.has(grant.userId)) continue;
+    rows.push({
+      userId: grant.userId,
+      displayName: 'An account with no profile',
+      isAdmin: true,
+      grantedAt: grant.grantedAt,
+      self: grant.self,
+    });
+  }
+
+  return rows.sort((a, b) =>
+    a.isAdmin === b.isAdmin
+      ? a.displayName.localeCompare(b.displayName)
+      : Number(b.isAdmin) - Number(a.isAdmin),
+  );
 }
 
 

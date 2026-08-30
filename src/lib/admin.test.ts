@@ -6,6 +6,7 @@ import {
   ADMIN_POWERS,
   EMPTY_AUDIT_FILTER,
   addableAccounts,
+  administratorRoster,
   appendAuditPage,
   auditCsv,
   auditCsvFilename,
@@ -212,6 +213,50 @@ test('an empty course can be given anybody', () => {
 test('a full course offers nobody', () => {
   const everyone = ACCOUNTS.map((a) => ({ userId: a.userId, enrolled: true }));
   assert.deepEqual(addableAccounts(ACCOUNTS, everyone), []);
+});
+
+test('the owner of the course is not offered as a student to add', () => {
+  // They already own it. Offering it reads as "this person is missing from
+  // their own course", which is the one thing the list must never suggest.
+  const addable = addableAccounts(ACCOUNTS, [], ['b']);
+  assert.deepEqual(addable.map((a) => a.userId), ['a', 'c']);
+});
+
+test('a co-instructor is not offered again either', () => {
+  // `course_roster` returns only role 'student', so an instructor enrolment is
+  // invisible to the roster and would otherwise stay on the add list forever.
+  const addable = addableAccounts(ACCOUNTS, [{ userId: 'a', enrolled: true }], ['c', null]);
+  assert.deepEqual(addable.map((a) => a.userId), ['b']);
+});
+
+// -------------------------------------------------------- who holds the keys
+
+test('administrators come first, then everybody else, each by name', () => {
+  const roster = administratorRoster(
+    [
+      { userId: 'c', displayName: 'Carla' },
+      { userId: 'a', displayName: 'Ada' },
+      { userId: 'b', displayName: 'Bo' },
+    ],
+    [
+      { userId: 'c', grantedAt: '2026-01-02T00:00:00Z', self: false },
+      { userId: 'a', grantedAt: '2026-01-01T00:00:00Z', self: true },
+    ],
+  );
+  assert.deepEqual(
+    roster.map((row) => [row.displayName, row.isAdmin, row.self]),
+    [['Ada', true, true], ['Carla', true, false], ['Bo', false, false]],
+  );
+  assert.equal(roster[0]?.grantedAt, '2026-01-01T00:00:00Z');
+});
+
+test('an administrator with no profile row is still listed', () => {
+  // The whole point of the panel is "who else holds the keys". An account the
+  // directory cannot name is exactly the one an auditor must still see.
+  const roster = administratorRoster([{ userId: 'a', displayName: 'Ada' }], [
+    { userId: 'ghost', grantedAt: '2026-01-01T00:00:00Z', self: false },
+  ]);
+  assert.deepEqual(roster.map((row) => [row.userId, row.isAdmin]), [['ghost', true], ['a', false]]);
 });
 
 test('the directory order is kept', () => {

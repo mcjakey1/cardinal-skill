@@ -16,6 +16,8 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import { EMPTY_AUDIT_FILTER, auditQueryParams } from '@/lib/admin';
+import type { AuditCursor, AuditEntry, AuditFilter } from '@/lib/admin';
 import {
   normalizeCourseDistribution,
   type CourseDistribution,
@@ -102,29 +104,69 @@ export async function fetchAllCourses(): Promise<AdminCourse[]> {
  * as unverified — which would be a lie in the one direction that matters.
  */
 export async function fetchAccounts(): Promise<AdminAccount[]> {
-  const [profiles, verified] = await Promise.all([
-    supabase.from('profiles').select('id, display_name').order('display_name'),
-    supabase.from('verified_instructors').select('user_id, revoked_at'),
+  const [profiles, badges] = await Promise.all([
+    readEveryRow('profiles', 'id, display_name', 'display_name'),
+    // A revoked row is still a row. Verification is `revoked_at is null`, which
+    // is what `is_verified_instructor` checks, and reading the row's presence
+    // alone would show a revoked instructor as verified.
+    readEveryRow('verified_instructors', 'user_id, revoked_at').then(
+      (rows) =>
+        new Set(
+          rows.filter((row) => row.revoked_at === null).map((row) => String(row.user_id)),
+        ),
+      // Degrades rather than fails, exactly as before: null means the badge
+      // state is unreadable on this database, not that nobody holds one.
+      () => null,
+    ),
   ]);
-  if (profiles.error) throw profiles.error;
 
-  // A revoked row is still a row. Verification is `revoked_at is null`, which
-  // is what `is_verified_instructor` checks, and reading the row's presence
-  // alone would show a revoked instructor as verified.
-  const badges = verified.error
-    ? null
-    : new Set(
-        (verified.data ?? [])
-          .filter((row) => row.revoked_at === null)
-          .map((row) => String(row.user_id)),
-      );
-
-  return (profiles.data ?? []).map((row) => ({
+  return profiles.map((row) => ({
     userId: String(row.id),
     displayName: String(row.display_name || 'Unnamed account'),
     email: null,
     verified: badges === null ? null : badges.has(String(row.id)),
   }));
+}
+
+/** PostgREST's `max_rows`, from `supabase/config.toml`. */
+const PAGE_ROWS = 1000;
+
+/**
+ * ponytail: fifty pages, so fifty thousand accounts. Past that this should be a
+ * server-side name search rather than a longer loop — the picker is filtered in
+ * the browser by `findPeople`, and holding an institution's whole directory in
+ * memory to do that stops being reasonable somewhere around here. The cap is a
+ * bound on the loop, not a considered limit.
+ */
+const MAX_PAGES = 50;
+
+/**
+ * Every row, rather than the first `max_rows` of them.
+ *
+ * A select with no range is silently truncated by PostgREST at `max_rows`, and
+ * nothing in the response says it happened. On an institution with more
+ * accounts than that, half the directory simply was not there — and an account
+ * missing from *Filter by who did it* reads as a person who has done nothing,
+ * which is the one thing this screen must never imply. Paged until a short page
+ * says the table ended.
+ */
+async function readEveryRow(
+  table: 'profiles' | 'verified_instructors',
+  columns: string,
+  orderBy?: string,
+): Promise<Record<string, unknown>[]> {
+  const rows: Record<string, unknown>[] = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const from = page * PAGE_ROWS;
+    let query = supabase.from(table).select(columns).range(from, from + PAGE_ROWS - 1);
+    if (orderBy) query = query.order(orderBy);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    rows.push(...((data ?? []) as unknown as Record<string, unknown>[]));
+    if ((data?.length ?? 0) < PAGE_ROWS) break;
+  }
+  return rows;
 }
 
 /** Publish, unpublish or archive any course. Archiving keeps every record. */
@@ -165,4 +207,47 @@ export async function setEnrollment(
     p_role: role,
   });
   if (error) throw error;
+}
+
+
+/**
+ * What has been done to the site, newest first, narrowed to what was asked for.
+ *
+ * One RPC rather than a select plus two lookups per row: `audit_trail` (0039)
+ * is `security definer` and states the administrator check in its own body, the
+ * way `course_roster` does, and it returns the names already resolved. Those
+ * names were written into the row when the action happened, so a row still
+ * reads after the account or the course it names is gone.
+ *
+ * The filter travels to the server rather than being applied to what comes
+ * back. A predicate here would only ever see the page already loaded, so "no
+ * match" would mean "not in these hundred rows" while the screen said "not in
+ * the record" — `auditQueryParams` carries the whole mapping and says why.
+ *
+ * There is deliberately no write here. The log is written by triggers and by
+ * the functions that perform the actions, never by a client — a client that
+ * logs its own behaviour can be modified not to.
+ */
+export async function fetchAuditTrail(
+  filter: AuditFilter = EMPTY_AUDIT_FILTER,
+  cursor: AuditCursor | null = null,
+  limit = 100,
+): Promise<AuditEntry[]> {
+  const { data, error } = await supabase.rpc('audit_trail', auditQueryParams(filter, cursor, limit));
+  if (error) throw error;
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    id: String(row.id),
+    at: String(row.at),
+    actorId: row.actor_id ? String(row.actor_id) : null,
+    actorName: String(row.actor_name || 'An administrator'),
+    // Narrowed rather than cast: the column is `text` with a check constraint,
+    // and a value from a newer migration must not be asserted into this union.
+    actorRole: row.actor_role === 'owner' ? 'owner' : 'administrator',
+    action: String(row.action),
+    subjectUserId: row.subject_user_id ? String(row.subject_user_id) : null,
+    subjectName: row.subject_name ? String(row.subject_name) : null,
+    subjectCourseId: row.subject_course_id ? String(row.subject_course_id) : null,
+    courseTitle: row.course_title ? String(row.course_title) : null,
+    detail: (row.detail as Record<string, unknown>) ?? {},
+  }));
 }

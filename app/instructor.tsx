@@ -188,6 +188,19 @@ export default function Instructor() {
     setReturnTo('admin');
   };
 
+  /**
+   * The same detour to a course's roster. An audit row names a person and a
+   * course; `Students` draws the roster for the selected course and has no name
+   * search of its own, so this lands the reader on the right roster rather than
+   * the right row. Honest limitation — the alternative is a second search box
+   * on a screen that did not ask for one.
+   */
+  const openPersonFromAdmin = (courseId: string) => {
+    setChosen(courseId);
+    go('students');
+    setReturnTo('admin');
+  };
+
   const signOut = () => {
     transition(() => {
       set('role', null);
@@ -240,7 +253,11 @@ export default function Instructor() {
           ) : null}
 
           <View style={styles.crumbs}>
-            {wide ? (
+            {/* The course list is the trail's own root, so on that section the
+                prefix would repeat it — "Courses > Research Methods > Courses",
+                a path that claims the reader drilled into a course to arrive
+                back at the list. There the crumb is just where they are. */}
+            {wide && section !== 'courses' ? (
               <>
                 <Pressable onPress={() => go('courses')} accessibilityRole="link">
                   <LText variant="small" tone="muted">
@@ -316,6 +333,7 @@ export default function Instructor() {
                 // administrator deciding whether to archive one needs to look at
                 // it, not at a second renderer built beside this page.
                 onOpenChart={openChartFromAdmin}
+                onOpenPerson={openPersonFromAdmin}
               />
             )}
           </ScrollView>

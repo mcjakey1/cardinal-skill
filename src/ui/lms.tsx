@@ -457,7 +457,12 @@ export function DataTable({
             <Pressable
               key={row.key}
               onPress={row.onPress}
-              disabled={!row.onPress}
+              // Deliberately not `disabled={!row.onPress}`. On web that renders
+              // `pointer-events: none` over the whole row, which reaches the
+              // controls inside the cells — a row that merely has no press of
+              // its own would kill the Verify and Revoke buttons standing in
+              // it. A row with no `onPress` is already inert; saying so twice
+              // costs every control it contains.
               accessibilityRole={row.onPress ? 'button' : undefined}
               accessibilityLabel={row.label}
               style={({ hovered }: PressState) => [

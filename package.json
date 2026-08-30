@@ -13,6 +13,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \"src/**/*.test.ts\"",
+    "test:db": "docker exec -i supabase_db_cardinal-skill psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f - < supabase/tests/audit_trail.sql",
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
     "fn:serve": "supabase functions serve --env-file .env"

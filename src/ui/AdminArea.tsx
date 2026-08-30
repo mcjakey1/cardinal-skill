@@ -3,16 +3,32 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import {
+  AUDIT_GROUPS,
+  EMPTY_AUDIT_FILTER,
   addableAccounts,
   adminActionMessage,
+  appendAuditPage,
+  auditCsv,
+  auditCsvFilename,
+  auditFilterActive,
+  auditSummary,
+  calendarDay,
+  describeAuditAction,
+  describeAuditFilter,
   adminCourseActions,
   adminUnlocked,
   lockAdmin,
+  nextAuditCursor,
   unlockAdmin,
+  type AuditEntry,
+  type AuditFilter,
+  type AuditSummaryLine,
 } from '@/lib/admin';
+import { saveCsv } from '@/lib/saveCsv';
 import {
   fetchAccounts,
   fetchAllCourses,
+  fetchAuditTrail,
   isAdministrator,
   setCoursePublication,
   setEnrollment,
@@ -72,9 +88,20 @@ export interface AdminAreaProps {
   onSelectCourse: (id: string) => void;
   /** Selects the course in the workspace and opens the Skill tree tab on it. */
   onOpenChart: (id: string) => void;
+  /**
+   * The same detour for a row about a person: the course's student list, which
+   * is the nearest thing to that person the workspace has.
+   */
+  onOpenPerson: (courseId: string) => void;
 }
 
-export function AdminArea({ liveSession, courseId, onSelectCourse, onOpenChart }: AdminAreaProps) {
+export function AdminArea({
+  liveSession,
+  courseId,
+  onSelectCourse,
+  onOpenChart,
+  onOpenPerson,
+}: AdminAreaProps) {
   const [unlocked, setUnlocked] = useState(adminUnlocked);
   const [entry, setEntry] = useState('');
   const [wrong, setWrong] = useState(false);
@@ -106,6 +133,7 @@ export function AdminArea({ liveSession, courseId, onSelectCourse, onOpenChart }
           courseId={courseId}
           onSelectCourse={onSelectCourse}
           onOpenChart={onOpenChart}
+          onOpenPerson={onOpenPerson}
           onLock={() => { lockAdmin(); setUnlocked(false); }}
         />
       ) : (
@@ -148,6 +176,7 @@ function Unlocked({
   courseId,
   onSelectCourse,
   onOpenChart,
+  onOpenPerson,
   onLock,
 }: AdminAreaProps & { onLock: () => void }) {
   const admin = useQuery({
@@ -200,6 +229,7 @@ function Unlocked({
           <Courses selected={courseId} onSelect={onSelectCourse} onOpenChart={onOpenChart} />
           <People courseId={courseId} />
           <Badges />
+          <AuditLog onOpenChart={onOpenChart} onOpenPerson={onOpenPerson} />
         </>
       ) : (
         <Panel>
@@ -266,6 +296,7 @@ function Courses({
       // publication badges, so it is stale the moment this succeeds.
       void client.invalidateQueries({ queryKey: ['admin-courses'] });
       void client.invalidateQueries({ queryKey: ['courses'] });
+      void client.invalidateQueries({ queryKey: ['admin-audit'] });
     },
   });
 
@@ -515,6 +546,7 @@ function People({ courseId }: { courseId: string | null }) {
       void client.invalidateQueries({ queryKey: ['admin-roster', courseId] });
       // The Students tab reads the same two functions under its own key.
       void client.invalidateQueries({ queryKey: ['instructor-roster', courseId] });
+      void client.invalidateQueries({ queryKey: ['admin-audit'] });
     },
   });
 
@@ -723,10 +755,14 @@ function Badges() {
   const [search, setSearch] = useState('');
 
   const accounts = useQuery({ queryKey: ['admin-accounts'], queryFn: fetchAccounts });
+
   const verify = useMutation({
     mutationFn: ({ userId, verified }: { userId: string; verified: boolean }) =>
       setInstructorVerification(userId, verified),
-    onSuccess: () => void client.invalidateQueries({ queryKey: ['admin-accounts'] }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin-accounts'] });
+      void client.invalidateQueries({ queryKey: ['admin-audit'] });
+    },
   });
 
   const rows = findPeople(search, accounts.data ?? []);
@@ -822,12 +858,633 @@ function badgeRow(account: AdminAccount, pending: boolean, onSet: (verified: boo
   };
 }
 
+// ----------------------------------------------------------------- audit log
+
+const AUDIT_COLUMNS = [
+  { key: 'when', label: 'When', flex: 2 },
+  // Not "Administrator" any more. Since 0037 an instructor's own work is in
+  // here too, and a column head naming only one of the two would file every
+  // owner row as an administrator's.
+  { key: 'who', label: 'Who', flex: 2 },
+  { key: 'role', label: 'Acting as', flex: 1 },
+  { key: 'what', label: 'What they did', flex: 4 },
+];
+
+/** How far back the strip counts, and what it calls that window. */
+const SUMMARY_DAYS = 7;
+
+/** One page. The server clamps anything larger, so this is the real ceiling. */
+const AUDIT_PAGE = 100;
+
+/**
+ * The most the strip will count, and the server's own clamp (0039).
+ *
+ * The strip asks its own question of the record rather than counting the page
+ * on screen. Counting `loaded` under-reported in direct proportion to how busy
+ * the week had been — measured at `1 courses` against a true `12`, and the
+ * twelve were the rows worth finding. A warning light that dims as the fire
+ * grows is worse than no warning light.
+ */
+const SUMMARY_LIMIT = 500;
+
+const RANGES = [
+  { value: '7', label: '7 days' },
+  { value: '30', label: '30 days' },
+  { value: '90', label: '90 days' },
+  { value: 'all', label: 'All' },
+  { value: 'custom', label: 'Custom' },
+] as const;
+
+type RangeChoice = (typeof RANGES)[number]['value'];
+
+/**
+ * What has been done to the site, newest first.
+ *
+ * Last on the page on purpose: it is the record of the actions above it, and an
+ * administrator arrives here to act rather than to read. The actor gets a column
+ * of their own rather than a place in the sentence — repeating the name inside
+ * every line reads as an accusation instead of a record.
+ *
+ * EVERY NARROWING IS THE SERVER'S. The filter goes into the query rather than
+ * across the rows that came back, so "nothing matches" means nothing in the
+ * record matches, not nothing in the hundred rows already loaded. That
+ * distinction is the whole reason this screen can be trusted, and
+ * `auditQueryParams` is where it is kept.
+ */
+function AuditLog({
+  onOpenChart,
+  onOpenPerson,
+}: {
+  onOpenChart: (id: string) => void;
+  onOpenPerson: (courseId: string) => void;
+}) {
+  const [filter, setFilter] = useState<AuditFilter>(EMPTY_AUDIT_FILTER);
+  const [range, setRange] = useState<RangeChoice>('all');
+  const [actorSearch, setActorSearch] = useState('');
+  // Older pages already fetched, kept as pages rather than as one list: whether
+  // there is more to ask for is a fact about the LAST page's length, and a
+  // flattened list cannot answer it once a short page has been appended to a
+  // full one. Changing a filter empties this, so the record starts again rather
+  // than mixing two answers into one list.
+  const [pages, setPages] = useState<AuditEntry[][]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState<unknown>(null);
+  // What is typed in the two date boxes, which is not the same thing as what is
+  // being filtered on. "2026-0" is a person half way through a date, not a
+  // request; only a whole, real day reaches `filter` and therefore the server.
+  const [dateText, setDateText] = useState<{ from: string; to: string }>({ from: '', to: '' });
+
+  const trail = useQuery({
+    // The filter is in the key, so a narrowed record is its own cache entry and
+    // going back to an earlier filter does not refetch what is already held.
+    queryKey: ['admin-audit', filter],
+    queryFn: () => fetchAuditTrail(filter, null, AUDIT_PAGE),
+  });
+  const accounts = useQuery({ queryKey: ['admin-accounts'], queryFn: fetchAccounts });
+
+  // Deliberately not narrowed by `filter`: "is anything unusual happening" is a
+  // question about the record, not about whatever slice is on screen. Its own
+  // cache key, so filtering the table below does not refetch it.
+  const recent = useQuery({
+    // Nested under the same first key the other panels already invalidate, so a
+    // publication or an enrolment refreshes the strip without three more call
+    // sites having to remember it exists.
+    queryKey: ['admin-audit', 'recent', SUMMARY_DAYS],
+    queryFn: () =>
+      fetchAuditTrail(
+        { ...EMPTY_AUDIT_FILTER, from: isoDay(daysAgo(SUMMARY_DAYS)) },
+        null,
+        SUMMARY_LIMIT,
+      ),
+  });
+
+  const first = trail.data ?? [];
+  const loaded = pages.reduce<AuditEntry[]>(
+    (soFar, page) => appendAuditPage(soFar, page),
+    first,
+  );
+  const cursor = nextAuditCursor(pages[pages.length - 1] ?? first, AUDIT_PAGE);
+  const active = auditFilterActive(filter);
+  const narrowing = describeAuditFilter(
+    filter,
+    accounts.data?.find((account) => account.userId === filter.actorId)?.displayName ?? null,
+  );
+  const recentRows = recent.data ?? [];
+  const summary = auditSummary(recentRows, daysAgo(SUMMARY_DAYS));
+  // The server refuses more than 500 in one call, so a busier week than that is
+  // counted short. Said out loud rather than rounded down silently.
+  const summaryCapped = recentRows.length >= SUMMARY_LIMIT;
+
+  /** Any change to what is being asked starts the record again. */
+  const narrow = (next: AuditFilter) => {
+    setFilter(next);
+    setPages([]);
+    setMoreError(null);
+  };
+
+  const chooseRange = (next: RangeChoice) => {
+    setRange(next);
+    // Entering Custom shows what is already applied. Leaving the boxes empty
+    // under a live 30-day bound would have the fields disagree with the panel
+    // head, and the head is the one telling the truth.
+    if (next === 'custom') {
+      setDateText({ from: filter.from ?? '', to: filter.to ?? '' });
+      return;
+    }
+    setDateText({ from: '', to: '' });
+    narrow({
+      ...filter,
+      from: next === 'all' ? null : isoDay(daysAgo(Number(next))),
+      to: null,
+    });
+  };
+
+  /**
+   * Typing is not asking. The box keeps whatever was typed, and the query only
+   * moves when that is a whole day or the box has been emptied — so the panel
+   * no longer errors on nine of the ten keystrokes it takes to write one date,
+   * and no longer fires an RPC for each of them.
+   */
+  const typeDate = (which: 'from' | 'to', text: string) => {
+    setDateText({ ...dateText, [which]: text });
+    const day = calendarDay(text);
+    if (day !== null || text.trim() === '') narrow({ ...filter, [which]: day });
+  };
+
+  const showMore = async () => {
+    if (!cursor) return;
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const page = await fetchAuditTrail(filter, cursor, AUDIT_PAGE);
+      setPages([...pages, page]);
+    } catch (error) {
+      setMoreError(error);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const exportCsv = () => {
+    const now = new Date();
+    void saveCsv(auditCsvFilename(filter, now), auditCsv(loaded, narrowing, now));
+  };
+
+  return (
+    <Panel>
+      <PanelHead
+        title="What has been done to this site"
+        right={
+          <View style={styles.rowInline}>
+            <Badge label={`${loaded.length} shown`} />
+            {narrowing ? <Badge tone="attention" icon="filter" label={narrowing} /> : null}
+          </View>
+        }
+      />
+      <View style={styles.body}>
+        {/* This paragraph's job is to stop a reader treating an absent row as
+            proof that nothing happened. The migrations name every gap in their
+            own headers; the screen has to be as careful as the SQL. */}
+        <LText variant="small" tone="muted" style={styles.prose}>
+          Course creations, publications, archives and deletions; chart and mission changes; and
+          people put on or taken off a course by somebody other than themselves. Written by the
+          server as each action happens, and not editable from here.
+        </LText>
+        <LText variant="small" tone="muted" style={styles.prose}>
+          It does not record students joining or leaving a course on their own, an instructor
+          renaming or editing their own course, a chart publish that changed nothing, or edits made
+          straight to the underlying tables.
+        </LText>
+
+        <RecentActivity
+          lines={summary}
+          loading={recent.isPending}
+          failed={recent.isError}
+          capped={summaryCapped}
+        />
+
+        <AuditFilters
+          filter={filter}
+          range={range}
+          actorSearch={actorSearch}
+          dateText={dateText}
+          accounts={accounts.data ?? []}
+          onNarrow={narrow}
+          onRange={chooseRange}
+          onActorSearch={setActorSearch}
+          onTypeDate={typeDate}
+        />
+
+        {trail.isPending ? (
+          <>
+            <Skeleton width="70%" />
+            <Skeleton width="55%" />
+          </>
+        ) : trail.error ? (
+          <Notice tone="error" title="The audit log did not load">
+            {adminActionMessage(trail.error)}
+          </Notice>
+        ) : (
+          <>
+            <DataTable
+              columns={AUDIT_COLUMNS}
+              rows={loaded.map((entry) => auditRow(entry, onOpenChart, onOpenPerson, narrow, filter))}
+              empty={
+                <LText variant="small" tone="muted">
+                  {active
+                    ? 'Nothing in the record matches these filters.'
+                    : 'Nothing yet. Actions taken on this site will appear here.'}
+                </LText>
+              }
+            />
+
+            {moreError ? (
+              <Notice tone="error" title="The next page did not load">
+                {adminActionMessage(moreError)}
+              </Notice>
+            ) : null}
+
+            <View style={styles.row}>
+              {/* Hidden rather than disabled once the record runs out, the same
+                  rule the rest of this page keeps about controls certain to be
+                  refused. */}
+              {cursor ? (
+                <LButton
+                  label={loadingMore ? 'Loading…' : `Show ${AUDIT_PAGE} more`}
+                  icon="chevron-down"
+                  disabled={loadingMore}
+                  style={styles.tall}
+                  onPress={() => void showMore()}
+                />
+              ) : null}
+              {loaded.length > 0 ? (
+                <LButton
+                  label="Export CSV"
+                  icon="download"
+                  style={styles.tall}
+                  onPress={exportCsv}
+                  accessibilityHint={
+                    active
+                      ? 'Saves the rows shown here, which are filtered. It does not save the whole record.'
+                      : 'Saves the rows loaded here. Load more first if you need the rest of the record.'
+                  }
+                />
+              ) : null}
+              {active ? (
+                <LButton
+                  label="Clear filters"
+                  variant="quiet"
+                  icon="x"
+                  style={styles.tall}
+                  onPress={() => {
+                    setRange('all');
+                    setActorSearch('');
+                    setDateText({ from: '', to: '' });
+                    narrow(EMPTY_AUDIT_FILTER);
+                  }}
+                />
+              ) : null}
+            </View>
+          </>
+        )}
+      </View>
+    </Panel>
+  );
+}
+
+/**
+ * How much of each kind happened this week.
+ *
+ * The answer to "is anything unusual going on", which is the question somebody
+ * opens this panel with. Without it the log only helps once you already suspect
+ * something.
+ */
+function RecentActivity({
+  lines,
+  loading,
+  failed,
+  capped,
+}: {
+  lines: AuditSummaryLine[];
+  loading: boolean;
+  failed: boolean;
+  capped: boolean;
+}) {
+  if (loading) return <Skeleton width="40%" />;
+
+  // Never "nothing happened" when the truth is "nobody managed to ask". Those
+  // two read identically to a reader and mean opposite things.
+  if (failed) {
+    return (
+      <LText variant="small" tone="attention">
+        The last {SUMMARY_DAYS} days could not be counted just now.
+      </LText>
+    );
+  }
+
+  return (
+    <View style={styles.rowInline}>
+      {lines.length === 0 ? (
+        <LText variant="small" tone="muted">
+          Nothing in the last {SUMMARY_DAYS} days.
+        </LText>
+      ) : (
+        <>
+          {lines.map((line) => (
+            <Badge
+              key={line.group}
+              label={`${line.count}${capped ? '+' : ''} ${line.label.toLowerCase()}`}
+            />
+          ))}
+          <LText variant="micro" tone="muted">
+            {capped
+              ? `in the last ${SUMMARY_DAYS} days, counted up to the first ${SUMMARY_LIMIT}`
+              : `in the last ${SUMMARY_DAYS} days, across the whole record`}
+          </LText>
+        </>
+      )}
+    </View>
+  );
+}
+
+function AuditFilters({
+  filter,
+  range,
+  actorSearch,
+  dateText,
+  accounts,
+  onNarrow,
+  onRange,
+  onActorSearch,
+  onTypeDate,
+}: {
+  filter: AuditFilter;
+  range: RangeChoice;
+  actorSearch: string;
+  dateText: { from: string; to: string };
+  accounts: AdminAccount[];
+  onNarrow: (next: AuditFilter) => void;
+  onRange: (next: RangeChoice) => void;
+  onActorSearch: (next: string) => void;
+  onTypeDate: (which: 'from' | 'to', text: string) => void;
+}) {
+  const actor = accounts.find((account) => account.userId === filter.actorId) ?? null;
+
+  return (
+    <>
+      <Field
+        label="Search names and courses"
+        value={filter.search}
+        onChangeText={(search) => onNarrow({ ...filter, search })}
+        placeholder="Type a person or a course"
+        autoCapitalize="none"
+        style={styles.input}
+        hint="Searches the whole record on the server, not only the rows below."
+      />
+
+      {/* Colour and the pressed-in bevel together, never colour alone. */}
+      <View style={styles.rowInline}>
+        {AUDIT_GROUPS.map((group) => {
+          const on = filter.groups.includes(group.group);
+          return (
+            <LButton
+              key={group.group}
+              size="sm"
+              label={group.label}
+              variant={on ? 'primary' : 'default'}
+              accessibilityState={{ selected: on }}
+              onPress={() =>
+                onNarrow({
+                  ...filter,
+                  groups: on
+                    ? filter.groups.filter((g) => g !== group.group)
+                    : [...filter.groups, group.group],
+                })
+              }
+            />
+          );
+        })}
+      </View>
+
+      <Segmented
+        label="How far back"
+        value={range}
+        onChange={onRange}
+        options={RANGES.map((option) => ({ value: option.value, label: option.label }))}
+      />
+
+      {range === 'custom' ? (
+        <View style={styles.rowInline}>
+          <Field
+            label="From"
+            value={dateText.from}
+            onChangeText={(text) => onTypeDate('from', text)}
+            placeholder="2026-09-01"
+            autoCapitalize="none"
+            style={styles.input}
+            hint="Year first, like 2026-09-01."
+          />
+          <Field
+            label="To"
+            value={dateText.to}
+            onChangeText={(text) => onTypeDate('to', text)}
+            placeholder="2026-09-15"
+            autoCapitalize="none"
+            style={styles.input}
+            hint="Year first, like 2026-09-15. Both days are included."
+          />
+        </View>
+      ) : null}
+
+      {actor ? (
+        <View style={styles.rowInline}>
+          <Badge icon="user" label={`Only ${actor.displayName}`} />
+          <LButton
+            size="sm"
+            label="Anyone"
+            variant="quiet"
+            onPress={() => onNarrow({ ...filter, actorId: null })}
+          />
+        </View>
+      ) : (
+        <Field
+          label="Filter by who did it"
+          value={actorSearch}
+          onChangeText={onActorSearch}
+          placeholder="Type a name"
+          autoCapitalize="none"
+          style={styles.input}
+        />
+      )}
+
+      {!actor && actorSearch.trim() ? (
+        <View style={styles.rowInline}>
+          {findPeople(actorSearch, accounts).slice(0, 6).map((account) => (
+            <LButton
+              key={account.userId}
+              size="sm"
+              label={account.displayName}
+              onPress={() => onNarrow({ ...filter, actorId: account.userId })}
+            />
+          ))}
+        </View>
+      ) : null}
+
+      {filter.subjectLabel ? (
+        <View style={styles.rowInline}>
+          {/* "Only Maria Sanchez" reads as what she did; it means what was done
+              to her. A control carrying a person's name that shows half of what
+              they appear in has to say which half. A course cannot act, so the
+              course wording stays as it is. */}
+          <Badge
+            icon="crosshair"
+            label={
+              filter.subjectUserId
+                ? `What was done to ${filter.subjectLabel}`
+                : `Only ${filter.subjectLabel}`
+            }
+          />
+          <LButton
+            size="sm"
+            label="Everything"
+            variant="quiet"
+            onPress={() =>
+              onNarrow({
+                ...filter,
+                subjectUserId: null,
+                subjectCourseId: null,
+                subjectLabel: null,
+              })
+            }
+          />
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * One row, and where it goes when pressed.
+ *
+ * A row about a course opens that chart; a row about a person opens that
+ * course's student list, which is the nearest thing to the person that exists —
+ * `Students` has no name search, so this lands the reader on the right roster
+ * rather than the right row. A row with neither is not pressable: a row that
+ * looks pressable and does nothing is worse than one that plainly does not.
+ */
+function auditRow(
+  entry: AuditEntry,
+  onOpenChart: (id: string) => void,
+  onOpenPerson: (courseId: string) => void,
+  onNarrow: (next: AuditFilter) => void,
+  filter: AuditFilter,
+) {
+  const sentence = describeAuditAction(entry);
+  const courseId = entry.subjectCourseId;
+  const goesTo = courseId === null
+    ? null
+    : entry.subjectUserId !== null
+      ? {
+          press: () => onOpenPerson(courseId),
+          label: `Open the students on ${entry.courseTitle ?? 'that course'}`,
+        }
+      : {
+          press: () => onOpenChart(courseId),
+          label: `Open ${entry.courseTitle ?? 'that chart'}`,
+        };
+
+  // The row carries no `onPress` of its own, and that is the point rather than
+  // an omission. A pressable row is a `button` on web, and the two controls
+  // below are buttons too — nesting them is invalid, and a browser handed one
+  // control inside another cannot say which the reader meant. `badgeRow` states
+  // its actions the same way. The cost is that the whole row is no longer a
+  // click target; the gain is two controls that name what they each do.
+  return {
+    key: entry.id,
+    label: `${auditWhen(entry.at)}. ${entry.actorName}, ${entry.actorRole}. ${sentence}.`,
+    cells: [
+      <LText key="when" variant="micro" tone="muted">
+        {auditWhen(entry.at)}
+      </LText>,
+      <LText key="who" variant="small" style={styles.strong} numberOfLines={1}>
+        {entry.actorName}
+      </LText>,
+      // Attention, not neutral: reaching into somebody else's course is the row
+      // a reader should stop on. The word carries it as well as the tone.
+      <Badge
+        key="role"
+        tone={entry.actorRole === 'owner' ? 'neutral' : 'attention'}
+        label={entry.actorRole === 'owner' ? 'Owner' : 'Administrator'}
+      />,
+      <View key="what" style={styles.rowStack}>
+        <LText variant="small">{sentence}</LText>
+        <View style={styles.rowActions}>
+          {goesTo ? (
+            <LButton size="sm" variant="quiet" label={goesTo.label} onPress={goesTo.press} />
+          ) : null}
+          {entry.subjectCourseId || entry.subjectUserId ? (
+            <LButton
+              size="sm"
+              variant="quiet"
+              label={entry.subjectUserId ? 'What was done to this person' : 'Only this course'}
+              onPress={() =>
+                onNarrow({
+                  ...filter,
+                  subjectUserId: entry.subjectUserId,
+                  subjectCourseId: entry.subjectUserId ? null : entry.subjectCourseId,
+                  subjectLabel: entry.subjectUserId
+                    ? entry.subjectName ?? 'one person'
+                    : entry.courseTitle ?? 'one course',
+                })
+              }
+            />
+          ) : null}
+        </View>
+      </View>,
+    ],
+  };
+}
+
+/** The reader is placing an action in time, not timing it. Minutes are enough. */
+function auditWhen(at: string): string {
+  const when = new Date(at);
+  if (Number.isNaN(when.getTime())) return at;
+  // The zone is shown because the date filter is in this same zone and a reader
+  // comparing two campuses' exports has to know which clock each was read on.
+  // Without it, a row dated the 31st inside a "from the 1st" filter looks like a
+  // bug in the record rather than a difference of offset.
+  return when.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+}
+
+function daysAgo(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
+
+/** The `YYYY-MM-DD` the filter speaks, in the reader's own day. */
+function isoDay(when: Date): string {
+  // Not `toISOString().slice(0, 10)`: that is the UTC day, and east of Greenwich
+  // it names tomorrow for most of the evening. `auditQueryParams` builds local
+  // day boundaries, so the day handed to it has to be the local one too.
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+}
+
 const styles = StyleSheet.create({
   head: { gap: lms.space.xs },
   body: { padding: lms.space.lg, gap: lms.space.md },
   prose: { maxWidth: 620 },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: lms.space.sm },
   rowStack: { gap: 2, minWidth: 0 },
+  // Wraps because both labels name a course, and a long title on a narrow
+  // column would otherwise push the second control out of the row.
+  rowActions: { flexDirection: 'row', flexWrap: 'wrap', gap: lms.space.sm },
   rowInline: { flexDirection: 'row', alignItems: 'center', gap: lms.space.sm, flexWrap: 'wrap' },
   strong: { fontWeight: '600' },
   action: {

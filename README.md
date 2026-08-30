@@ -158,7 +158,7 @@ everything.
 ```bash
 npm install
 npx supabase start          # Postgres, auth, PostgREST in Docker
-npx supabase db reset       # apply migrations 0001–0041
+npx supabase db reset       # apply migrations 0001–0042
 ```
 
 `supabase start` prints an API URL and anon key. Put them in `.env`:
@@ -301,9 +301,9 @@ src/
   theme/lms.ts                The same, for the instructor workspace only
   ui/                         Cross-platform components, navigation, transitions
 supabase/
-  migrations/                 Forward-only schema and RLS policies (0001–0041)
+  migrations/                 Forward-only schema and RLS policies (0001–0042)
   functions/                  Deno Edge Functions; server-only secrets
-  tests/audit_trail.sql       116 assertions over the audit and authority rules
+  tests/audit_trail.sql       119 assertions over the audit and authority rules
 ```
 
 ---

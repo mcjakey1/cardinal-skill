@@ -7,10 +7,9 @@ echo "Starting Cardinal Skill..."
 echo "==================================================="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FRONTEND_DIR="${SCRIPT_DIR}/frontend"
 
-if [ ! -f "${FRONTEND_DIR}/package.json" ]; then
-    echo "Error: Could not locate frontend folder at '${FRONTEND_DIR}'."
+if [ ! -f "${SCRIPT_DIR}/package.json" ]; then
+    echo "Error: Could not locate package.json at '${SCRIPT_DIR}'."
     echo "Please run this script from the repository root directory."
     exit 1
 fi
@@ -27,17 +26,16 @@ if ! command -v npm >/dev/null 2>&1; then
     exit 1
 fi
 
-if [ ! -d "${FRONTEND_DIR}/node_modules" ]; then
+if [ ! -x "${SCRIPT_DIR}/node_modules/.bin/expo" ]; then
     echo "Installing dependencies..."
-    cd "${FRONTEND_DIR}"
-    npm install
     cd "${SCRIPT_DIR}"
+    npm install
 fi
 
 echo ""
-echo "Open http://localhost:3000 in your browser."
+echo "Open http://localhost:8081 in your browser."
 echo "==================================================="
 echo ""
 
-cd "${FRONTEND_DIR}"
-npm run dev
+cd "${SCRIPT_DIR}"
+npm run web -- --port 8081

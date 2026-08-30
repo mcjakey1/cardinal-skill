@@ -12,6 +12,18 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
-  "exclude": ["node_modules", "supabase/functions", "frontend"]
+  // Scoped to the app itself. A bare "**/*.ts" swept in every sibling directory
+  // that happens to sit in the working tree (build output, scratch checkouts),
+  // so `npm run typecheck` failed on files that are not part of the app.
+  // supabase/functions is Deno with npm: specifiers and is checked by
+  // `supabase functions serve`, not tsc.
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": ["node_modules", "supabase/functions"]
 }

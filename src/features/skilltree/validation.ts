@@ -1,0 +1,154 @@
+/**
+ * Say out loud what is wrong with a graph.
+ *
+ * `progression.ts` deliberately tolerates bad input at render time — it drops
+ * edges to unknown nodes and locks anything on a cycle, so a student never sees
+ * a crash. That is the right behaviour for the chart and the wrong behaviour for
+ * the person authoring or importing one, who needs to be told what to fix.
+ *
+ * So this is the loud half of the same contract, for the authoring and import
+ * paths only. Pure and dependency-free.
+ */
+
+// Runtime import, so it carries the .ts extension: `node --test` resolves
+// specifiers as plain ESM.
+import { findCyclicNodes, prereqsByNode } from './progression.ts';
+import type { Prereq, SkillNode } from './types';
+
+export type GraphErrorType =
+  | 'duplicate_id'
+  | 'duplicate_edge'
+  | 'missing_node'
+  | 'missing_prerequisite'
+  | 'cycle_detected'
+  | 'disconnected_graph';
+
+export interface GraphError {
+  type: GraphErrorType;
+  /** Written for the person fixing it, not for a log. */
+  message: string;
+  /** The node ids involved, so a UI can jump to them. */
+  nodeIds: string[];
+}
+
+export interface GraphValidation {
+  isValid: boolean;
+  errors: GraphError[];
+}
+
+export function validateGraph(nodes: SkillNode[], prereqs: Prereq[]): GraphValidation {
+  const errors: GraphError[] = [];
+
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const n of nodes) {
+    if (seen.has(n.id)) duplicated.add(n.id);
+    seen.add(n.id);
+  }
+  for (const id of duplicated) {
+    errors.push({
+      type: 'duplicate_id',
+      message: `Two nodes share the id "${id}". Ids have to be unique.`,
+      nodeIds: [id],
+    });
+  }
+
+  const seenEdges = new Set<string>();
+  for (const { nodeId, prereqId } of prereqs) {
+    const edgeKey = `${prereqId}\u0000${nodeId}`;
+    if (seenEdges.has(edgeKey)) {
+      errors.push({
+        type: 'duplicate_edge',
+        message: `"${prereqId}" is connected to "${nodeId}" more than once.`,
+        nodeIds: [prereqId, nodeId],
+      });
+    }
+    seenEdges.add(edgeKey);
+
+    if (!seen.has(nodeId)) {
+      errors.push({
+        type: 'missing_node',
+        message: `A prerequisite points to "${nodeId}", which is not on this chart.`,
+        nodeIds: [nodeId],
+      });
+    }
+    if (!seen.has(prereqId)) {
+      errors.push({
+        type: 'missing_prerequisite',
+        message: `"${nodeId}" requires "${prereqId}", which is not on this chart.`,
+        nodeIds: [nodeId],
+      });
+    }
+  }
+
+  const onCycle = findCyclicNodes(seen, prereqsByNode(seen, prereqs));
+  if (onCycle.length > 0) {
+    errors.push({
+      type: 'cycle_detected',
+      message: `These nodes require each other in a loop, so none of them can ever unlock: ${onCycle.join(', ')}.`,
+      nodeIds: onCycle,
+    });
+  }
+
+  // Report connectivity only after structural errors are fixed. Otherwise a
+  // single dangling edge would create a second, less useful cascade error.
+  if (errors.length === 0 && seen.size > 1) {
+    const adjacency = new Map([...seen].map((id) => [id, new Set<string>()]));
+    for (const { nodeId, prereqId } of prereqs) {
+      adjacency.get(nodeId)!.add(prereqId);
+      adjacency.get(prereqId)!.add(nodeId);
+    }
+    const unvisited = new Set(seen);
+    const components: string[][] = [];
+    while (unvisited.size > 0) {
+      const component: string[] = [];
+      const pending = [unvisited.values().next().value!];
+      while (pending.length > 0) {
+        const id = pending.pop()!;
+        if (!unvisited.delete(id)) continue;
+        component.push(id);
+        for (const next of adjacency.get(id)!) pending.push(next);
+      }
+      components.push(component);
+    }
+    const primary = components.reduce((largest, component) =>
+      component.length > largest.length ? component : largest, components[0]!);
+    const connected = new Set(primary);
+    const orphaned = [...seen].filter((id) => !connected.has(id));
+    if (orphaned.length > 0) {
+      errors.push({
+        type: 'disconnected_graph',
+        message: `Connect every node to the course tree. These nodes are separated: ${orphaned.join(', ')}.`,
+        nodeIds: orphaned,
+      });
+    }
+  }
+
+  return { isValid: errors.length === 0, errors };
+}
+
+/** Longest an id gets. Long enough to stay readable, short enough to log. */
+const MAX_ID = 32;
+
+/**
+ * Turn a title into an id a human can still read in a URL or an error message.
+ *
+ * Ids authored by hand collide — two modules both called "Review" is the normal
+ * case, not the edge case — so a taken id takes a numeric suffix rather than
+ * silently overwriting the node that got there first.
+ */
+export function slugId(title: string, taken: Set<string>): string {
+  const base =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, MAX_ID) || 'node';
+
+  if (!taken.has(base)) return base;
+
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}_${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}

@@ -5,12 +5,10 @@ echo ===================================================
 echo Starting Cardinal Skill...
 echo ===================================================
 
-:: Locate the frontend folder relative to batch script location
 set "SCRIPT_DIR=%~dp0"
-set "FRONTEND_DIR=%SCRIPT_DIR%frontend"
 
-if not exist "%FRONTEND_DIR%\package.json" (
-    echo Error: Could not locate frontend folder at "%FRONTEND_DIR%".
+if not exist "%SCRIPT_DIR%package.json" (
+    echo Error: Could not locate package.json at "%SCRIPT_DIR%".
     echo Please run this script from the repository root directory.
     pause
     exit /b 1
@@ -34,10 +32,10 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Install dependencies if node_modules is missing
-if not exist "%FRONTEND_DIR%\node_modules" (
+:: Install dependencies if Expo is missing (node_modules may exist after a partial install)
+if not exist "%SCRIPT_DIR%node_modules\.bin\expo.cmd" (
     echo Installing dependencies...
-    cd /d "%FRONTEND_DIR%"
+    cd /d "%SCRIPT_DIR%"
     call npm install
     if %errorlevel% neq 0 (
         echo Error: Dependency installation failed.
@@ -48,12 +46,12 @@ if not exist "%FRONTEND_DIR%\node_modules" (
 )
 
 echo.
-echo Open http://localhost:3000 in your browser.
+echo Open http://localhost:8081 in your browser.
 echo ===================================================
 echo.
 
-cd /d "%FRONTEND_DIR%"
-call npm run dev
+cd /d "%SCRIPT_DIR%"
+call npm run web -- --port 8081
 
 if %errorlevel% neq 0 (
     echo.

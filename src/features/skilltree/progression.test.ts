@@ -3,7 +3,18 @@ import { test } from 'node:test';
 
 // Explicit .ts extension: `node --test` strips types but does not resolve
 // extensionless specifiers the way Metro does.
-import { buildTree, deriveStatuses, evaluateSkillUnlockState, getSkillEligibility, levelForXp, levelProgress, nextQuests } from './progression.ts';
+import { demoMasteredIds, demoTree, demoXp } from './demoTree.ts';
+import {
+  buildTree,
+  deriveStatuses,
+  evaluateSkillUnlockState,
+  getSkillEligibility,
+  levelForXp,
+  levelProgress,
+  progressRatio,
+  nextQuests,
+  totalXp,
+} from './progression.ts';
 import type { SkillNode } from './types.ts';
 
 function node(id: string, sortOrder: number, xpReward = 50): SkillNode {
@@ -114,6 +125,28 @@ test('next quests are unlocked, unfinished, and syllabus-ordered', () => {
   );
 });
 
+test('the demo chart starts clean with available roots and no dangling prerequisites', () => {
+  const ids = new Set(demoTree.nodes.map((n) => n.id));
+  for (const { nodeId, prereqId } of demoTree.prereqs) {
+    assert.ok(ids.has(nodeId) && ids.has(prereqId), `dangling edge ${prereqId} -> ${nodeId}`);
+  }
+
+  const { status, cyclicNodeIds } = deriveStatuses(demoTree, demoMasteredIds);
+  assert.deepEqual(cyclicNodeIds, []);
+  assert.deepEqual(
+    new Set([...status.values()]),
+    new Set(['available', 'locked']),
+    'nothing is mastered before a mission is completed',
+  );
+
+  const earned = demoTree.nodes
+    .filter((n) => demoMasteredIds.includes(n.id))
+    .reduce((sum, n) => sum + n.xpReward, 0);
+  assert.equal(demoXp, earned, 'the meter would lie otherwise');
+  assert.equal(demoXp, 0);
+  assert.ok(demoXp < totalXp(demoTree.nodes), 'a full meter is a boring demo');
+});
+
 test('levels follow the quadratic XP curve', () => {
   assert.equal(levelForXp(0), 1);
   assert.equal(levelForXp(99), 1);
@@ -122,4 +155,64 @@ test('levels follow the quadratic XP curve', () => {
   assert.equal(levelForXp(-5), 1, 'negative XP is not a valid state, but must not crash');
   assert.equal(levelProgress(100), 0);
   assert.ok(levelProgress(250) > 0.4 && levelProgress(250) < 0.6);
+});
+
+test('course XP ratio normalizes against the displayed maximum', () => {
+  assert.equal(progressRatio(560, 690), 560 / 690);
+  assert.equal(Math.round(progressRatio(560, 690) * 10), 8);
+  assert.equal(progressRatio(-10, 690), 0);
+  assert.equal(progressRatio(900, 690), 1);
+  assert.equal(progressRatio(10, 0), 0);
+});
+
+test('a node that requires itself is quarantined as a loop, not silently freed', () => {
+  const tree = buildTree([node('x', 0), node('y', 1)], [{ nodeId: 'x', prereqId: 'x' }]);
+  const { status, cyclicNodeIds } = deriveStatuses(tree, []);
+  assert.equal(status.get('x'), 'locked');
+  assert.deepEqual(cyclicNodeIds, ['x']);
+  assert.equal(status.get('y'), 'available');
+});
+
+test('the reported cycle set does not depend on the order nodes arrive in', () => {
+  const prereqs = [
+    { nodeId: 'a', prereqId: 'b' },
+    { nodeId: 'b', prereqId: 'a' },
+    { nodeId: 'n', prereqId: 'c' },
+    { nodeId: 'c', prereqId: 'a' },
+  ];
+  const idsFor = (order: string[]) =>
+    deriveStatuses(buildTree(order.map((id, i) => node(id, i)), prereqs), []).cyclicNodeIds.sort();
+
+  assert.deepEqual(idsFor(['a', 'b', 'n', 'c']), ['a', 'b', 'c', 'n']);
+  assert.deepEqual(idsFor(['a', 'b', 'n', 'c']), idsFor(['a', 'b', 'c', 'n']));
+});
+
+test('the detail panel gives the same verdict the chart cell does', () => {
+  // 1. A prerequisite id nobody kept: the chart drops it, so the panel must too.
+  const dangling = buildTree([node('a', 0)], [{ nodeId: 'a', prereqId: 'deleted-node' }]);
+  const danglingPanel = evaluateSkillUnlockState('a', dangling, []);
+  assert.equal(deriveStatuses(dangling, []).status.get('a'), 'available');
+  assert.equal(danglingPanel.isUnlocked, true);
+  assert.equal(danglingPanel.totalPrerequisites, 0);
+  assert.equal(danglingPanel.blockedReason, null);
+
+  // 2. Downstream of a loop with its own prerequisite mastered: the chart locks
+  //    it because it can never really be reached, and the panel has to say so.
+  const looped = buildTree(
+    [node('a', 0), node('b', 1), node('c', 2)],
+    [
+      { nodeId: 'a', prereqId: 'b' },
+      { nodeId: 'b', prereqId: 'a' },
+      { nodeId: 'c', prereqId: 'a' },
+    ],
+  );
+  const loopedPanel = evaluateSkillUnlockState('c', looped, ['a']);
+  assert.equal(deriveStatuses(looped, ['a']).status.get('c'), 'locked');
+  assert.equal(loopedPanel.isUnlocked, false);
+  assert.match(loopedPanel.blockedReason ?? '', /loop/);
+
+  // 3. A node requiring itself: locked on both, and told why.
+  const selfish = buildTree([node('x', 0), node('y', 1)], [{ nodeId: 'x', prereqId: 'x' }]);
+  assert.equal(evaluateSkillUnlockState('x', selfish, []).isUnlocked, false);
+  assert.match(evaluateSkillUnlockState('x', selfish, []).blockedReason ?? '', /loop/);
 });

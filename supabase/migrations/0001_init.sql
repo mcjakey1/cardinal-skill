@@ -1,4 +1,4 @@
--- SkillQuest initial schema.
+-- Cardinal Skill initial schema.
 --
 -- Security model: every table has RLS enabled and denies by default. A student
 -- can only ever read their own progress rows. Instructors read aggregates for

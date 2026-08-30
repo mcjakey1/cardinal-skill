@@ -1,0 +1,52 @@
+-- An administrator can read the chart of a course they do not own.
+--
+-- THIS FINISHES A JOB 0028 LEFT HALF DONE, AND THE REASONING BELONGS HERE.
+-- 0028 gave an Administrator the courses table and the enrollments table, and
+-- redefined `owns_course` to mean owner-or-administrator so that "five
+-- migrations' worth of policies and functions" would follow. That reasoning
+-- holds wherever a policy CALLS `owns_course`. The node read does not.
+--
+-- `read nodes of enrolled courses` (0001:124, rewritten by 0014:21) spells the
+-- test out inline:
+--
+--     c.owner_id = auth.uid()
+--
+-- so redefining the helper moved nothing here. The result is an Administrator
+-- who can list every course on the site and open the chart of none of them:
+-- `skill_nodes` returns zero rows, and because `read missions of readable
+-- nodes` (0003:68) and `read prereqs of readable nodes` (0014:36) are existence
+-- checks against `skill_nodes` evaluated as the querying role, the missions and
+-- the edges vanish with the nodes. An empty canvas, on a real course, with no
+-- error to explain it.
+--
+-- That is not cosmetic. 0028's stated remedy for a bad course is archival
+-- rather than deletion, precisely so learner records survive — and the person
+-- performing it could not look at what they were archiving. Naming the course
+-- is not enough to tell two charts apart.
+--
+-- WHAT OPENS
+--   SELECT on `skill_nodes`, to an Administrator, over every course. Missions
+--   and prerequisites follow through the two inherited policies above, which is
+--   the inheritance 0003 says in as many words it was written to get.
+--
+--   Archived nodes included, deliberately. The owner branch of the existing
+--   policy carries no `not archived` guard — an owner sees what they retired,
+--   because 0014's restore path reads the flag off a fresh read. An
+--   Administrator judging whether to retire a whole course needs the same view
+--   for the same reason, and `aliveSubgraph` in `chartDraft.ts` is what hides
+--   archived nodes from anyone being asked to work through them.
+--
+-- WHAT STAYS SHUT
+--   * Writes. `for select` only. Authoring already reaches an Administrator
+--     through 0013's policies, which do call `owns_course`; nothing here adds
+--     to that, and nothing here grants the DELETE 0028 withheld on purpose.
+--   * Everyone else. A permissive policy is ORed with the existing one, so an
+--     ordinary account reads exactly what 0001 and 0014 already allowed it.
+--   * Student records. This is course content — nodes, missions, edges. Who
+--     completed what still comes from `course_student_progress` under 0005's
+--     rules, and `node_progress` is untouched here.
+
+create policy "administrators read any node"
+  on public.skill_nodes
+  for select
+  using (public.is_administrator());

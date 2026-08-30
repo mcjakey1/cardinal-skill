@@ -350,6 +350,33 @@ test('a deleted course still names itself, from what was written down at the tim
   );
 });
 
+test('taking a course over names the instructor who lost it', () => {
+  // The whole point of recording this one is the person no longer named
+  // anywhere on the course. A sentence that said only who holds it now would
+  // read as ordinary administration.
+  assert.equal(
+    describeAuditAction(entry({
+      action: 'course.owner_changed',
+      subjectName: 'M. Okafor',
+      courseTitle: 'Statistics 101',
+      detail: { was_name: 'A. Reyes' },
+    })),
+    'Made M. Okafor the owner of Statistics 101, taken from A. Reyes',
+  );
+});
+
+test('a course taken from an erased account still reads', () => {
+  assert.equal(
+    describeAuditAction(entry({
+      action: 'course.owner_changed',
+      subjectName: 'M. Okafor',
+      courseTitle: 'Statistics 101',
+      detail: {},
+    })),
+    'Made M. Okafor the owner of Statistics 101',
+  );
+});
+
 test('a rename says what the course used to be called', () => {
   assert.equal(
     describeAuditAction(entry({
@@ -624,7 +651,7 @@ test('changing a filter starts the record again rather than appending to it', ()
 const EXPORTED_AT = new Date('2026-08-30T09:15:00.000Z');
 
 /** The records, with the four provenance lines and the blank one taken off. */
-const csvRows = (csv: string) => csv.split('\r\n').slice(5);
+const csvRows = (csv: string) => csv.split('\r\n').slice(6);
 
 test('the header names every column the table shows', () => {
   assert.equal(
@@ -848,6 +875,38 @@ test('a date that is not a real day is refused, not silently rolled over', () =>
   }
 });
 
+test('an export that is only part of the record says so', () => {
+  // An administrator exported 100 rows of 149 under a header reading "Showing
+  // everything". That file goes to legal, who have no way to know it is a page.
+  // A partial record presented as a whole one is the single worst thing this
+  // export could do, so it is stated on its own line rather than folded into a
+  // sentence someone might skim.
+  const csv = auditCsv(
+    [row('1', '2026-08-30T12:00:00.000Z')],
+    'Showing everything, about Statistics 101.',
+    new Date('2026-08-30T09:15:00.000Z'),
+    true,
+  );
+  const lines = csv.split('\r\n');
+
+  assert.equal(lines[3], 'Rows,1');
+  assert.match(lines[4] ?? '', /^Complete,/);
+  assert.match(lines[4] ?? '', /more rows/i);
+});
+
+test('an export holding the whole of what was asked for says that instead', () => {
+  const csv = auditCsv(
+    [row('1', '2026-08-30T12:00:00.000Z')],
+    'Showing everything, about Statistics 101.',
+    new Date('2026-08-30T09:15:00.000Z'),
+    false,
+  );
+  const lines = csv.split('\r\n');
+
+  assert.match(lines[4] ?? '', /^Complete,/);
+  assert.doesNotMatch(lines[4] ?? '', /more rows/i);
+});
+
 test('the export says what it is, when it was taken and what produced it', () => {
   // Legal opens this file a year later with no screen beside it and no filename
   // left — the recipient renamed the attachment. The file has to introduce
@@ -863,14 +922,17 @@ test('the export says what it is, when it was taken and what produced it', () =>
   assert.equal(lines[1], 'Exported,2026-08-30T09:15:00.000Z');
   assert.equal(lines[2], 'Covers,"Showing people, by M. Okafor."');
   assert.equal(lines[3], 'Rows,1');
-  assert.equal(lines[4], '');
-  assert.equal(lines[5], 'When,Who,Acting as,What they did,Person,Course,Action,Detail');
+  assert.equal(lines[5], '');
+  assert.equal(lines[6], 'When,Who,Acting as,What they did,Person,Course,Action,Detail');
 });
 
-test('an unfiltered export says it is only as much as was loaded', () => {
+test('an unfiltered export names the absence of a filter', () => {
+  // Completeness used to be hedged inside this sentence, which meant a filtered
+  // export — the one an administrator actually sends to legal — carried no
+  // hedge at all. It has its own line now, and this one only has to say that
+  // nothing was narrowed.
   const csv = auditCsv([], null, new Date('2026-08-30T09:15:00.000Z'));
   assert.match(csv.split('\r\n')[2] ?? '', /no filter/i);
-  assert.match(csv.split('\r\n')[2] ?? '', /loaded/i);
 });
 
 test('a name that begins like a formula is not handed to the spreadsheet as one', () => {

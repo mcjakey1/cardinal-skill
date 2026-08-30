@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import { supabase } from '@/lib/supabase';
+import { lockAdmin } from '@/lib/admin';
 import { clearCourseCaches } from '@/lib/courseCache';
 import { fetchInstructorVerification } from '@/features/skilltree/courseCatalog';
 import {
@@ -161,6 +162,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     setSession(null);
+    // The admin gate is module state, so without this it survives the sign-out
+    // and the next person to sign in on this page load walks straight into the
+    // admin area. The server refuses them everything, so it is not an
+    // escalation — but the panel tells the reader in writing that nothing is
+    // left open behind them, and that has to be true.
+    lockAdmin();
     await Promise.allSettled([
       AsyncStorage.removeItem(SESSION_KEY),
       supabase.auth.signOut(),

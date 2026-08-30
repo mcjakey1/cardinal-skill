@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { usePixelTransition } from '@/ui/PixelTransition';
 import Head from 'expo-router/head';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { supabase } from '@/lib/supabase';
@@ -319,7 +320,7 @@ export default function Upload() {
       <DitherField from={t.ground} to={t.panel} bands={7} flat={lowBandwidth} />
       <KeyboardAvoidingView
         style={styles.fill}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={KEYBOARD_BEHAVIOR}
       >
         <ScrollView
           style={styles.scroll}

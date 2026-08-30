@@ -36,3 +36,9 @@ CardinalSkill.pdf
 
 expo-env.d.ts
 # @end expo-cli
+# Local QA and tooling scratch — not part of the app.
+.scratch/
+.playwright-cli/
+graphify-out/
+.claude/
+.impeccable/

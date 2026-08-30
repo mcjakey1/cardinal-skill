@@ -1,10 +1,11 @@
 import Head from 'expo-router/head';
 import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth, type AuthRole } from '@/auth/AuthContext';
 import { usePrefs } from '@/lib/prefs';
+import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { motion, space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
@@ -127,7 +128,7 @@ export default function AuthScreen() {
         />
       </Head>
       <DitherField bands={11} flat={prefs.lowBandwidth} />
-      <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.fill} behavior={KEYBOARD_BEHAVIOR}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[

@@ -97,6 +97,9 @@ export function NavBar() {
 
   return (
     <View
+      // The cells announce as tabs; without this they announce as five loose
+      // tabs with no set to be one of.
+      accessibilityRole="tablist"
       style={[
         styles.bar,
         {

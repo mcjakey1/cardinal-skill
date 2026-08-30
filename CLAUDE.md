@@ -31,25 +31,49 @@ Start points by task:
 | Who can read what | `supabase/migrations/0001_init.sql` |
 | Syllabus → tree | `supabase/functions/parse-syllabus/index.ts` |
 
-## Working with the Claude API in this repo
+## Working with the AI providers in this repo
 
-The syllabus parser calls Claude. When you touch it:
+No code here calls Claude or the Anthropic SDK. There are two providers, both
+reached only from `supabase/functions/`:
 
-- The model is `claude-opus-5`. Do not swap it for a cheaper model to save cost —
-  that is a product decision, not a code cleanup.
-- Load the `claude-api` skill before editing `supabase/functions/parse-syllabus/`.
-  Several API shapes changed recently and answering from memory produces code
-  that returns a 400.
-- The parser uses structured outputs (`output_config.format`) so the response is
-  schema-valid JSON. Do not replace it with prompt-and-hope JSON parsing.
-- Always check `stop_reason === 'refusal'` before reading `content`. A refusal is
-  an HTTP 200 with empty or partial content.
-- Requests with large `max_tokens` stream and call `.finalMessage()`, to stay
-  under the HTTP timeout.
+| Provider | Wrapper | Used by |
+| --- | --- | --- |
+| Google Gemini (`gemini-3.1-flash-lite`) | `_shared/gemini.ts` | `parse-syllabus` |
+| b.ai | `_shared/bai.ts` | `study-companion`, `suggest-subtree` |
+
+The model ids live at the top of each wrapper. Swapping one for something
+cheaper is a product decision, not a code cleanup.
+
+The rules that actually apply:
+
+- **Authorize before you spend.** The pipeline costs real money and takes
+  minutes. Check ownership *before* the first provider call, not after — RLS
+  makes a course readable to everyone enrolled, so a readable course is not an
+  owned one. `parse-syllabus` scopes on `owner_id` and returns 403.
+- **A refusal is an HTTP 200.** Gemini signals one with `finishReason` (e.g.
+  `SAFETY`) or `promptFeedback.blockReason` and no text. Check those *before*
+  reading the candidate's content, or an empty-parts refusal looks like an empty
+  response. Status matters downstream: 422 is final, 502 is retried at full
+  price by `parse-syllabus`.
+- **Structured output, not prompt-and-hope.** Gemini requests set
+  `generationConfig.responseJsonSchema` with
+  `responseMimeType: 'application/json'`. The 400 fallbacks are gated on the
+  provider naming the field it rejected — an unrelated 400 must surface rather
+  than silently re-running the call without its schema.
+- **Never `JSON.parse` provider text directly.** Use `parseJsonObjectText`
+  (`_shared/bai.ts`). Fallback paths put the schema in the prompt and routinely
+  return ```json-fenced output that a raw parse rejects — after you have paid.
+- **Bound every client-supplied string that reaches a system prompt.** Item and
+  length caps, on the RLS path as well as the demo path. An unbounded field is
+  both unbounded token spend and prompt injection into the system channel.
+- **AI output is untrusted.** Parser graphs go through
+  `_shared/courseGraph.ts` (`normalizeTieredCourseDag` repairs cycles, orphans,
+  dangling refs, and disconnection) before anything is persisted.
+- **Every call carries an explicit timeout** so it stays under the Edge Function
+  HTTP timeout; see `fetchWithTimeout` in `_shared/gemini.ts`.
 
 ## Skills to reach for
 
-- `claude-api` — before any change to the Edge Function or model configuration.
 - `frontend-design` — before adding or reshaping UI. `DESIGN.md` is the brief;
   read it rather than inventing a second visual direction.
 - `graphify` — codebase questions, once the graph is built.

@@ -171,13 +171,19 @@ Deno.serve(async (req) => {
     return json({ error: 'This parser accepts text, Markdown, and text-based PDF files.' }, 415);
   }
 
+  // Owner-scoped before the spend, not after it. RLS makes a course readable to
+  // everyone enrolled, but only the owner can write skill_nodes (0002). Without
+  // owner_id here an enrolled non-owner ran the full three-call pipeline and
+  // then failed at the RLS-blocked insert — the money is already gone by then.
+  // Same shape as name-quest: one query, 403, no existence oracle.
   const { data: course, error: courseError } = await supabase
     .from('courses')
     .select('id, title')
     .eq('id', courseId)
+    .eq('owner_id', auth.user.id)
     .maybeSingle();
   if (courseError) return json({ error: courseError.message }, 500);
-  if (!course) return json({ error: 'Course not found.' }, 404);
+  if (!course) return json({ error: 'Only the course owner can generate its skill tree.' }, 403);
 
   const { count: existingNodeCount, error: existingNodeError } = await supabase
     .from('skill_nodes')

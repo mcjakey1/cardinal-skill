@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -13,6 +13,7 @@ import {
 import type { StudentProfile, StudyPace } from '@/features/skilltree/types';
 import { usePrefs } from '@/lib/prefs';
 import { createStore } from '@/lib/store';
+import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
@@ -261,7 +262,7 @@ function Shell({
       <DitherField flat={flat} />
       <KeyboardAvoidingView
         style={styles.fill}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={KEYBOARD_BEHAVIOR}
       >
         <ScrollView contentContainerStyle={[styles.body, { paddingTop: insets + space.cell }]}>
           {children}

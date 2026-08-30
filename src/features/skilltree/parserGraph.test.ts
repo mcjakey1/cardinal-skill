@@ -5,7 +5,6 @@ import {
   ensureSingleCourseDag,
   normalizeTieredCourseDag,
   placeSynthesisAtCourseEnd,
-  validateTieredCourseDag,
 } from '../../../supabase/functions/_shared/courseGraph.ts';
 
 test('parser graph cleanup produces one connected acyclic graph', () => {
@@ -50,47 +49,6 @@ test('parser graph cleanup removes redundant transitive bypass edges', () => {
   ]);
 
   assert.deepEqual(nodes[2]?.prereq_keys, ['karnaugh-maps']);
-});
-
-test('four-tier parser graphs keep direct same-tier and cross-tier prerequisites', () => {
-  const nodes = validateTieredCourseDag([
-    { key: 'foundations', tier: 1, prereq_keys: [] },
-    { key: 'method', tier: 2, prereq_keys: ['foundations'] },
-    { key: 'application', tier: 3, prereq_keys: ['foundations', 'method'] },
-    { key: 'advanced-application', tier: 3, prereq_keys: ['application'] },
-    { key: 'synthesis', tier: 4, prereq_keys: ['advanced-application'] },
-  ]);
-
-  assert.deepEqual(nodes.map((node) => node.tier), [1, 2, 3, 3, 4]);
-  assert.deepEqual(nodes[2]?.prereq_keys, ['method']);
-  assert.deepEqual(nodes[3]?.prereq_keys, ['application']);
-});
-
-test('four-tier parser graphs reject orphans and backward edges', () => {
-  assert.throws(() => validateTieredCourseDag([
-    { key: 'foundation', tier: 1, prereq_keys: [] },
-    { key: 'method', tier: 2, prereq_keys: [] },
-    { key: 'application', tier: 3, prereq_keys: ['method'] },
-    { key: 'synthesis', tier: 4, prereq_keys: ['application'] },
-  ]), /orphan/);
-
-  assert.throws(() => validateTieredCourseDag([
-    { key: 'foundation', tier: 1, prereq_keys: ['method'] },
-    { key: 'method', tier: 2, prereq_keys: ['foundation'] },
-    { key: 'application', tier: 3, prereq_keys: ['method'] },
-    { key: 'synthesis', tier: 4, prereq_keys: ['application'] },
-  ]), /moves backward/);
-});
-
-test('a connected advanced branch may terminate before Tier 4', () => {
-  const nodes = validateTieredCourseDag([
-    { key: 'foundation', tier: 1, prereq_keys: [] },
-    { key: 'method', tier: 2, prereq_keys: ['foundation'] },
-    { key: 'terminal-application', tier: 3, prereq_keys: ['method'] },
-    { key: 'synthesis', tier: 4, prereq_keys: ['method'] },
-  ]);
-
-  assert.deepEqual(nodes.find((node) => node.key === 'terminal-application')?.prereq_keys, ['method']);
 });
 
 test('parser normalization repairs orphan tiers and disconnected fragments', () => {

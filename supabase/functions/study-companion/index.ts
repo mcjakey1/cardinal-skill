@@ -66,7 +66,12 @@ Deno.serve(async (req) => {
   }
   if (question.length > 4000) return json({ error: 'Keep the question under 4000 characters.' }, 413);
 
-  const isBundledDemo = body.courseId.startsWith('demo');
+  // Exactly the one bundled fixture course (DEMO_COURSE_ID in
+  // src/features/skilltree/demoTree.ts), never a prefix. `startsWith('demo')`
+  // let any caller pass "demo-x" to skip every DB check and supply the whole
+  // system prompt themselves — including the "do not complete graded work"
+  // guardrail — turning this into an open LLM proxy on the org's key.
+  const isBundledDemo = body.courseId === 'demo';
   let course: { title: string } | null = null;
   let node: {
     id: string;
@@ -113,18 +118,23 @@ Deno.serve(async (req) => {
     missions = storedMissions ?? [];
   }
 
-  const courseTitle = course?.title ?? body.course ?? 'Untitled course';
-  const syllabusTopic = node.syllabus_topic ?? body.syllabus_skill ?? node.description;
+  // Every client-supplied fallback below reaches the system channel, so each one
+  // goes through the same caps the demo branch uses. These are reached on the
+  // RLS path too, whenever a stored column is null. Re-bounding an already
+  // bounded demo value is a no-op.
+  const courseTitle = course?.title ?? (bounded(body.course, 160) || 'Untitled course');
+  const syllabusTopic = node.syllabus_topic ?? (bounded(body.syllabus_skill, 500) || node.description);
   const learningObjectives = node.learning_objectives?.length
     ? node.learning_objectives
-    : body.learning_objectives ?? [];
+    : boundedList(body.learning_objectives, 12, 500);
+  const prerequisites = boundedList(body.prerequisites, 12, 200);
   const systemPrompt = `You are the Cardinal Skill AI Academic Companion.
 
 You are assisting a student in the course "${courseTitle}", specifically on the node "${node.title}" (topic: "${syllabusTopic}").
 Learning objectives: ${JSON.stringify(learningObjectives)}.
 Universal competency: ${node.universal_skill ?? 'Not specified'}.
-Prerequisites: ${JSON.stringify(body.prerequisites ?? [])}.
-Active missions: ${JSON.stringify(missions ?? body.missions ?? [])}.
+Prerequisites: ${JSON.stringify(prerequisites)}.
+Active missions: ${JSON.stringify(missions)}.
 
 Guide the student with hints, Socratic questions, and structured explanations. Do not complete graded work or simply give away solutions. Stay within the supplied syllabus context. If context is insufficient, say so and ask one focused question.`;
   if (!apiKey) return json({ error: 'The study companion is not configured yet.' }, 503);

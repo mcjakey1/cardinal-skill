@@ -8,9 +8,6 @@ import {
   HELP_THRESHOLD,
   learnerMode,
   paceTarget,
-  personalXpPerLevel,
-  PERSONAL_XP_MAX_FACTOR,
-  PERSONAL_XP_MIN_FACTOR,
   rankNextQuests,
   shouldOfferHelp,
   struggleScore,
@@ -18,7 +15,7 @@ import {
 import { demoTree } from './demoTree.ts';
 import { ALL_PROFILES, generateSignals, LEARNER_PROFILES } from './learners.ts';
 import type { LearnerProfileId } from './learners.ts';
-import { deriveStatuses, nextQuests, XP_PER_LEVEL } from './progression.ts';
+import { deriveStatuses, nextQuests } from './progression.ts';
 import type { LearnerSignals, NodeSignal, SkillNode } from './types.ts';
 
 const SEED = 20260805;
@@ -55,14 +52,6 @@ test('every profile produces finite, non-negative numbers everywhere', () => {
 
     const pace = paceTarget(signals);
     assert.ok(Number.isFinite(pace) && pace > 0, `${where} pace ${pace}`);
-
-    const xpPerLevel = personalXpPerLevel(signals);
-    assert.ok(Number.isInteger(xpPerLevel), `${where} xp/level is a whole number`);
-    assert.ok(
-      xpPerLevel >= XP_PER_LEVEL * PERSONAL_XP_MIN_FACTOR &&
-        xpPerLevel <= XP_PER_LEVEL * PERSONAL_XP_MAX_FACTOR,
-      `${where} xp/level ${xpPerLevel} escaped the clamp`,
-    );
 
     const quests = rankNextQuests(demoTree, [], signals, 3);
     const { status } = deriveStatuses(demoTree, []);
@@ -147,26 +136,11 @@ test('a struggling learner is sent at a cheaper quest than a fast one', () => {
   );
 });
 
-test('the personal XP curve is gentler for the slow learner and stays comparable', () => {
-  const slow = personalXpPerLevel(signalsFor('slow'));
-  const fast = personalXpPerLevel(signalsFor('fast'));
-
-  assert.ok(slow < fast, `slow ${slow} should need less XP per level than fast ${fast}`);
-  for (const value of [slow, fast]) {
-    assert.ok(
-      value >= XP_PER_LEVEL * PERSONAL_XP_MIN_FACTOR &&
-        value <= XP_PER_LEVEL * PERSONAL_XP_MAX_FACTOR,
-      `${value} escaped the clamp that keeps two students' levels comparable`,
-    );
-  }
-});
-
 test('a brand-new learner gets defaults rather than a divide by zero', () => {
   const fresh: LearnerSignals = { nodeSignals: [], streakDays: 0, daysActive: 0 };
 
   assert.equal(learnerMode(demoTree, fresh), 'steady');
   assert.equal(paceTarget(fresh), DEFAULT_PACE);
-  assert.equal(personalXpPerLevel(fresh), XP_PER_LEVEL);
   assert.deepEqual(
     rankNextQuests(demoTree, [], fresh, 2).map((n) => n.id),
     nextQuests(demoTree, [], 2).map((n) => n.id),

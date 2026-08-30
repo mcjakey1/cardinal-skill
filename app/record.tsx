@@ -27,7 +27,7 @@ import {
   fetchRecordEvents,
   setLeaderboardVisibility,
 } from '@/features/skilltree/recordQueries';
-import { XP_PER_LEVEL, levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
+import { levelForXp, levelProgress, totalXp } from '@/features/skilltree/progression';
 import { fetchLiveTree, treeQueryKeys } from '@/features/skilltree/queries';
 import { rollUpProgress } from '@/features/skilltree/rollup';
 import { StampsList } from '@/features/skilltree/StampsList';
@@ -323,7 +323,7 @@ export default function Record() {
                 title={playerTitle(level)}
                 xp={dossier.xp}
                 availableXp={dossier.availableXp}
-                levelProgress={levelProgress(dossier.xp, XP_PER_LEVEL)}
+                levelProgress={levelProgress(dossier.xp)}
                 mastered={dossier.masteredIds.length}
                 totalNodes={dossier.totalNodes}
                 streak={dossier.streak}

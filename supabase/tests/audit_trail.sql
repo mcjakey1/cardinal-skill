@@ -28,8 +28,10 @@
 --   chicken-and-egg an operator hits on a new project, and 0028 says so.
 --
 --   Fixtures are created with no claims set, so the triggers return early and
---   the fixture itself writes no rows. Every count below therefore starts from
---   a log that holds only what the test just did.
+--   the fixture writes no rows — with one deliberate exception. 0042 records an
+--   `administrators` insert however it was made, precisely because a grant made
+--   out of band is the one nobody could see before, so the fixture's own admin
+--   row is in the log from the start. Counts below are scoped accordingly.
 
 begin;
 
@@ -84,8 +86,43 @@ values
 
 do $$
 begin
-  assert (select count(*) from public.admin_audit_log) = 0,
-    'a fixture written with no signed-in account records nothing';
+  -- The fixture inserts an `administrators` row directly, which 0042 records:
+  -- an authority grant made out of band is the one an auditor most needs to
+  -- see, and it used to write nothing at all. So the log is not empty here —
+  -- it holds exactly that grant, filed against no signed-in user.
+  assert (select count(*) from public.admin_audit_log
+          where action <> 'administrator.granted') = 0,
+    'a fixture written with no signed-in account records nothing else';
+
+  assert (select count(*) from public.admin_audit_log
+          where action = 'administrator.granted'
+            and actor_id is null
+            and actor_name = 'Direct database access'
+            and detail ->> 'out_of_band' = 'true') = 1,
+    'an administrator created out of band is recorded as such, not as a person';
+end $$;
+
+-- The badge that gates the whole catalog is granted by a trigger on sign-up.
+-- 0028 made that open on purpose and 0042 does not change it; what 0042 adds is
+-- that it no longer happens silently.
+do $$
+declare v_rows integer;
+begin
+  insert into auth.users (id, instance_id, aud, role, email, encrypted_password,
+                          email_confirmed_at, created_at, updated_at, raw_user_meta_data)
+  values ('5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a',
+          '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+          'signup@example.test', 'x', now(), now(), now(), '{"role":"instructor"}'::jsonb);
+
+  select count(*) into v_rows from public.admin_audit_log
+  where action = 'instructor.verified'
+    and subject_user_id = '5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a'
+    and detail ->> 'at_signup' = 'true';
+  assert v_rows = 1, 'a badge granted at sign-up says so in the record';
+
+  delete from public.admin_audit_log
+   where subject_user_id = '5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a';
+  delete from auth.users where id = '5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a';
 end $$;
 
 -- ===========================================================================
@@ -898,5 +935,296 @@ begin
   assert v_row.detail ->> 'nodes_updated' = '0',
     'a publish whose only effect is repairing XP is an event';
 end $$;
+
+-- ------------------------------------------- 0041: seven authority gaps
+
+-- 0041 closed seven ways an account reached past the authority it was given.
+-- Six of the seven are refusals, and a refusal is the one thing a schema can
+-- lose without anybody noticing, so each is asserted from the side that used to
+-- succeed. Where the fix could plausibly have closed too much — an owner
+-- deleting their own node, a student with no badge on their own ladder — the
+-- permitted case is asserted next to the refused one under the same name.
+
+-- Fixtures of its own. The accounts at the top of this file have been enrolled,
+-- published, retitled and audited by every check between there and here, so a
+-- fresh set is what keeps these counts starting from zero. Claims cleared
+-- first, for the reason the header gives: a fixture must write no audit rows.
+select set_config('request.jwt.claims', '', true);
+
+insert into auth.users (id, email) values
+  ('55555555-5555-5555-5555-555555555555', 'author@example.test'),
+  ('66666666-6666-6666-6666-666666666666', 'joiner@example.test'),
+  ('77777777-7777-7777-7777-777777777777', 'quiet@example.test');
+
+update public.profiles set display_name = 'E. Author'
+  where id = '55555555-5555-5555-5555-555555555555';
+-- Opted out of peer visibility, so this account reaches its own ladder only
+-- through the `e.user_id = auth.uid()` branch — the one the revoked badge broke.
+update public.profiles set display_name = 'Q. Quiet', social_opt_in = false
+  where id = '77777777-7777-7777-7777-777777777777';
+
+insert into public.verified_instructors (user_id)
+  values ('55555555-5555-5555-5555-555555555555')
+  on conflict (user_id) do nothing;
+
+insert into public.courses (id, owner_id, title, course_kind, publication_status,
+                            discoverability, published_at)
+values
+  ('dddddddd-0000-0000-0000-000000000001', '55555555-5555-5555-5555-555555555555',
+   'Ecology 200', 'official', 'published', 'public', now()),
+  ('dddddddd-0000-0000-0000-000000000002', '55555555-5555-5555-5555-555555555555',
+   'Ecology 300', 'official', 'draft', 'private', null);
+
+insert into public.skill_nodes (id, course_id, title, kind, xp_reward, x, y, sort_order, graded)
+values
+  ('eeeeeeee-0000-0000-0000-000000000001', 'dddddddd-0000-0000-0000-000000000001',
+   'Field sampling', 'topic', 60, 0, 0, 1, true),
+  ('eeeeeeee-0000-0000-0000-000000000002', 'dddddddd-0000-0000-0000-000000000001',
+   'Quadrat design', 'topic', 20, 1, 0, 2, true);
+
+insert into public.missions (id, node_id, title, xp_reward, sort_order)
+values ('ffffffff-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000001',
+        'Transects', 60, 1);
+
+insert into public.enrollments (user_id, course_id, role)
+values ('77777777-7777-7777-7777-777777777777', 'dddddddd-0000-0000-0000-000000000001',
+        'student');
+
+-- 0033 revoked both of these from `public` and called them internal. Asserted
+-- as privileges rather than as a failing call because the privilege is the
+-- claim: a `revoke ... from public` that leaves the `anon` and `authenticated`
+-- grants standing reads identical in the migration and is a client call away in
+-- the database.
+do $$
+begin
+  assert not has_function_privilege('authenticated',
+      'public.course_ladder_participants(uuid)', 'execute'),
+    'the ladder predicates are not callable by a client';
+  assert not has_function_privilege('anon',
+      'public.course_ladder_participants(uuid)', 'execute'),
+    'the ladder predicates are not callable by a client';
+  assert not has_function_privilege('authenticated',
+      'public.can_view_course_ladder(uuid, uuid)', 'execute'),
+    'the ladder predicates are not callable by a client';
+  assert not has_function_privilege('anon',
+      'public.can_view_course_ladder(uuid, uuid)', 'execute'),
+    'the ladder predicates are not callable by a client';
+
+  -- The report that calls them both stays reachable. Revoking the predicates
+  -- and not the thing they were factored out of is the whole shape of the fix.
+  assert has_function_privilege('authenticated',
+      'public.student_leaderboard(uuid)', 'execute'),
+    'the ladder predicates are not callable by a client';
+end $$;
+
+do $$
+begin
+  assert not has_function_privilege('authenticated',
+      'public.node_prerequisites_mastered(uuid, uuid)', 'execute'),
+    'node_prerequisites_mastered is not callable by a client';
+  assert not has_function_privilege('anon',
+      'public.node_prerequisites_mastered(uuid, uuid)', 'execute'),
+    'node_prerequisites_mastered is not callable by a client';
+end $$;
+
+-- The rest of the sweep, by name rather than one assert each. A new definer
+-- helper added to this list without its revoke fails here instead of in an
+-- audit.
+do $$
+declare v_reachable text;
+begin
+  select string_agg(p.proname, ', ' order by p.proname) into v_reachable
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public'
+    and p.prosecdef
+    and p.proname in (
+      'can_record_course_progress', 'write_admin_audit',
+      'audit_course_change', 'audit_enrollment_change',
+      'enforce_course_distribution_authority', 'enroll_student_course_owner',
+      'handle_new_user_profile', 'protect_mission_progress_award',
+      'protect_node_progress_award', 'sync_mission_course',
+      'sync_prereq_course', 'verify_instructor_on_signup')
+    and (has_function_privilege('anon', p.oid, 'execute')
+      or has_function_privilege('authenticated', p.oid, 'execute'));
+
+  assert v_reachable is null,
+    'no internal definer helper is callable by a client';
+end $$;
+
+-- 0013's node DELETE, which `owns_course` widened to administrators in 0028.
+select set_config('request.jwt.claims',
+  '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+set local role authenticated;
+delete from public.skill_nodes where id = 'eeeeeeee-0000-0000-0000-000000000001';
+reset role;
+
+-- And the owner of that course, on the spare node, to show the policy still
+-- permits what it was written to permit.
+select set_config('request.jwt.claims',
+  '{"sub":"55555555-5555-5555-5555-555555555555","role":"authenticated"}', true);
+set local role authenticated;
+delete from public.skill_nodes where id = 'eeeeeeee-0000-0000-0000-000000000002';
+reset role;
+
+do $$
+begin
+  assert (select count(*) from public.skill_nodes
+          where id = 'eeeeeeee-0000-0000-0000-000000000001') = 1,
+    'an administrator cannot delete another instructor''s node, its owner can';
+  -- The cascade is the reason this one matters rather than the row count: the
+  -- missions on that node, and every learner record hanging off them, go with it.
+  assert (select count(*) from public.missions
+          where id = 'ffffffff-0000-0000-0000-000000000001') = 1,
+    'an administrator cannot delete another instructor''s node, its owner can';
+  assert (select count(*) from public.skill_nodes
+          where id = 'eeeeeeee-0000-0000-0000-000000000002') = 0,
+    'an administrator cannot delete another instructor''s node, its owner can';
+end $$;
+
+-- 0004's help gate, reached the way 0022 made reachable: join from the catalog,
+-- then re-price the owner's node.
+select set_config('request.jwt.claims',
+  '{"sub":"66666666-6666-6666-6666-666666666666","role":"authenticated"}', true);
+set local role authenticated;
+select public.join_published_course('dddddddd-0000-0000-0000-000000000001');
+
+do $$
+declare v_refused boolean := false;
+begin
+  begin
+    perform public.request_help_subtree(
+      'eeeeeeee-0000-0000-0000-000000000001', 10,
+      jsonb_build_array(
+        jsonb_build_object('id', '5a5a5a5a-0000-0000-0000-000000000001',
+          'title', 'Step 1', 'description', '', 'kind', 'topic',
+          'xp_reward', 25, 'x', 2, 'y', 0, 'sort_order', 1),
+        jsonb_build_object('id', '5a5a5a5a-0000-0000-0000-000000000002',
+          'title', 'Step 2', 'description', '', 'kind', 'topic',
+          'xp_reward', 25, 'x', 3, 'y', 0, 'sort_order', 2)),
+      '[]'::jsonb,
+      jsonb_build_array(jsonb_build_object(
+        'id', 'ffffffff-0000-0000-0000-000000000001', 'xp_reward', 10)));
+  exception when others then
+    v_refused := true;
+  end;
+  assert v_refused,
+    'a self-service joiner cannot re-price an official course';
+end $$;
+reset role;
+
+do $$
+begin
+  -- The refusal above could also be a malformed request. These two are what the
+  -- attack actually took, so they are what proves it did not land.
+  assert (select xp_reward from public.skill_nodes
+          where id = 'eeeeeeee-0000-0000-0000-000000000001') = 60,
+    'a self-service joiner cannot re-price an official course';
+  assert (select count(*) from public.skill_nodes
+          where parent_node_id = 'eeeeeeee-0000-0000-0000-000000000001') = 0,
+    'a self-service joiner cannot re-price an official course';
+end $$;
+
+-- 0030's roster fallback, on a course with nobody enrolled on it.
+select set_config('request.jwt.claims',
+  '{"sub":"55555555-5555-5555-5555-555555555555","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+begin
+  -- 0041 stopped the fallback listing colleagues; 0042 stopped it reaching a
+  -- verified instructor at all. The reason is that 0028 grants the badge to
+  -- anyone who picks the instructor tab at sign-up, so "verified" was never a
+  -- boundary here — an administrator proved it by registering, making an empty
+  -- course, and reading five strangers' email addresses.
+  begin
+    perform public.course_roster('dddddddd-0000-0000-0000-000000000002');
+    assert false, 'a verified instructor cannot read the roster fallback';
+  exception when sqlstate '42501' then
+    null;
+  end;
+end $$;
+reset role;
+
+-- The administrator still gets it, and still without colleagues in it.
+select set_config('request.jwt.claims',
+  '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+begin
+  assert not exists (select 1 from public.course_roster('dddddddd-0000-0000-0000-000000000002') r
+                     where r.user_id = '11111111-1111-1111-1111-111111111111'),
+    'the roster fallback does not disclose colleagues';
+  -- An account that is neither staff nor enrolled is a learner and is still
+  -- listed. Excluding everybody would pass the assert above and break the
+  -- feature it is guarding.
+  assert exists (select 1 from public.course_roster('dddddddd-0000-0000-0000-000000000002') r
+                 where r.user_id = '66666666-6666-6666-6666-666666666666'),
+    'the roster fallback still lists learners for an administrator';
+end $$;
+reset role;
+
+-- 0037's course trigger, on the column that decides who may use every other
+-- policy on the row.
+select set_config('request.jwt.claims',
+  '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+set local role authenticated;
+update public.courses set owner_id = '22222222-2222-2222-2222-222222222222'
+  where id = 'dddddddd-0000-0000-0000-000000000002';
+reset role;
+
+do $$
+declare v_row public.admin_audit_log;
+begin
+  select * into v_row from public.admin_audit_log where action = 'course.owner_changed';
+
+  assert (select count(*) from public.admin_audit_log
+          where action = 'course.owner_changed') = 1,
+    'taking ownership of a course is recorded';
+  -- The hat is read from the old owner. Taken from NEW, the administrator who
+  -- just made themselves the owner files their own seizure as housekeeping.
+  assert v_row.actor_role = 'administrator',
+    'taking ownership of a course is recorded';
+  assert v_row.subject_user_id = '22222222-2222-2222-2222-222222222222'::uuid,
+    'taking ownership of a course is recorded';
+  assert v_row.detail ->> 'was' = '55555555-5555-5555-5555-555555555555',
+    'taking ownership of a course is recorded';
+  -- Denormalised for the reason 0036 gives for actor_name: the account this was
+  -- taken from may be erased, and "taken from somebody" is not an audit row.
+  assert v_row.detail ->> 'was_name' = 'E. Author',
+    'taking ownership of a course is recorded';
+end $$;
+
+-- 0033's instructor exclusion, against 0028's revocation-as-a-stamp.
+insert into public.verified_instructors (user_id, revoked_at)
+  values ('77777777-7777-7777-7777-777777777777', now())
+  on conflict (user_id) do update set revoked_at = now();
+
+select set_config('request.jwt.claims',
+  '{"sub":"77777777-7777-7777-7777-777777777777","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+begin
+  assert (select count(*) from public.student_leaderboard('dddddddd-0000-0000-0000-000000000001')
+          where is_current_user) = 1,
+    'a revoked badge does not hide a student from their own ladder';
+end $$;
+reset role;
+
+-- The same account with the badge live. 0029's rule is what this half protects:
+-- fixing the revoked case by dropping the exclusion would pass the assert above
+-- and put every instructor back on the learner ladder.
+update public.verified_instructors set revoked_at = null
+  where user_id = '77777777-7777-7777-7777-777777777777';
+
+select set_config('request.jwt.claims',
+  '{"sub":"77777777-7777-7777-7777-777777777777","role":"authenticated"}', true);
+set local role authenticated;
+do $$
+begin
+  assert (select count(*) from public.student_leaderboard('dddddddd-0000-0000-0000-000000000001')
+          where is_current_user) = 0,
+    'a revoked badge does not hide a student from their own ladder';
+end $$;
+reset role;
 
 rollback;

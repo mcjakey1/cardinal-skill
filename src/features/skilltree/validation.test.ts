@@ -118,3 +118,18 @@ test('connectivity reports the small orphan even when it is listed first', () =>
 
   assert.deepEqual(result.errors[0]!.nodeIds, ['orphan']);
 });
+
+test('the author-facing cycle report does not depend on node order either', () => {
+  const prereqs = [
+    { nodeId: 'a', prereqId: 'b' },
+    { nodeId: 'b', prereqId: 'a' },
+    { nodeId: 'n', prereqId: 'c' },
+    { nodeId: 'c', prereqId: 'a' },
+  ];
+  const idsFor = (order: string[]) =>
+    validateGraph(order.map(node), prereqs)
+      .errors.find((e) => e.type === 'cycle_detected')!.nodeIds.slice().sort();
+
+  assert.deepEqual(idsFor(['a', 'b', 'n', 'c']), ['a', 'b', 'c', 'n']);
+  assert.deepEqual(idsFor(['a', 'b', 'n', 'c']), idsFor(['a', 'b', 'c', 'n']));
+});

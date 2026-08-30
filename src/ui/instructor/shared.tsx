@@ -210,6 +210,9 @@ export const styles = StyleSheet.create({
   rowInline: { flexDirection: 'row', alignItems: 'center', gap: lms.space.md, minWidth: 0 },
   rowWrap: { flexDirection: 'row', alignItems: 'center', gap: lms.space.sm, flexWrap: 'wrap' },
   spacer: { flex: 1 },
+  // Sits in the toolbar row beside the disabled Publish, so it wraps rather
+  // than pushing the buttons off a narrow screen.
+  publishBlocked: { flexShrink: 1, maxWidth: 420 },
   strong: { fontWeight: '600' },
   figure: {
     flexDirection: 'row',
@@ -280,7 +283,9 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: lms.space.md,
-    minHeight: 38,
+    // The rail is the workspace's primary navigation and is reachable by touch
+    // on a tablet, so it keeps the same floor every other control here keeps.
+    minHeight: lms.touch,
     paddingHorizontal: lms.space.md,
     borderRadius: lms.radius.sm,
   },
@@ -315,7 +320,8 @@ export const styles = StyleSheet.create({
     left: 0,
     width: lms.rail,
     flexDirection: 'row',
-    shadowColor: '#251f20',
+    // The panel lift, cast further: same ink, a drawer's worth of throw.
+    ...lms.lift,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.24,
     shadowRadius: 32,

@@ -1,4 +1,4 @@
-import { boundsOf, type Bounds, type Point, type Transform, type Viewport } from './chartViewport.ts';
+import { boundsOf, type Bounds, type Point } from './chartViewport.ts';
 
 export interface MiniMapGeometry {
   bounds: Bounds;
@@ -7,13 +7,6 @@ export interface MiniMapGeometry {
   offsetY: number;
   contentWidth: number;
   contentHeight: number;
-}
-
-export interface MiniMapRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 export function miniMapGeometry(
@@ -42,31 +35,5 @@ export function projectToMiniMap(point: Point, geometry: MiniMapGeometry): Point
   return {
     x: geometry.offsetX + (point.x - geometry.bounds.minX) * geometry.scale,
     y: geometry.offsetY + (point.y - geometry.bounds.minY) * geometry.scale,
-  };
-}
-
-/** Camera viewport projected into the same letterboxed coordinate system as the nodes. */
-export function miniMapFrustum(
-  transform: Transform,
-  viewport: Viewport,
-  geometry: MiniMapGeometry,
-): MiniMapRect {
-  const cameraScale = transform.scale > 0 ? transform.scale : 1;
-  const topLeft = projectToMiniMap(
-    { x: -transform.x / cameraScale, y: -transform.y / cameraScale },
-    geometry,
-  );
-  const bottomRight = projectToMiniMap(
-    {
-      x: (viewport.width - transform.x) / cameraScale,
-      y: (viewport.height - transform.y) / cameraScale,
-    },
-    geometry,
-  );
-  return {
-    x: topLeft.x,
-    y: topLeft.y,
-    width: Math.max(2, bottomRight.x - topLeft.x),
-    height: Math.max(2, bottomRight.y - topLeft.y),
   };
 }

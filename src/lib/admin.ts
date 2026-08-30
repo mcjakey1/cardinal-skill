@@ -291,6 +291,15 @@ export function describeAuditAction(
     // typed the same title back in reads as a rename and claims no change.
     case 'course.renamed':
       return was(`Renamed ${what}`, entry, what);
+    case 'course.owner_changed': {
+      // `detail.was_name` is the outgoing owner, resolved when the transfer
+      // happened. Naming them is the reason this action is recorded at all: the
+      // course still reads normally afterwards, and the person who lost it is
+      // the only trace that anything was taken.
+      const lost = entry.detail?.was_name;
+      const sentence = `Made ${who} the owner of ${what}`;
+      return typeof lost === 'string' && lost ? `${sentence}, taken from ${lost}` : sentence;
+    }
     case 'chart.published': {
       const moved = chartCounts(entry.detail);
       return moved ? `Published the chart of ${what}: ${moved}` : `Published the chart of ${what}`;
@@ -439,6 +448,7 @@ export const AUDIT_GROUPS: readonly {
       'course.archived',
       'course.renamed',
       'course.deleted',
+      'course.owner_changed',
     ],
   },
   {
@@ -577,16 +587,27 @@ export function auditCsv(
   /** The panel head's own sentence, so the file and the screen cannot disagree. */
   narrowing: string | null,
   now: Date,
+  /** Whether the server still had rows the screen had not loaded. */
+  more = false,
 ): string {
   const records = [
-    // Four lines of provenance and a blank one before the header. A filename
+    // Five lines of provenance and a blank one before the header. A filename
     // is the first thing to die when a file is attached to an email and renamed
     // by whoever received it, so `-filtered` on the name is not enough: the
     // reader a year from now has only what is inside the file.
     ['Cardinal Skill audit record'],
     ['Exported', now.toISOString()],
-    ['Covers', narrowing ?? 'The whole record, with no filter applied — as much of it as was loaded.'],
+    ['Covers', narrowing ?? 'The whole record, with no filter applied.'],
     ['Rows', String(entries.length)],
+    // Its own line, and never folded into `Covers`. This file is evidence, and
+    // a page of a record presented as the record is the one error nobody
+    // downstream can detect for themselves.
+    [
+      'Complete',
+      more
+        ? 'No — this is what had been loaded when it was exported, and more rows matched. Load them and export again for the full set.'
+        : 'Yes — every row matching the filter above.',
+    ],
     [''],
     AUDIT_CSV_COLUMNS,
     ...entries.map((entry) => [

@@ -15,7 +15,14 @@
  * Pure and dependency-free, same contract as `progression.ts`.
  */
 
-import { isNodeMastered, missionsForNode, nodeXpEarned, type MissionLike } from './missions.ts';
+import {
+  cleanXp,
+  isNodeMastered,
+  missionsForNode,
+  nodeXpFromMissions,
+  nodeXpEarned,
+  type MissionLike,
+} from './missions.ts';
 import type { SkillNode, Tree } from './types';
 
 export interface RollUpInput {
@@ -43,6 +50,10 @@ export function rollUpProgress(input: RollUpInput): RollUp {
   const direct = new Set(input.directlyCompletedIds);
   const server = new Set(input.serverMasteredIds);
 
+  // serverXp already carries immutable completion-time snapshots, so only
+  // locally queued missions belong in the optimistic delta.
+  const localOnly = [...done].filter((id) => !serverDone.has(id));
+
   const mastered: string[] = [];
   let localXp = 0;
 
@@ -51,12 +62,11 @@ export function rollUpProgress(input: RollUpInput): RollUp {
 
     if (own.length > 0) {
       if (isNodeMastered(input.missions, node.id, done)) mastered.push(node.id);
-      // serverXp uses immutable completion-time snapshots. Only locally queued
-      // missions belong in the optimistic delta.
-      localXp += own.reduce(
-        (sum, mission) => sum + (done.has(mission.id) && !serverDone.has(mission.id) ? mission.xpReward : 0),
-        0,
-      );
+      // Through `nodeXpEarned` rather than summing raw rewards, so the headline
+      // number gets the same normalisation every other reader of a mission
+      // reward gets. One absurd value out of the parser would otherwise reach
+      // `levelForXp` and the level meter as NaN.
+      localXp += nodeXpEarned(input.missions, node.id, localOnly);
       continue;
     }
 
@@ -65,7 +75,7 @@ export function rollUpProgress(input: RollUpInput): RollUp {
       mastered.push(node.id);
     } else if (direct.has(node.id)) {
       mastered.push(node.id);
-      localXp += node.xpReward;
+      localXp += cleanXp(node.xpReward);
     }
   }
 
@@ -84,9 +94,11 @@ export function nodeProgress(
   mastered: boolean,
 ): number {
   if (mastered) return 1;
-  const own = missionsForNode(missions, node.id);
-  if (own.length === 0) return 0;
-  const total = own.reduce((sum, m) => sum + m.xpReward, 0);
+  if (missionsForNode(missions, node.id).length === 0) return 0;
+  // Both halves of the ratio are cleaned, or a fractional reward divides a
+  // floored numerator by an unfloored total and the meter reads 0.467 for half.
+  const total = nodeXpFromMissions(missions, node.id);
   if (total <= 0) return 0;
   return Math.max(0, Math.min(1, nodeXpEarned(missions, node.id, completedMissionIds) / total));
 }
+

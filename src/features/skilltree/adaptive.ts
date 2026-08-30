@@ -14,7 +14,7 @@
 // but resolves specifiers as plain ESM, where an extensionless relative import
 // does not exist. The type-only imports below are erased before resolution,
 // which is why they stay extensionless like the rest of the repo.
-import { deriveStatuses, XP_PER_LEVEL } from './progression.ts';
+import { deriveStatuses } from './progression.ts';
 import type { LearnerSignals, NodeSignal, SkillNode, Tree } from './types';
 
 /**
@@ -37,17 +37,6 @@ export const FAST_UNDER = 0.15;
 
 /** Nodes per week assumed for a learner with nothing finished yet. */
 export const DEFAULT_PACE = 2;
-
-/**
- * How far `personalXpPerLevel` may stray from `XP_PER_LEVEL`.
- *
- * Clamped hard on purpose. A student's level is shown next to their
- * classmates', so an unclamped personal curve makes two levels in the same
- * course incomparable — which defeats the point of a shared course. The clamp
- * keeps everyone on one ladder and only changes the stride.
- */
-export const PERSONAL_XP_MIN_FACTOR = 0.6;
-export const PERSONAL_XP_MAX_FACTOR = 1.6;
 
 /** Pace floor and ceiling. A displayed target outside this is noise, not data. */
 const MIN_PACE = 0.5;
@@ -261,18 +250,4 @@ export function paceTarget(signals: LearnerSignals): number {
 
   const days = Math.max(1, num(signals.daysActive, 1));
   return Math.round(clamp(mastered / (days / 7), MIN_PACE, MAX_PACE) * 10) / 10;
-}
-
-/**
- * This learner's XP-per-level, so a slower student still watches the meter
- * move and a faster one is not handed levels for free.
- *
- * Driven by pace against the starter pace, then clamped — see
- * `PERSONAL_XP_MIN_FACTOR` for why the clamp is not optional.
- */
-export function personalXpPerLevel(signals: LearnerSignals): number {
-  const ratio = paceTarget(signals) / DEFAULT_PACE;
-  return Math.round(
-    XP_PER_LEVEL * clamp(ratio, PERSONAL_XP_MIN_FACTOR, PERSONAL_XP_MAX_FACTOR),
-  );
 }

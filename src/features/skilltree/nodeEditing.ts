@@ -137,9 +137,23 @@ export function linkRefusal(
     ...prereqs.filter((p) => !(p.prereqId === prereqId && p.nodeId === nodeId)),
     { nodeId, prereqId },
   ];
-  const check = validateGraph(nodes, next);
-  if (check.isValid) return null;
-  return check.errors[0]?.message ?? 'That link would make the chart invalid.';
+  // Refuse what this edge breaks, not what the chart was already guilty of.
+  // A chart under construction is disconnected until the last edge is drawn, so
+  // whole-chart validity would refuse every edge including the ones that fix it.
+  const before = new Map<string, Set<string>>();
+  for (const e of validateGraph(nodes, prereqs).errors) {
+    const ids = before.get(e.type) ?? new Set<string>();
+    for (const id of e.nodeIds) ids.add(id);
+    before.set(e.type, ids);
+  }
+  // Compared per node rather than per error because adding an edge shrinks the
+  // orphan set: the same disconnected_graph error legitimately names fewer nodes
+  // afterwards, and that is an improvement, not a new fault.
+  const introduced = validateGraph(nodes, next).errors.find(
+    (e) => !e.nodeIds.every((id) => before.get(e.type)?.has(id)),
+  );
+  if (!introduced) return null;
+  return introduced.message;
 }
 
 /**

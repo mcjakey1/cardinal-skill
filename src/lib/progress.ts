@@ -19,6 +19,7 @@ import {
   type MissionProgressQueue,
   type PendingMissionProgress,
 } from './missionProgressQueue';
+import { isServerId } from './serverIds';
 import { supabase } from './supabase';
 
 /** node id → ISO timestamp of the moment it was marked complete. */
@@ -96,6 +97,10 @@ async function loadPendingMissionProgress(courseId: string): Promise<MissionProg
 }
 
 async function queueMissionProgress(courseId: string, missionId: string, done: boolean): Promise<void> {
+  // A local fixture never enters the queue. Queuing it would put an id the
+  // server must reject at the front of a queue nothing else can get past — see
+  // `serverIds.ts` for what that did to the example course.
+  if (!isServerId(courseId) || !isServerId(missionId)) return;
   const pending = await loadPendingMissionProgress(courseId);
   const operation: PendingMissionProgress = { done, queuedAt: new Date().toISOString() };
   await AsyncStorage.setItem(pendingKey(courseId), JSON.stringify({ ...pending, [missionId]: operation }));
@@ -114,7 +119,9 @@ async function syncMissionProgress(missionId: string, done: boolean): Promise<vo
 }
 
 async function syncNodeProgress(nodes: CompletionLog): Promise<void> {
-  const entries = Object.entries(nodes);
+  // Same rule as the mission queue: the example course's nodes are slugs, and
+  // `set_node_completion` takes a uuid.
+  const entries = Object.entries(nodes).filter(([nodeId]) => isServerId(nodeId));
   if (entries.length === 0) return;
   const { data } = await supabase.auth.getUser();
   if (!data.user) return;

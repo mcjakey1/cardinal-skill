@@ -13,7 +13,7 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
-import { BAIError, requestStructuredCompletion } from '../_shared/bai.ts';
+import { BAIError, parseJsonObjectText, requestStructuredCompletion } from '../_shared/bai.ts';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -272,9 +272,12 @@ Deno.serve(async (req) => {
     );
   }
 
+  // requestStructuredCompletion's json-object fallback puts the schema in the
+  // prompt, which is the path most likely to come back ```json-fenced. A raw
+  // JSON.parse rejects that and throws away a call already paid for.
   let parsed: { steps?: unknown };
   try {
-    parsed = JSON.parse(text);
+    parsed = parseJsonObjectText<{ steps?: unknown }>(text);
   } catch {
     return json({ error: 'The extra help came back malformed. Try again.' }, 502);
   }
@@ -313,7 +316,19 @@ Deno.serve(async (req) => {
       : [],
     p_reason: reason ?? null,
   });
-  if (rpcError) return json({ error: rpcError.message }, 500);
+  if (rpcError) {
+    // 0041 narrowed who may add help to a course: the owner, or a student
+    // enrolled on a course that is not official. A refusal there is the server
+    // saying no, not the server breaking, so it must not read as a 500 with a
+    // Postgres sentence in it. 42501 is the code the function raises.
+    if (rpcError.code === '42501') {
+      return json(
+        { error: 'Extra help can only be added to this course by whoever runs it.' },
+        403,
+      );
+    }
+    return json({ error: rpcError.message }, 500);
+  }
 
   return json({ stepCount: built.nodes.length, parentXpReward: plan.parentReward }, 201);
 });

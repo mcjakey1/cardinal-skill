@@ -10,6 +10,9 @@
  * paths only. Pure and dependency-free.
  */
 
+// Runtime import, so it carries the .ts extension: `node --test` resolves
+// specifiers as plain ESM.
+import { findCyclicNodes, prereqsByNode } from './progression.ts';
 import type { Prereq, SkillNode } from './types';
 
 export type GraphErrorType =
@@ -78,7 +81,7 @@ export function validateGraph(nodes: SkillNode[], prereqs: Prereq[]): GraphValid
     }
   }
 
-  const onCycle = cyclicNodes(seen, prereqs);
+  const onCycle = findCyclicNodes(seen, prereqsByNode(seen, prereqs));
   if (onCycle.length > 0) {
     errors.push({
       type: 'cycle_detected',
@@ -148,61 +151,4 @@ export function slugId(title: string, taken: Set<string>): string {
     const candidate = `${base}_${n}`;
     if (!taken.has(candidate)) return candidate;
   }
-}
-
-/**
- * Every node standing on a prerequisite loop.
- *
- * Iterative three-colour DFS, matching the private `findCyclicNodes` in
- * `progression.ts`. One cycle is reported as one error rather than one per node,
- * because an author fixes a loop, not three nodes.
- */
-function cyclicNodes(known: Set<string>, prereqs: Prereq[]): string[] {
-  const WHITE = 0;
-  const GREY = 1;
-  const BLACK = 2;
-
-  const edges = new Map<string, string[]>();
-  for (const { nodeId, prereqId } of prereqs) {
-    if (!known.has(nodeId) || !known.has(prereqId)) continue;
-    const list = edges.get(nodeId);
-    if (list) list.push(prereqId);
-    else edges.set(nodeId, [prereqId]);
-  }
-
-  const colour = new Map<string, number>();
-  const bad = new Set<string>();
-
-  for (const start of known) {
-    if (colour.get(start) !== undefined) continue;
-    const stack: { id: string; next: number }[] = [{ id: start, next: 0 }];
-    colour.set(start, GREY);
-
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1]!;
-      const out = edges.get(frame.id) ?? [];
-
-      if (frame.next >= out.length) {
-        colour.set(frame.id, BLACK);
-        stack.pop();
-        continue;
-      }
-
-      const child = out[frame.next]!;
-      frame.next += 1;
-
-      const childColour = colour.get(child) ?? WHITE;
-      if (childColour === GREY) {
-        // Back edge: everything still on the stack is standing on the loop.
-        for (const f of stack) bad.add(f.id);
-      } else if (childColour === WHITE) {
-        colour.set(child, GREY);
-        stack.push({ id: child, next: 0 });
-      } else if (bad.has(child)) {
-        bad.add(frame.id);
-      }
-    }
-  }
-
-  return [...bad];
 }

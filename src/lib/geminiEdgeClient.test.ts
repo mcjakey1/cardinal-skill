@@ -110,7 +110,12 @@ test('Gemini retries in JSON mode when a complex response schema is rejected', a
   globalThis.fetch = async (_input, init) => {
     payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     if (payloads.length === 1) {
-      return Response.json({ error: { message: 'Request contains an invalid argument.' } }, { status: 400 });
+      // The retry is gated on the provider naming the field it rejected; a
+      // generic 400 is a real error and must surface instead.
+      return Response.json(
+        { error: { message: 'Invalid JSON payload received. Unknown name "responseJsonSchema".' } },
+        { status: 400 },
+      );
     }
     return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"ok":true}' }] } }] });
   };
@@ -149,13 +154,13 @@ test('Gemini retries in JSON mode when a complex response schema is rejected', a
   }
 });
 
-test('Gemini strips generation settings when the model rejects JSON mode', async () => {
+test('Gemini falls back to a minimal generation config but keeps JSON mode', async () => {
   const originalFetch = globalThis.fetch;
   const payloads: Record<string, unknown>[] = [];
   globalThis.fetch = async (_input, init) => {
     payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
     if (payloads.length === 1) {
-      return Response.json({ error: { message: 'Request contains an invalid argument.' } }, { status: 400 });
+      return Response.json({ error: { message: 'Invalid value at generation_config.seed.' } }, { status: 400 });
     }
     return Response.json({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"ok":true}' }] } }] });
   };
@@ -176,7 +181,12 @@ test('Gemini strips generation settings when the model rejects JSON mode', async
     assert.equal(result, '{"ok":true}');
     assert.equal(payloads.length, 2);
     assert.ok(payloads[0]?.generationConfig);
-    assert.equal('generationConfig' in (payloads[1] ?? {}), false);
+    // Dropping generationConfig outright also dropped JSON mode, so the model
+    // answered in prose and every caller's parse failed. The minimal retry
+    // keeps the two settings that are never the thing being rejected.
+    const retryConfig = payloads[1]?.generationConfig as Record<string, unknown>;
+    assert.equal(retryConfig.responseMimeType, 'application/json');
+    assert.equal(retryConfig.maxOutputTokens, 100);
     assert.deepEqual(payloads[1]?.contents, payloads[0]?.contents);
   } finally {
     globalThis.fetch = originalFetch;

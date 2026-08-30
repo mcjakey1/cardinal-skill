@@ -78,7 +78,10 @@ name, node and mission progress, and XP of students on that course, through
 `user_id = auth.uid()`. Nothing reaches outside a course the caller owns, and
 each check goes through a `security definer` helper (`owns_course` and friends)
 because a policy on `enrollments` that read `courses` back would recurse.
-Aggregates keep their five-student floor for every reader who is not the owner.
+Aggregates keep their five-student floor for every reader, the owner included —
+each summary function is owner-gated *and* ends in `having count(*) >= 5`. What
+the owner gets un-floored is per-student rows through `course_student_progress`,
+which is a different read, not an exemption from this one.
 
 **AI output is untrusted input.** The syllabus parser produces a graph that can
 contain cycles, dangling references, or absurd XP values. Validate at the

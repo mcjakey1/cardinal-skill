@@ -115,6 +115,11 @@ export const lms = {
   rail: 244,
   topbar: 52,
   wide: 860,
+  /**
+   * The narrowest a data table may be drawn. Below this the columns stop being
+   * readable, so the table scrolls sideways inside the panel instead.
+   */
+  tableMin: 620,
   /** Minimum touch target, same floor the student app keeps. */
   touch: 44,
 } as const;

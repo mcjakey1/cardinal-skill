@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { CourseMetadata, CourseOption } from '@/features/skilltree/courseQueries';
 import { normalizeCourseDistribution, PRIVATE_PRACTICE_DISTRIBUTION } from '@/features/skilltree/courseDistribution';
 import type { TreeSnapshot } from '@/features/skilltree/queries';
-import { COURSE_ORDER_CACHE_KEY, COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
+import { COURSE_ORDER_CACHE_KEY, COURSES_CACHE_KEY, courseTreeCacheKey, isCourseScopedCacheKey } from './courseCacheKeys';
 
 export { COURSE_ORDER_CACHE_KEY, COURSES_CACHE_KEY, courseTreeCacheKey } from './courseCacheKeys';
 
@@ -170,13 +170,17 @@ export async function removeCachedCourse(courseId: string): Promise<void> {
   await AsyncStorage.removeItem(courseTreeCacheKey(courseId));
 }
 
+/**
+ * Everything the signed-out account left on this device.
+ *
+ * Named the four course keys and stopped there, which left the completion logs
+ * behind: on the next sign-in `progress.ts` flushes whatever it finds under the
+ * new session, and `set_node_completion` writes it for the new `auth.uid()`.
+ * On a shared machine that credits one student with another's work. The family
+ * test lives in `courseCacheKeys.ts` so it can be checked without a device.
+ */
 export async function clearCourseCaches(): Promise<void> {
   const keys = await AsyncStorage.getAllKeys();
-  const courseKeys = keys.filter((key) => (
-    key === COURSES_CACHE_KEY
-    || key === COURSE_ORDER_CACHE_KEY
-    || key.startsWith('@cardinal_nodes_')
-    || key.startsWith('@cardinal_layout_')
-  ));
+  const courseKeys = keys.filter(isCourseScopedCacheKey);
   if (courseKeys.length) await AsyncStorage.multiRemove(courseKeys);
 }

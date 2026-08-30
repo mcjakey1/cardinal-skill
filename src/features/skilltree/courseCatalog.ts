@@ -56,9 +56,19 @@ export async function fetchInstructorVerification(): Promise<boolean> {
   // rather than a row. Selecting the row and reading the flag here works
   // against both schemas, which matters because every caller of this — sign-in
   // role evidence included — treats a throw as "not an instructor".
+  //
+  // `.eq('user_id', ...)` is here for correctness, not access control — RLS
+  // still decides which rows exist for this caller. 0034 opened the table to
+  // administrators, so an unfiltered read returns every badge on the site:
+  // `maybeSingle()` then throws PGRST116 on two rows or more, and on exactly
+  // one row answers with somebody else's `revoked_at`. Naming whose row is the
+  // answer is what makes the question well-formed.
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) return false;
   const { data, error } = await supabase
     .from('verified_instructors')
     .select('*')
+    .eq('user_id', auth.user.id)
     .maybeSingle();
   if (error) {
     if (error.code === '42P01' || error.code === 'PGRST205') return false;

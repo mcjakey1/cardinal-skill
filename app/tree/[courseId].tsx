@@ -386,6 +386,10 @@ export default function TreeScreen() {
     return (
       <EmptyChart
         title={title}
+        // The same test `requestEditMode` makes. Offering "Add first node" to a
+        // reader who cannot author routes them into the practice-copy prompt
+        // instead — a control that does not do what its label says.
+        canAuthor={!currentCourse || currentCourse.isFixture || currentCourse.canEdit}
         onEdit={() => requestEditMode(true)}
         onCourses={() => router.replace('/courses')}
         onUpload={() => router.navigate('/upload')}
@@ -1629,8 +1633,9 @@ function readableError(cause: unknown): string {
   return "Couldn't load this chart. Check your connection and try again.";
 }
 
-function EmptyChart({ title, onEdit, onCourses, onUpload }: {
+function EmptyChart({ title, canAuthor, onEdit, onCourses, onUpload }: {
   title: string;
+  canAuthor: boolean;
   onEdit: () => void;
   onCourses: () => void;
   onUpload: () => void;
@@ -1642,10 +1647,16 @@ function EmptyChart({ title, onEdit, onCourses, onUpload }: {
       <View style={styles.centred}>
         <Window title={title} style={styles.notice}>
           <PixelText variant="body" colour={t.ink}>
-            This blank course is ready for its first skill. Start editing to add and connect nodes.
+            {canAuthor
+              ? 'This blank course is ready for its first skill. Start editing to add and connect nodes.'
+              : 'This course has no skills in it yet. Whoever runs it adds them — come back once they have.'}
           </PixelText>
-          <PixelButton label="+ Add first node" onPress={onEdit} />
-          <PixelButton label="Back to courses" tone="panel" onPress={onCourses} />
+          {canAuthor ? <PixelButton label="+ Add first node" onPress={onEdit} /> : null}
+          <PixelButton
+            label="Back to courses"
+            tone={canAuthor ? 'panel' : undefined}
+            onPress={onCourses}
+          />
           <PixelButton label="Upload a syllabus instead" tone="panel" onPress={onUpload} />
         </Window>
       </View>

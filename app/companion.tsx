@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocalSearchParams } from 'expo-router';
 import Head from 'expo-router/head';
 import { useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { missionsForNode } from '@/features/skilltree/missions';
@@ -11,6 +11,7 @@ import { fetchLiveTree, treeQueryKeys } from '@/features/skilltree/queries';
 import type { SkillNode } from '@/features/skilltree/types';
 import { usePrefs } from '@/lib/prefs';
 import { useQuestNames } from '@/lib/questNames';
+import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { space } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { DitherField } from '@/ui/Dither';
@@ -160,7 +161,7 @@ export default function Companion() {
   return (
     <View style={[styles.screen, { backgroundColor: t.ground }]}>
       <DitherField variant="quiet" bands={7} flat={lowBandwidth} />
-      <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.fill} behavior={KEYBOARD_BEHAVIOR}>
         <ScrollView
           ref={scrollRef}
           onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: !motionOff })}

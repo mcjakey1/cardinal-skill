@@ -50,9 +50,16 @@ export async function fetchCourseOptions(): Promise<CourseOption[]> {
     ...MOCK_COURSES.map(({ id, title, term }, index) => ({ id, courseCode: null, title, term, ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_001 + index })),
   ];
   if (error) {
-    return auth.user
-      ? [...await loadCachedCourseOptions(), ...fixtures]
-      : fixtures;
+    if (!auth.user) return fixtures;
+    // The device cache is the offline answer, and it is still the right one.
+    // An empty cache is not: returning the fixtures alone renders as "you have
+    // no courses", which is a statement about the account when the truth is a
+    // statement about the network. `useQuery(['courses'])` destructures an
+    // `error` that was permanently null, so nothing downstream could tell the
+    // difference or offer a retry. With nothing cached to show, say so.
+    const cached = await loadCachedCourseOptions();
+    if (cached.length === 0) throw error;
+    return [...cached, ...fixtures];
   }
 
   const orderByCourse = new Map((preferences ?? []).map((row) => [row.course_id, row.sort_order]));

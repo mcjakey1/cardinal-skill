@@ -22,8 +22,15 @@ export interface MissionLike {
   xpReward: number;
 }
 
-/** Non-negative integer, or 0. Mission XP comes from the same untrusted places node XP does. */
-function clean(xp: number): number {
+/**
+ * Non-negative integer, or 0. Mission XP comes from the same untrusted places
+ * node XP does.
+ *
+ * Exported because `rollup.ts` computes the one XP value that is not a mission
+ * reward — a node's own — and has to normalise it the same way. Two copies of
+ * this rule is how a headline total and a node meter come to disagree.
+ */
+export function cleanXp(xp: number): number {
   return Number.isFinite(xp) && xp > 0 ? Math.floor(xp) : 0;
 }
 
@@ -50,7 +57,7 @@ export function effectiveMissionCompletionIds(
  * work in it. Callers that want a placeholder should say so at their own level.
  */
 export function nodeXpFromMissions(missions: readonly MissionLike[], nodeId: string): number {
-  return missionsForNode(missions, nodeId).reduce((sum, m) => sum + clean(m.xpReward), 0);
+  return missionsForNode(missions, nodeId).reduce((sum, m) => sum + cleanXp(m.xpReward), 0);
 }
 
 /** What a student has actually banked on one node. */
@@ -62,7 +69,7 @@ export function nodeXpEarned(
   const done = new Set(completedMissionIds);
   return missionsForNode(missions, nodeId)
     .filter((m) => done.has(m.id))
-    .reduce((sum, m) => sum + clean(m.xpReward), 0);
+    .reduce((sum, m) => sum + cleanXp(m.xpReward), 0);
 }
 
 /** A node is mastered when every one of its missions is done. A node with no missions is not. */
@@ -144,7 +151,7 @@ export interface MissionFragments {
  * so the missions absorb rounding rather than the total drifting.
  */
 export function fragmentMissionXp(missionXps: readonly number[], stepCount: number): MissionFragments {
-  const missions = (missionXps ?? []).map(clean);
+  const missions = (missionXps ?? []).map(cleanXp);
   const total = missions.reduce((a, b) => a + b, 0);
   const steps = Number.isFinite(stepCount) ? Math.floor(stepCount) : 0;
 

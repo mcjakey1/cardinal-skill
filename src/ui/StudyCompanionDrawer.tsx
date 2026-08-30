@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -13,6 +13,7 @@ import Animated, {
 import type { Mission, SkillNode } from '@/features/skilltree/types';
 import { callEdgeFunction } from '@/lib/edgeFunctions';
 import { parseInlineMarkdown } from '@/lib/inlineMarkdown';
+import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { Window } from './Window';
@@ -176,7 +177,7 @@ export function StudyCompanionDrawer({
     >
       <KeyboardAvoidingView
         style={styles.fill}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={KEYBOARD_BEHAVIOR}
       >
         <Window title="AI study companion" onClose={onClose} style={styles.drawer}>
           <ModelStatusPill status={modelStatus} modelName={modelName} reduceMotion={Boolean(reduceMotion)} />

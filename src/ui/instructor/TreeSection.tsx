@@ -1,8 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   View,
   useWindowDimensions,
@@ -18,16 +17,18 @@ import {
 } from '@/features/skilltree/nodeEditing';
 import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
 import { fetchTree } from '@/features/skilltree/queries';
+import { resolveQuestName } from '@/features/skilltree/naming';
 import { validateGraph } from '@/features/skilltree/validation';
 import { countChanges, diffCharts } from '@/features/skilltree/chartDiff';
 import { fetchInstructorVerification, publishOfficialCourse } from '@/features/skilltree/courseCatalog';
 import { hasDestructiveChanges, summariseImpact, type ArchiveImpact } from '@/features/skilltree/chartImpact';
 import { fetchArchiveImpact, publishChart } from '@/features/skilltree/publishChart';
 import { purgeCourseCache } from '@/lib/editedTree';
-import type { SkillNode } from '@/features/skilltree/types';
+import type { SkillNode, Tree } from '@/features/skilltree/types';
 import type { ChartState } from '@/features/skilltree/chartDraft';
 import { aliveSubgraph, sameNodeIds } from '@/features/skilltree/chartDraft';
 import { unmoved, useChartDraft } from '@/lib/useChartDraft';
+import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { DitherField } from '@/ui/Dither';
 import {
   Badge,
@@ -141,15 +142,28 @@ export function TreeSection({
   // A different node means a fresh form, never the previous node's half-typed one.
   const editing = editingId !== null && editingId === selected?.id;
 
+  // `SkillTree` draws `node.title` verbatim, so the caller is the one that
+  // decides which name a reader sees — the student screen resolves before
+  // handing the tree over, and this canvas has to do the same. Skipping it left
+  // a renamed node reading "New node" on the one surface whose whole promise is
+  // that it shows the chart as a student receives it.
+  const named = useCallback(
+    (tree: Tree): Tree => ({
+      ...tree,
+      nodes: tree.nodes.map((n) => ({ ...n, title: resolveQuestName(n).text })),
+    }),
+    [],
+  );
+
   // In edit mode the canvas draws the draft, so an unpublished change shows
   // where it was made. Archived nodes are already gone as far as a student goes.
-  const shown = useMemo(() => aliveSubgraph(draft.working), [draft.working]);
+  const shown = useMemo(() => named(aliveSubgraph(draft.working)), [draft.working, named]);
 
   // The server returns retired nodes to the owner and hides them from students
   // by RLS, so the read-only canvas has to filter them the same way edit mode
   // does. Without this the owner is the one person shown a chart that is not
   // the chart, which is the opposite of what this canvas is for.
-  const liveShown = useMemo(() => (data ? aliveSubgraph(data.tree) : null), [data]);
+  const liveShown = useMemo(() => (data ? named(aliveSubgraph(data.tree)) : null), [data, named]);
 
   const notice = (text: string) => {
     setLinkNotice(text);
@@ -528,6 +542,15 @@ export function TreeSection({
                   onPress={openConfirm}
                 />
               ) : null}
+              {/* A greyed-out Publish with no reason beside it is the author
+                  staring at their own work wondering what they did wrong.
+                  `validateGraph` has already written the sentence — the first
+                  one, because fixing it usually clears the rest. */}
+              {countChanges(changes) > 0 && !validation.isValid && validation.errors[0] ? (
+                <LText variant="small" tone="attention" style={styles.publishBlocked}>
+                  {validation.errors[0].message}
+                </LText>
+              ) : null}
             </>
           ) : null}
           {/* Only with nothing unpublished pending: an undo on top of a
@@ -672,7 +695,7 @@ export function TreeSection({
             setEditingId(null);
           }}
         >
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <KeyboardAvoidingView behavior={KEYBOARD_BEHAVIOR}>
             <ScrollView style={modalScroll} contentContainerStyle={styles.inspectorScroll}>
               {inspectorBody}
             </ScrollView>
@@ -818,7 +841,11 @@ function NodeInspector({
   return (
     <>
       <View style={styles.inspectorSection}>
-        <LText variant="section">{node.title}</LText>
+        {/* The name a reader sees, not the syllabus line underneath it. An
+            author who renames a node and is still shown "New node" here has no
+            way to tell whether the rename saved — and the caption above this
+            panel promises the chart is drawn as a student receives it. */}
+        <LText variant="section">{resolveQuestName(node).text}</LText>
         <View style={styles.rowWrap}>
           <Badge label={node.kind} tone="brand" />
           {node.graded === false ? <Badge label="Ungraded practice" tone="gold" /> : null}

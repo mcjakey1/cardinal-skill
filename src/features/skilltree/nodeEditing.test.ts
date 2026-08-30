@@ -105,3 +105,22 @@ test('minted ids are v4-shaped and do not repeat', () => {
     assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   }
 });
+
+test('the first link on a fresh chart is allowed even though the chart is not yet connected', () => {
+  const nodes = [node('a'), node('b'), node('c'), node('d')];
+  assert.equal(linkRefusal(nodes, [], 'a', 'b'), null);
+});
+
+test('a link that neither fixes nor breaks anything is allowed on a chart that is already invalid', () => {
+  const nodes = [node('a'), node('b'), node('c'), node('d')];
+  const prereqs = [{ nodeId: 'b', prereqId: 'a' }, { nodeId: 'c', prereqId: 'b' }];
+  // d stays orphaned either way; a -> c is a shortcut that changes nothing else.
+  assert.equal(linkRefusal(nodes, prereqs, 'a', 'c'), null);
+});
+
+test('a loop is still refused on a chart that already has other problems', () => {
+  const nodes = [node('a'), node('b'), node('c'), node('d')];
+  // c and d are already orphaned; b -> a still has to be refused as a loop.
+  const refusal = linkRefusal(nodes, [{ nodeId: 'b', prereqId: 'a' }], 'b', 'a');
+  assert.match(refusal ?? '', /loop/);
+});

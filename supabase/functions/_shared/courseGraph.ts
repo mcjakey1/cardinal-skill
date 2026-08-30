@@ -87,57 +87,6 @@ export function normalizeTieredCourseDag<T extends TieredCourseGraphNode>(nodes:
   });
 }
 
-/** Validate a four-tier graph without inventing academic prerequisites. */
-export function validateTieredCourseDag<T extends TieredCourseGraphNode>(nodes: readonly T[]): T[] {
-  const ordered = nodes
-    .map((node, index) => ({ node, index }))
-    .sort((left, right) => left.node.tier - right.node.tier || left.index - right.index)
-    .map(({ node }) => ({
-      ...node,
-      prereq_keys: [...new Set(Array.isArray(node.prereq_keys) ? node.prereq_keys : [])],
-    }));
-  const byKey = new Map(ordered.map((node) => [node.key, node]));
-  const indexByKey = new Map(ordered.map((node, index) => [node.key, index]));
-  const tiers = new Set<number>();
-
-  for (const node of ordered) {
-    if (!Number.isInteger(node.tier) || node.tier < 1 || node.tier > 4) {
-      throw new Error(`${node.key} must use a tier from 1 to 4.`);
-    }
-    tiers.add(node.tier);
-    for (const parentKey of node.prereq_keys) {
-      const parent = byKey.get(parentKey);
-      if (!parent) throw new Error(`${node.key} references an unknown prerequisite (${parentKey}).`);
-      if (parent.tier > node.tier) {
-        throw new Error(`${parentKey} -> ${node.key} moves backward from Tier ${parent.tier} to Tier ${node.tier}.`);
-      }
-      if ((indexByKey.get(parentKey) ?? Infinity) >= (indexByKey.get(node.key) ?? -1)) {
-        throw new Error(`${parentKey} -> ${node.key} must point forward within its tier.`);
-      }
-    }
-  }
-
-  for (let tier = 1; tier <= 4; tier += 1) {
-    if (!tiers.has(tier)) throw new Error(`The course graph is missing Tier ${tier}.`);
-  }
-
-  const reduced = removeTransitivePrerequisites(ordered);
-  for (const node of reduced) {
-    if (node.tier === 1 && node.prereq_keys.length > 0) {
-      throw new Error(`${node.key} is a Tier 1 root and cannot have prerequisites.`);
-    }
-    if (node.tier > 1 && node.prereq_keys.length === 0) {
-      throw new Error(`${node.key} is an orphan; every Tier 2–4 skill needs a prerequisite.`);
-    }
-  }
-
-  const adjacency = buildAdjacency(reduced);
-  if (reduced.length > 0 && flood(reduced[0]!.key, adjacency).size !== reduced.length) {
-    throw new Error('The course topics form multiple disconnected skill trees.');
-  }
-  return reduced;
-}
-
 /**
  * Coerce untrusted parser output into one connected prerequisite DAG.
  *

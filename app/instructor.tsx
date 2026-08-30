@@ -17,7 +17,7 @@ import { usePrefs } from '@/lib/prefs';
 import { useAuth } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
 import { authorableCourses } from '@/lib/admin';
-import { isAdministrator } from '@/lib/adminApi';
+import { isAdministrator, readEveryRow } from '@/lib/adminApi';
 import { supabase } from '@/lib/supabase';
 import { lms } from '@/theme/lms';
 import { AdminArea } from '@/ui/AdminArea';
@@ -83,6 +83,48 @@ const SECTION_LABEL: Record<Section, string> = {
   admin: 'Admin',
 };
 
+/** The `courses` columns this workspace reads. */
+type WorkspaceCourseRow = {
+  id: string;
+  title: string;
+  term: string | null;
+  owner_id: string | null;
+  course_kind?: CourseKind;
+  publication_status?: CoursePublicationStatus;
+};
+
+/**
+ * Every course this account may read, paged.
+ *
+ * `max_rows` truncates a bare select at a thousand and says nothing about it,
+ * and this is the read that deliberately hands an administrator the whole site
+ * — the one account for whom a thousand is reachable, and the one for whom a
+ * missing course reads as a course that was never made.
+ *
+ * The narrower select is the pre-0021 fallback: app and migration roll out
+ * independently, and a database without the distribution columns answers 42703
+ * rather than dropping them.
+ */
+async function fetchAuthorableCourseRows(): Promise<WorkspaceCourseRow[]> {
+  try {
+    return await readEveryRow<WorkspaceCourseRow>(
+      'courses',
+      'id, title, term, owner_id, course_kind, publication_status',
+      'id',
+      { column: 'created_at', ascending: false },
+    );
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+    if (code !== '42703' && code !== 'PGRST204') throw error;
+    return readEveryRow<WorkspaceCourseRow>(
+      'courses',
+      'id, title, term, owner_id',
+      'id',
+      { column: 'created_at', ascending: false },
+    );
+  }
+}
+
 export default function Instructor() {
   const router = useRouter();
   const { logout, session } = useAuth();
@@ -105,43 +147,26 @@ export default function Instructor() {
   const courses = useQuery({
     queryKey: ['instructor-courses'],
     queryFn: async (): Promise<CourseRow[]> => {
-      const [{ data: auth }, current, admin] = await Promise.all([
+      const [{ data: auth }, data, admin] = await Promise.all([
         supabase.auth.getUser(),
-        supabase
-          .from('courses')
-          .select('id, title, term, owner_id, course_kind, publication_status')
-          .order('created_at', { ascending: false }),
+        fetchAuthorableCourseRows(),
         // Never the reason the workspace fails to open. An administrator who
         // cannot be confirmed is scoped like any other instructor.
         isAdministrator().catch(() => false),
       ]);
-      const result = current.error?.code === '42703' || current.error?.code === 'PGRST204'
-        ? await supabase
-            .from('courses')
-            .select('id, title, term, owner_id')
-            .order('created_at', { ascending: false })
-        : current;
-      const { data, error } = result;
-      if (error) throw error;
       // RLS hands back every course this account may read, which for an
       // instructor includes ones they joined as a learner. This is an authoring
       // workspace, so it keeps what they author — and the whole site for an
       // administrator, who is the account that has to be able to fix things.
       return authorableCourses(
-        (data ?? []).map((row) => {
-          const distribution = row as typeof row & {
-            course_kind?: CourseKind;
-            publication_status?: CoursePublicationStatus;
-          };
-          return {
-            id: row.id,
-            title: row.title,
-            term: row.term,
-            ownerId: row.owner_id ?? null,
-            kind: distribution.course_kind ?? 'practice',
-            publicationStatus: distribution.publication_status ?? 'draft',
-          };
-        }),
+        data.map((row) => ({
+          id: row.id,
+          title: row.title,
+          term: row.term,
+          ownerId: row.owner_id ?? null,
+          kind: row.course_kind ?? 'practice',
+          publicationStatus: row.publication_status ?? 'draft',
+        })),
         auth.user?.id ?? null,
         admin,
       );

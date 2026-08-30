@@ -12,7 +12,8 @@ interface CompletionOptions {
   timeoutMs?: number;
   operation?: string;
   responseJsonSchema?: Record<string, unknown>;
-  useGenerationConfig?: boolean;
+  /** Last-resort retry: keep JSON mode and the token cap, drop everything else. */
+  minimalGenerationConfig?: boolean;
   document?: {
     base64: string;
     mediaType: 'application/pdf';
@@ -28,6 +29,14 @@ interface GeminiResponse {
   promptFeedback?: { blockReason?: string };
   error?: { message?: string; status?: string };
 }
+
+/**
+ * Gemini rejects an unsupported generationConfig field with a 400 that names
+ * that field. These gate the two retries so only a rejection of the field we
+ * are about to drop is retried — every other 400 is a real error and surfaces.
+ */
+const SCHEMA_REJECTION = /response_?json_?schema|response_?schema/i;
+const CONFIG_REJECTION = /generation_?config|\bseed\b|max_?output_?tokens/i;
 
 export class GeminiError extends Error {
   readonly status: number;
@@ -58,7 +67,7 @@ export async function requestGeminiCompletion({
   timeoutMs = 55_000,
   operation = 'completion',
   responseJsonSchema,
-  useGenerationConfig = true,
+  minimalGenerationConfig = false,
   document,
 }: CompletionOptions): Promise<string> {
   const startedAt = Date.now();
@@ -83,16 +92,19 @@ export async function requestGeminiCompletion({
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts }],
-        ...(useGenerationConfig
-          ? {
-            generationConfig: {
-              maxOutputTokens: maxTokens,
+        // JSON mode and the token cap are never dropped: without
+        // responseMimeType the model answers in prose and every caller's parse
+        // fails, and without maxOutputTokens the response is unbounded.
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          responseMimeType: 'application/json',
+          ...(minimalGenerationConfig
+            ? {}
+            : {
               ...(seed !== undefined ? { seed } : {}),
-              responseMimeType: 'application/json',
               ...(responseJsonSchema ? { responseJsonSchema } : {}),
-            },
-          }
-          : {}),
+            }),
+        },
       }),
     },
     timeoutMs,
@@ -100,11 +112,16 @@ export async function requestGeminiCompletion({
   );
   const body = await parseBody<GeminiResponse>(response);
   if (!response.ok) {
-    if (response.status === 400 && responseJsonSchema) {
+    // Only retry when the provider actually named the field it rejected.
+    // Retrying on any 400 meant a malformed PDF or an oversized request bought
+    // a second full-price call and then reported a misleading schema problem.
+    const providerMessage = body.error?.message ?? '';
+    if (response.status === 400 && responseJsonSchema && SCHEMA_REJECTION.test(providerMessage)) {
       console.warn(JSON.stringify({
         event: 'gemini.schema_fallback',
         operation,
         model: GEMINI_MODEL,
+        message: providerMessage.slice(0, 240),
       }));
       return await requestGeminiCompletion({
         apiKey,
@@ -117,22 +134,22 @@ export async function requestGeminiCompletion({
         document,
       });
     }
-    if (response.status === 400 && useGenerationConfig) {
+    if (response.status === 400 && !minimalGenerationConfig && CONFIG_REJECTION.test(providerMessage)) {
       console.warn(JSON.stringify({
         event: 'gemini.config_fallback',
         operation,
         model: GEMINI_MODEL,
+        message: providerMessage.slice(0, 240),
       }));
       return await requestGeminiCompletion({
         apiKey,
         system,
         prompt,
         maxTokens,
-        seed,
         timeoutMs,
         operation: `${operation}-minimal-fallback`,
         document,
-        useGenerationConfig: false,
+        minimalGenerationConfig: true,
       });
     }
     const error = providerError(response, body);
@@ -140,11 +157,12 @@ export async function requestGeminiCompletion({
     throw error;
   }
 
+  // Why the refusal checks come before the content check: a safety block is an
+  // HTTP 200 with a finishReason and no parts. Reading content first turned
+  // that into the 502 below, which parse-syllabus treats as retryable — so a
+  // refusal bought a second full-size call and then reported a validation
+  // error. A refusal is 422 and final; only a truncation is worth retrying.
   const candidate = body.candidates?.[0];
-  const content = candidate?.content?.parts
-    ?.map((part) => part.text ?? '')
-    .join('')
-    .trim();
   if (!candidate) {
     const reason = body.promptFeedback?.blockReason;
     throw new GeminiError(
@@ -152,13 +170,17 @@ export async function requestGeminiCompletion({
       reason ? 422 : 502,
     );
   }
-  if (!content) throw new GeminiError('Gemini returned no parser content.', 502);
   if (candidate.finishReason === 'MAX_TOKENS') {
     throw new GeminiError('Gemini stopped before completing the course graph.', 502);
   }
   if (candidate.finishReason && !['STOP', 'FINISH_REASON_UNSPECIFIED'].includes(candidate.finishReason)) {
     throw new GeminiError(`Gemini could not complete the syllabus request (${candidate.finishReason}).`, 422);
   }
+  const content = candidate.content?.parts
+    ?.map((part) => part.text ?? '')
+    .join('')
+    .trim();
+  if (!content) throw new GeminiError('Gemini returned no parser content.', 502);
   logRequest(operation, 'success', startedAt, response.status);
   return content;
 }

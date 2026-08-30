@@ -24,6 +24,15 @@ import {
   type CoursePublicationStatus,
 } from '@/features/skilltree/courseDistribution';
 
+/** The `courses` columns the admin list reads. */
+type AdminCourseRow = {
+  id: string;
+  title: string;
+  term: string | null;
+  course_code: string | null;
+  owner_id: string | null;
+};
+
 /** One course as the admin course list draws it. */
 export interface AdminCourse extends CourseDistribution {
   id: string;
@@ -71,14 +80,18 @@ export async function isAdministrator(): Promise<boolean> {
  * their own courses, which is exactly what RLS says they may have.
  */
 export async function fetchAllCourses(): Promise<AdminCourse[]> {
-  const { data, error } = await supabase
-    .from('courses')
-    .select('id, title, term, course_code, owner_id, course_kind, publication_status, discoverability, source_course_id')
-    .order('created_at', { ascending: false });
-  if (error) throw error;
+  // Paged, not a bare select: `max_rows` truncates at a thousand with nothing
+  // in the response to say so, and a site past that would hide courses from the
+  // one account whose job is to find them.
+  const data = await readEveryRow<AdminCourseRow>(
+    'courses',
+    'id, title, term, course_code, owner_id, course_kind, publication_status, discoverability, source_course_id',
+    'id',
+    { column: 'created_at', ascending: false },
+  );
 
   const { data: auth } = await supabase.auth.getUser();
-  return (data ?? []).map((row) => ({
+  return data.map((row) => ({
     ...normalizeCourseDistribution(row as Record<string, unknown>),
     id: String(row.id),
     title: String(row.title),
@@ -105,11 +118,11 @@ export async function fetchAllCourses(): Promise<AdminCourse[]> {
  */
 export async function fetchAccounts(): Promise<AdminAccount[]> {
   const [profiles, badges] = await Promise.all([
-    readEveryRow('profiles', 'id, display_name', 'display_name'),
+    readEveryRow('profiles', 'id, display_name', 'id', { column: 'display_name' }),
     // A revoked row is still a row. Verification is `revoked_at is null`, which
     // is what `is_verified_instructor` checks, and reading the row's presence
     // alone would show a revoked instructor as verified.
-    readEveryRow('verified_instructors', 'user_id, revoked_at').then(
+    readEveryRow('verified_instructors', 'user_id, revoked_at', 'user_id').then(
       (rows) =>
         new Set(
           rows.filter((row) => row.revoked_at === null).map((row) => String(row.user_id)),
@@ -149,21 +162,31 @@ const MAX_PAGES = 50;
  * missing from *Filter by who did it* reads as a person who has done nothing,
  * which is the one thing this screen must never imply. Paged until a short page
  * says the table ended.
+ *
+ * `keyColumn` is the table's primary key and is not optional, because paging
+ * with `.range()` over an unstable order drops rows all by itself: Postgres
+ * gives no order across separate `offset` requests unless one is asked for, and
+ * a non-unique `order by` (`display_name`) is only half an order. Either way a
+ * row can land on two pages and be missing from a third — reintroducing the
+ * failure this function exists to prevent. Any display order is applied first
+ * and the key breaks its ties.
  */
-async function readEveryRow(
-  table: 'profiles' | 'verified_instructors',
+export async function readEveryRow<T = Record<string, unknown>>(
+  table: string,
   columns: string,
-  orderBy?: string,
-): Promise<Record<string, unknown>[]> {
-  const rows: Record<string, unknown>[] = [];
+  keyColumn: string,
+  order?: { column: string; ascending?: boolean },
+): Promise<T[]> {
+  const rows: T[] = [];
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const from = page * PAGE_ROWS;
     let query = supabase.from(table).select(columns).range(from, from + PAGE_ROWS - 1);
-    if (orderBy) query = query.order(orderBy);
+    if (order) query = query.order(order.column, { ascending: order.ascending ?? true });
+    query = query.order(keyColumn);
 
     const { data, error } = await query;
     if (error) throw error;
-    rows.push(...((data ?? []) as unknown as Record<string, unknown>[]));
+    rows.push(...((data ?? []) as unknown as T[]));
     if ((data?.length ?? 0) < PAGE_ROWS) break;
   }
   return rows;

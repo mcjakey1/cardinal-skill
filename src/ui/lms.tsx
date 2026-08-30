@@ -11,6 +11,8 @@
  * rings, eyebrows, and cards nested in cards.
  */
 
+import { useId } from 'react';
+
 import { Feather } from '@expo/vector-icons';
 import {
   Modal,
@@ -197,7 +199,7 @@ export function Badge({
   return (
     <View style={[styles.badge, { backgroundColor: s.bg, borderColor: s.line }]}>
       {icon ? <Feather name={icon} size={12} color={s.fg} /> : null}
-      <Text style={[lms.type.small as TextStyle, { color: s.fg, fontSize: 12 }]}>{label}</Text>
+      <Text style={[lms.type.small as TextStyle, { color: s.fg }]}>{label}</Text>
     </View>
   );
 }
@@ -298,6 +300,11 @@ export function Field({
   style,
   ...rest
 }: { label: string; hint?: string; tall?: boolean; error?: string } & TextInputProps) {
+  // The line under the box is not a loose sibling of it. `aria-describedby` is
+  // what makes a reader hear the hint, and hear the error replace it; without
+  // `aria-invalid` the box goes red and announces exactly as it did before.
+  const messageId = useId();
+  const message = error ?? hint;
   return (
     <View style={styles.field}>
       <LText variant="small" style={styles.fieldLabel}>
@@ -305,18 +312,21 @@ export function Field({
       </LText>
       <TextInput
         accessibilityLabel={label}
+        aria-invalid={Boolean(error)}
+        aria-describedby={message ? messageId : undefined}
         placeholderTextColor={c.inkMuted}
         multiline={tall}
         style={[styles.input, tall ? styles.inputTall : null, error ? styles.inputError : null, style]}
         {...rest}
       />
-      {error ? (
-        <LText variant="small" tone="attention">
-          {error}
-        </LText>
-      ) : hint ? (
-        <LText variant="small" tone="muted">
-          {hint}
+      {message ? (
+        <LText
+          nativeID={messageId}
+          variant="small"
+          tone={error ? 'attention' : 'muted'}
+          role={error ? 'alert' : undefined}
+        >
+          {message}
         </LText>
       ) : null}
     </View>
@@ -385,7 +395,10 @@ export function LModal({
           accessibilityRole="button"
           onPress={onRequestClose}
         />
-        <View style={styles.modalCard} accessibilityViewIsModal accessibilityRole="alert">
+        {/* A dialog, not an alert. `alert` is a live region: it made the whole
+            card — heading, prose and the Cancel button with it — announce as one
+            announcement rather than as the thing you are standing in. */}
+        <View style={styles.modalCard} accessibilityViewIsModal role="dialog" aria-modal>
           <LText variant="section">{title}</LText>
           {children}
         </View>
@@ -453,43 +466,60 @@ export function DataTable({
 
           {rows.length === 0 && empty ? <View style={styles.tableEmpty}>{empty}</View> : null}
 
-          {rows.map((row) => (
-            <Pressable
-              key={row.key}
-              onPress={row.onPress}
-              // Deliberately not `disabled={!row.onPress}`. On web that renders
-              // `pointer-events: none` over the whole row, which reaches the
-              // controls inside the cells — a row that merely has no press of
-              // its own would kill the Verify and Revoke buttons standing in
-              // it. A row with no `onPress` is already inert; saying so twice
-              // costs every control it contains.
-              accessibilityRole={row.onPress ? 'button' : undefined}
-              accessibilityLabel={row.label}
-              style={({ hovered }: PressState) => [
-                styles.tableRow,
-                row.active ? { backgroundColor: c.brandWash } : null,
-                hovered && row.onPress ? { backgroundColor: c.surfaceHover } : null,
-              ]}
-            >
-              {row.cells.map((cell, i) => {
-                const col = columns[i]!;
-                return (
-                  <View
-                    key={col.key}
-                    style={[{ flex: col.flex ?? 1 }, col.num ? styles.cellRight : null]}
-                  >
-                    {typeof cell === 'string' || typeof cell === 'number' ? (
-                      <LText variant="small" numeric={col.num}>
-                        {cell}
-                      </LText>
-                    ) : (
-                      cell
-                    )}
-                  </View>
-                );
-              })}
-            </Pressable>
-          ))}
+          {rows.map((row) => {
+            const cells = row.cells.map((cell, i) => {
+              const col = columns[i]!;
+              return (
+                <View
+                  key={col.key}
+                  style={[{ flex: col.flex ?? 1 }, col.num ? styles.cellRight : null]}
+                >
+                  {typeof cell === 'string' || typeof cell === 'number' ? (
+                    <LText variant="small" numeric={col.num}>
+                      {cell}
+                    </LText>
+                  ) : (
+                    cell
+                  )}
+                </View>
+              );
+            });
+
+            // A row without an `onPress` is not a control, so it is not drawn as
+            // one. Rendering every row as a `Pressable` gave web a
+            // `tabindex="0"` div with a pointer cursor and no role: twenty inert
+            // stops to tab past on the way to the buttons standing inside the
+            // cells, and a cursor promising a click that never came.
+            // Deliberately not `disabled={!row.onPress}` on a Pressable — on web
+            // that renders `pointer-events: none` over the whole row and kills
+            // those buttons too.
+            if (!row.onPress) {
+              return (
+                <View
+                  key={row.key}
+                  style={[styles.tableRow, row.active ? { backgroundColor: c.brandWash } : null]}
+                >
+                  {cells}
+                </View>
+              );
+            }
+
+            return (
+              <Pressable
+                key={row.key}
+                onPress={row.onPress}
+                accessibilityRole="button"
+                accessibilityLabel={row.label}
+                style={({ hovered }: PressState) => [
+                  styles.tableRow,
+                  row.active ? { backgroundColor: c.brandWash } : null,
+                  hovered ? { backgroundColor: c.surfaceHover } : null,
+                ]}
+              >
+                {cells}
+              </Pressable>
+            );
+          })}
         </View>
       </ScrollView>
     </View>
@@ -532,12 +562,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: lms.space.sm,
-    minHeight: 34,
-    paddingHorizontal: 13,
+    // `lms.touch`, not a tighter number that looks right on a desktop. The floor
+    // is the same 44dp the student app keeps, and `sm` buys narrower, not
+    // shorter — a control this workspace ships on a phone too.
+    minHeight: lms.touch,
+    paddingHorizontal: lms.space.lg,
     borderRadius: lms.radius.sm,
     backgroundColor: c.surface,
   },
-  buttonSm: { minHeight: 30, paddingHorizontal: 10 },
+  buttonSm: { paddingHorizontal: lms.space.md },
   buttonBordered: { borderWidth: 1, borderColor: c.lineStrong },
   buttonQuiet: { backgroundColor: 'transparent' },
   buttonDanger: { backgroundColor: c.attention, borderColor: c.attention },
@@ -550,7 +583,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: lms.space.xs,
     alignSelf: 'flex-start',
-    minHeight: 21,
+    // One line of small text, plus the hairline it sits inside.
+    minHeight: lms.type.small.lineHeight + lms.space.xs,
     paddingHorizontal: lms.space.sm,
     borderRadius: lms.radius.pill,
     borderWidth: 1,
@@ -581,15 +615,15 @@ const styles = StyleSheet.create({
   field: { gap: lms.space.xs },
   fieldLabel: { fontWeight: '600' },
   input: {
-    minHeight: 34,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    minHeight: lms.touch,
+    paddingHorizontal: lms.space.md,
+    paddingVertical: lms.space.sm,
     borderWidth: 1,
     borderColor: c.lineStrong,
     borderRadius: lms.radius.sm,
     backgroundColor: c.surface,
     color: c.ink,
-    fontSize: 14,
+    fontSize: lms.type.body.fontSize,
   },
   inputTall: { minHeight: 132, textAlignVertical: 'top' },
   inputError: { borderColor: c.attention },
@@ -603,7 +637,7 @@ const styles = StyleSheet.create({
     backgroundColor: c.surfaceSunk,
   },
   segment: {
-    minHeight: 28,
+    minHeight: lms.touch,
     justifyContent: 'center',
     paddingHorizontal: lms.space.md,
     borderRadius: lms.radius.sm,
@@ -625,17 +659,18 @@ const styles = StyleSheet.create({
     backgroundColor: c.surface,
     borderWidth: 1,
     borderColor: c.line,
-    borderRadius: 8,
-    shadowColor: '#000',
+    borderRadius: lms.radius.md,
+    // A deeper cast of `lms.lift` — same ink, lifted further off the page.
+    shadowColor: c.ink,
     shadowOpacity: 0.18,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 8 },
     elevation: 12,
   },
 
-  caption: { paddingHorizontal: lms.space.lg, paddingVertical: 9 },
+  caption: { paddingHorizontal: lms.space.lg, paddingVertical: lms.space.sm },
   tableScroll: { flexGrow: 1 },
-  table: { flex: 1, minWidth: 620 },
+  table: { flex: 1, minWidth: lms.tableMin },
   tableHead: {
     flexDirection: 'row',
     gap: lms.space.md,

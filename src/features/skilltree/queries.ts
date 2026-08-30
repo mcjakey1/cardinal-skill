@@ -161,24 +161,45 @@ export async function fetchTree(courseId: string, strictMissionData = false): Pr
     };
   }
 
+  // `node_progress` and `mission_progress` carry no course column, so an
+  // unnarrowed read spans every course the account has ever touched. A student
+  // of two years crosses `max_rows` long before one course does, PostgREST
+  // truncates without saying so, and the rows that fell off come back as nodes
+  // that re-lock and finished missions that reappear as outstanding. Narrowing
+  // to this chart's ids is for correctness, not access control — RLS still
+  // decides whose progress rows exist, which is why there is still no user id
+  // here. The two reads wait on their id lists; the rest stay parallel.
+  const nodesPromise = fetchCourseNodes(courseId);
+  const missionsPromise = fetchMissions(courseId);
   const [nodesRes, prereqsRes, progressRes, xpRes, courseRes, missionsRes, missionProgressRes] =
     await Promise.all([
-      fetchCourseNodes(courseId),
+      nodesPromise,
       supabase.from('node_prereqs').select('node_id, prereq_id').eq('course_id', courseId),
-      supabase.from('node_progress').select('node_id').eq('status', 'mastered'),
+      nodesPromise.then((res) => supabase
+        .from('node_progress')
+        .select('node_id')
+        .eq('status', 'mastered')
+        .in('node_id', (res.data ?? []).map((row) => row.id))),
       supabase.rpc('total_xp_for_course', { p_course_id: courseId }),
       supabase.from('courses').select('title').eq('id', courseId).maybeSingle(),
-      fetchMissions(courseId),
-      // No user id: RLS scopes mission_progress to the caller. Adding one here
-      // would look like the control and isn't.
-      supabase.from('mission_progress').select('mission_id'),
+      missionsPromise,
+      missionsPromise.then((res) => supabase
+        .from('mission_progress')
+        .select('mission_id')
+        .in('mission_id', (res.data ?? []).map((row) => row.id))),
     ]);
 
+  // `missionProgressRes.error` is fatal whether or not missions are strict. The
+  // tolerance below is for a failed *missions* read — a chart whose content did
+  // not load. An empty `completedMissionIds` is not the absence of an answer,
+  // it is the claim that the student has finished nothing, and a failed read is
+  // never entitled to make it.
   const firstError = nodesRes.error
     ?? prereqsRes.error
     ?? progressRes.error
     ?? xpRes.error
-    ?? (strictMissionData ? missionsRes.error ?? missionProgressRes.error ?? courseRes.error : null);
+    ?? missionProgressRes.error
+    ?? (strictMissionData ? missionsRes.error ?? courseRes.error : null);
   if (firstError) {
     const cached = await loadCachedTree(courseId);
     if (cached) return cached;

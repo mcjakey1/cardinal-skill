@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import {
@@ -162,7 +162,6 @@ export function AdminArea({
               icon="unlock"
               variant="primary"
               onPress={submit}
-              style={styles.tall}
             />
           </View>
         </Panel>
@@ -257,7 +256,7 @@ function Unlocked({
             whenever the app is reloaded, so nothing is left open on a shared computer.
           </LText>
           <View style={styles.row}>
-            <LButton label="Close the admin area" icon="lock" onPress={onLock} style={styles.tall} />
+            <LButton label="Close the admin area" icon="lock" onPress={onLock} />
           </View>
         </View>
       </Panel>
@@ -291,14 +290,27 @@ function Courses({
     mutationFn: ({ id, status }: { id: string; status: CoursePublicationStatus }) =>
       setCoursePublication(id, status),
     onSuccess: () => {
-      setConfirming(null);
       // The workspace's own course list reads the same rows and shows the same
       // publication badges, so it is stale the moment this succeeds.
       void client.invalidateQueries({ queryKey: ['admin-courses'] });
       void client.invalidateQueries({ queryKey: ['courses'] });
       void client.invalidateQueries({ queryKey: ['admin-audit'] });
     },
+    // Settled, not succeeded. A refusal used to leave the dialog standing over
+    // the very Notice explaining it — pressing the button looked like nothing
+    // happened. The dialog closes either way; the panel behind it says which.
+    onSettled: () => setConfirming(null),
   });
+
+  /**
+   * Opening or closing the dialog clears the last failure. Otherwise a red
+   * Notice about an archive that was refused stands over the publish you are
+   * about to try, and stays until another course is chosen.
+   */
+  const choose = (next: CoursePublicationStatus | null) => {
+    change.reset();
+    setConfirming(next);
+  };
 
   const rows = (courses.data ?? []).filter((course) =>
     course.title.toLowerCase().includes(search.trim().toLowerCase()),
@@ -377,7 +389,6 @@ function Courses({
                 <LButton
                   label="Open this chart"
                   icon="git-branch"
-                  style={styles.tall}
                   onPress={() => onOpenChart(course.id)}
                 />
               </View>
@@ -385,7 +396,7 @@ function Courses({
               <CourseActions
                 course={course}
                 pending={change.isPending}
-                onChoose={setConfirming}
+                onChoose={choose}
               />
               {change.error ? (
                 <Notice tone="error" title="That did not go through">
@@ -400,7 +411,7 @@ function Courses({
       <LModal
         visible={confirming !== null}
         title={confirming === 'archived' ? 'Archive this course?' : 'Change this course?'}
-        onRequestClose={() => setConfirming(null)}
+        onRequestClose={() => choose(null)}
       >
         <View style={styles.body}>
           <LText variant="small" style={styles.prose}>
@@ -415,7 +426,6 @@ function Courses({
               label={confirming === 'archived' ? 'Archive it' : 'Do it'}
               variant={confirming === 'archived' ? 'danger' : 'primary'}
               disabled={change.isPending}
-              style={styles.tall}
               onPress={() => {
                 if (course && confirming) change.mutate({ id: course.id, status: confirming });
               }}
@@ -424,8 +434,7 @@ function Courses({
               label="Cancel"
               variant="quiet"
               disabled={change.isPending}
-              style={styles.tall}
-              onPress={() => setConfirming(null)}
+              onPress={() => choose(null)}
             />
           </View>
         </View>
@@ -495,7 +504,6 @@ function CourseActions({
             label={action.label}
             variant={action.status === 'archived' ? 'danger' : 'default'}
             disabled={pending}
-            style={styles.tall}
             onPress={() => onChoose(action.status)}
           />
         </View>
@@ -789,9 +797,9 @@ function Badges() {
 
         {unreadable ? (
           <Notice tone="attention" title="The current badges cannot be read on this database">
-            Granting and revoking still work. Showing which accounts already hold a badge needs
-            migration 0034, which has not been applied here — so no badge state is drawn rather
-            than every account being drawn as unverified.
+            Granting and revoking still work, and every row offers both — the state cannot be read,
+            so neither can be ruled out. Showing which accounts already hold a badge needs migration
+            0034, which has not been applied here.
           </Notice>
         ) : null}
 
@@ -831,34 +839,58 @@ function Badges() {
 }
 
 function badgeRow(account: AdminAccount, pending: boolean, onSet: (verified: boolean) => void) {
+  const unknown = account.verified === null;
   return {
     key: account.userId,
-    label: `${account.displayName}, ${account.verified ? 'verified' : 'not verified'}`,
+    label: unknown
+      ? `${account.displayName}, badge state unknown`
+      : `${account.displayName}, ${account.verified ? 'verified' : 'not verified'}`,
     cells: [
       <LText key="who" variant="small" style={styles.strong} numberOfLines={1}>
         {account.displayName}
       </LText>,
       <View key="badge" style={styles.rowInline}>
-        {account.verified === null ? null : (
+        {unknown ? (
+          <Badge tone="attention" icon="help-circle" label="Not readable" />
+        ) : (
           <Badge
             tone={account.verified ? 'gold' : 'neutral'}
             icon={account.verified ? 'award' : 'minus'}
             label={account.verified ? 'Verified' : 'Not verified'}
           />
         )}
-        <LButton
-          size="sm"
-          label={account.verified ? 'Revoke' : 'Verify'}
-          variant={account.verified ? 'danger' : 'default'}
-          disabled={pending}
-          onPress={() => onSet(!account.verified)}
-        />
+        {/* `null` is not `false`. Toggling off an unknown state offered Verify on
+            every row and put Revoke out of reach — the one case where the
+            administrator most needs both. So both are drawn. */}
+        {unknown ? (
+          <>
+            <LButton size="sm" label="Verify" disabled={pending} onPress={() => onSet(true)} />
+            <LButton
+              size="sm"
+              label="Revoke"
+              variant="danger"
+              disabled={pending}
+              onPress={() => onSet(false)}
+            />
+          </>
+        ) : (
+          <LButton
+            size="sm"
+            label={account.verified ? 'Revoke' : 'Verify'}
+            variant={account.verified ? 'danger' : 'default'}
+            disabled={pending}
+            onPress={() => onSet(!account.verified)}
+          />
+        )}
       </View>,
     ],
   };
 }
 
 // ----------------------------------------------------------------- audit log
+
+/** Long enough that a typed word is one request, short enough to feel live. */
+const SEARCH_PAUSE = 300;
 
 const AUDIT_COLUMNS = [
   { key: 'when', label: 'When', flex: 2 },
@@ -933,6 +965,14 @@ function AuditLog({
   // being filtered on. "2026-0" is a person half way through a date, not a
   // request; only a whole, real day reaches `filter` and therefore the server.
   const [dateText, setDateText] = useState<{ from: string; to: string }>({ from: '', to: '' });
+  // Same rule as the date boxes, for the same reason: the box holds what was
+  // typed, and only a pause in the typing reaches the server. Bound to `filter`
+  // directly, `socio` was five RPCs and five cache entries — one per letter.
+  const [searchText, setSearchText] = useState('');
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+  }, []);
 
   const trail = useQuery({
     // The filter is in the key, so a narrowed record is its own cache entry and
@@ -976,10 +1016,21 @@ function AuditLog({
   const summaryCapped = recentRows.length >= SUMMARY_LIMIT;
 
   /** Any change to what is being asked starts the record again. */
-  const narrow = (next: AuditFilter) => {
+  const narrow = (next: AuditFilter | ((current: AuditFilter) => AuditFilter)) => {
     setFilter(next);
     setPages([]);
     setMoreError(null);
+  };
+
+  const typeSearch = (text: string) => {
+    setSearchText(text);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    // Read from the current filter rather than the one captured here: a group
+    // chip pressed mid-pause must not be undone when this fires.
+    searchTimer.current = setTimeout(
+      () => narrow((current) => ({ ...current, search: text })),
+      SEARCH_PAUSE,
+    );
   };
 
   const chooseRange = (next: RangeChoice) => {
@@ -1027,7 +1078,8 @@ function AuditLog({
 
   const exportCsv = () => {
     const now = new Date();
-    void saveCsv(auditCsvFilename(filter, now), auditCsv(loaded, narrowing, now));
+    // A cursor means the server still had rows this screen had not asked for.
+    void saveCsv(auditCsvFilename(filter, now), auditCsv(loaded, narrowing, now, Boolean(cursor)));
   };
 
   return (
@@ -1073,6 +1125,8 @@ function AuditLog({
           onRange={chooseRange}
           onActorSearch={setActorSearch}
           onTypeDate={typeDate}
+          searchText={searchText}
+          onTypeSearch={typeSearch}
         />
 
         {trail.isPending ? (
@@ -1113,7 +1167,6 @@ function AuditLog({
                   label={loadingMore ? 'Loading…' : `Show ${AUDIT_PAGE} more`}
                   icon="chevron-down"
                   disabled={loadingMore}
-                  style={styles.tall}
                   onPress={() => void showMore()}
                 />
               ) : null}
@@ -1121,7 +1174,6 @@ function AuditLog({
                 <LButton
                   label="Export CSV"
                   icon="download"
-                  style={styles.tall}
                   onPress={exportCsv}
                   accessibilityHint={
                     active
@@ -1135,7 +1187,6 @@ function AuditLog({
                   label="Clear filters"
                   variant="quiet"
                   icon="x"
-                  style={styles.tall}
                   onPress={() => {
                     setRange('all');
                     setActorSearch('');
@@ -1217,6 +1268,8 @@ function AuditFilters({
   onRange,
   onActorSearch,
   onTypeDate,
+  searchText,
+  onTypeSearch,
 }: {
   filter: AuditFilter;
   range: RangeChoice;
@@ -1227,6 +1280,8 @@ function AuditFilters({
   onRange: (next: RangeChoice) => void;
   onActorSearch: (next: string) => void;
   onTypeDate: (which: 'from' | 'to', text: string) => void;
+  searchText: string;
+  onTypeSearch: (text: string) => void;
 }) {
   const actor = accounts.find((account) => account.userId === filter.actorId) ?? null;
 
@@ -1234,8 +1289,8 @@ function AuditFilters({
     <>
       <Field
         label="Search names and courses"
-        value={filter.search}
-        onChangeText={(search) => onNarrow({ ...filter, search })}
+        value={searchText}
+        onChangeText={onTypeSearch}
         placeholder="Type a person or a course"
         autoCapitalize="none"
         style={styles.input}
@@ -1509,5 +1564,4 @@ const styles = StyleSheet.create({
   // Bigger than the workspace default on purpose: this is the round of work that
   // holds every target to the 44px floor `lms.touch` names.
   input: { minHeight: lms.touch, fontSize: 16 },
-  tall: { minHeight: lms.touch, paddingHorizontal: lms.space.lg },
 });

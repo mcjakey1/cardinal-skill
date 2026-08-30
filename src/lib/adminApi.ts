@@ -17,7 +17,13 @@
 
 import { supabase } from '@/lib/supabase';
 import { EMPTY_AUDIT_FILTER, auditQueryParams } from '@/lib/admin';
-import type { AuditCursor, AuditEntry, AuditFilter } from '@/lib/admin';
+import type {
+  AccountType,
+  AccountTypeAccount,
+  AuditCursor,
+  AuditEntry,
+  AuditFilter,
+} from '@/lib/admin';
 import {
   normalizeCourseDistribution,
   type CourseDistribution,
@@ -212,6 +218,27 @@ export async function setInstructorVerification(
   const { error } = await supabase.rpc('admin_set_instructor_verification', {
     p_user_id: userId,
     p_verified: verified,
+  });
+  if (error) throw error;
+}
+
+/** Every non-administrator account with the global type login routing uses. */
+export async function fetchAccountDirectory(): Promise<AccountTypeAccount[]> {
+  const { data, error } = await supabase.rpc('admin_account_directory');
+  if (error) throw error;
+  return (data ?? []).map((row: Record<string, unknown>) => ({
+    userId: String(row.user_id),
+    displayName: String(row.display_name || 'Unnamed account'),
+    email: String(row.email || ''),
+    accountType: row.account_type === 'instructor' ? 'instructor' : 'student',
+  }));
+}
+
+/** Change a non-administrator account's authoritative global type. */
+export async function setAccountType(userId: string, accountType: AccountType): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_account_type', {
+    p_user_id: userId,
+    p_account_type: accountType,
   });
   if (error) throw error;
 }

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -14,7 +14,7 @@ import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree
 import { instructorImportError } from '@/lib/syllabusImport';
 import type { CourseKind, CoursePublicationStatus } from '@/features/skilltree/courseDistribution';
 import { usePrefs } from '@/lib/prefs';
-import { useAuth } from '@/auth/AuthContext';
+import { useAuth, type UserSession } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
 import { authorableCourses } from '@/lib/admin';
 import { isAdministrator, readEveryRow } from '@/lib/adminApi';
@@ -144,9 +144,19 @@ export default function Instructor() {
   // the rail would drop them back at the top of a page they were part-way down.
   const [returnTo, setReturnTo] = useState<Section | null>(null);
   const liveSession = session?.source === 'supabase';
+  const hasInstructorAccess = session?.role === 'instructor';
+
+  useEffect(() => {
+    if (!session || hasInstructorAccess) return;
+    router.replace({
+      pathname: '/tree/[courseId]',
+      params: { courseId: lastCourseId ?? DEMO_COURSE_ID },
+    });
+  }, [hasInstructorAccess, lastCourseId, router, session]);
 
   const courses = useQuery({
     queryKey: ['instructor-courses'],
+    enabled: hasInstructorAccess,
     queryFn: async (): Promise<CourseRow[]> => {
       const [{ data: auth }, data, admin] = await Promise.all([
         supabase.auth.getUser(),
@@ -173,6 +183,8 @@ export default function Instructor() {
       );
     },
   });
+
+  if (!session || !hasInstructorAccess) return null;
 
   // The example chart is always in the list. Without a Supabase project behind
   // the app this is the only course there is, and a courses screen that reads
@@ -243,6 +255,7 @@ export default function Instructor() {
       onGo={go}
       onClose={() => setDrawer(false)}
       closable={!wide}
+      session={session}
       onSignOut={() => setSignOutOpen(true)}
     />
   );
@@ -406,14 +419,21 @@ function Rail({
   onGo,
   onClose,
   closable,
+  session,
   onSignOut,
 }: {
   section: Section;
   onGo: (next: Section) => void;
   onClose: () => void;
   closable: boolean;
+  session: UserSession;
   onSignOut: () => void;
 }) {
+  const demo = session.source === 'demo';
+  const accountName = demo ? 'Demo instructor' : session.name.trim() || session.email;
+  const accountDetail = demo ? 'Local session' : session.email;
+  const initials = accountInitials(accountName, session.email);
+
   return (
     <View style={styles.rail} accessibilityLabel="Workspace navigation">
       <View style={styles.railBrand}>
@@ -462,18 +482,22 @@ function Rail({
           active={section === 'settings'}
           onPress={() => onGo('settings')}
         />
-        <View style={styles.railUser}>
+        <View
+          style={styles.railUser}
+          accessible
+          accessibilityLabel={`Signed in as ${accountName}, ${accountDetail}`}
+        >
           <View style={styles.avatar}>
             <LText variant="small" tone="muted">
-              IN
+              {initials}
             </LText>
           </View>
           <View style={styles.railBrandText}>
             <LText variant="small" style={styles.strong} numberOfLines={1}>
-              Signed in locally
+              {accountName}
             </LText>
             <LText variant="small" tone="muted" numberOfLines={1}>
-              Instructor
+              {accountDetail}
             </LText>
           </View>
           <LButton label="Sign out" icon="log-out" hideLabel variant="quiet" onPress={onSignOut} />
@@ -481,6 +505,13 @@ function Rail({
       </View>
     </View>
   );
+}
+
+function accountInitials(name: string, email: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1) return `${words[0]![0]}${words[words.length - 1]![0]}`.toUpperCase();
+  const identity = words[0] || email.split('@')[0] || 'Instructor';
+  return identity.slice(0, 2).toUpperCase();
 }
 
 function RailCell({

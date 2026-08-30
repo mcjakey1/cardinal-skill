@@ -14,13 +14,14 @@ import {
   type SessionInput,
   type UserSession,
 } from './session';
+import { withTimeout } from './timeout';
 
 export type { AuthRole, UserSession } from './session';
 
 interface AuthValue {
   ready: boolean;
   session: UserSession | null;
-  signIn: (input: SessionInput) => Promise<UserSession>;
+  signIn: (input: Pick<SessionInput, 'email' | 'password'>) => Promise<UserSession>;
   register: (input: Required<SessionInput>) => Promise<RegistrationResult>;
   continueDemo: (input: SessionInput) => Promise<UserSession>;
   logout: () => Promise<void>;
@@ -32,6 +33,8 @@ interface RegistrationResult {
 }
 
 const SESSION_KEY = 'cardinal.auth-session.v1';
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+const AUTH_TIMEOUT_MESSAGE = 'Supabase took too long to respond. Check your connection and try again.';
 
 /**
  * Ask the server what this account is. Returns null when nobody is signed in
@@ -44,21 +47,31 @@ async function readRoleEvidence(): Promise<RoleEvidence | null> {
   try {
     // The local session, not getUser(): metadata is already in it, and a
     // demo-free launch on a dead network should not wait on a round trip.
-    const { data: auth } = await supabase.auth.getSession();
+    const { data: auth } = await withTimeout(
+      supabase.auth.getSession(),
+      AUTH_REQUEST_TIMEOUT_MS,
+      AUTH_TIMEOUT_MESSAGE,
+    );
     const user = auth.session?.user;
     if (!user) return null;
-    const [verifiedInstructor, courses] = await Promise.all([
-      fetchInstructorVerification(),
-      supabase
-        .from('courses')
-        .select('id')
-        .eq('owner_id', user.id)
-        .eq('course_kind', 'official')
-        .limit(1),
-    ]);
+    const [verifiedInstructor, courses] = await withTimeout(
+      Promise.all([
+        fetchInstructorVerification(),
+        supabase
+          .from('courses')
+          .select('id')
+          .eq('owner_id', user.id)
+          .eq('course_kind', 'official')
+          .limit(1),
+      ]),
+      AUTH_REQUEST_TIMEOUT_MS,
+      AUTH_TIMEOUT_MESSAGE,
+    );
     if (courses.error) throw courses.error;
     return {
-      metadataRole: user.user_metadata?.role,
+      // `account_type` is protected app metadata from 0043. The user metadata
+      // fallback keeps older projects usable until that migration is applied.
+      metadataRole: user.app_metadata?.account_type ?? user.user_metadata?.role,
       verifiedInstructor,
       ownsOfficialCourse: (courses.data ?? []).length > 0,
     };
@@ -129,25 +142,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return next;
   }, []);
 
-  const signIn = useCallback(async (input: SessionInput) => {
+  const signIn = useCallback(async (input: Pick<SessionInput, 'email' | 'password'>) => {
     if (input.email.trim() && input.password) {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: input.email.trim(),
-        password: input.password,
-      });
+      const { error } = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email: input.email.trim(),
+          password: input.password,
+        }),
+        AUTH_REQUEST_TIMEOUT_MS,
+        AUTH_TIMEOUT_MESSAGE,
+      );
       if (error) throw new Error(authErrorMessage(error.message));
-      return persist(input, 'supabase');
+      // Live sign-in never accepts a role claim from the form. Start at the
+      // least-privileged surface and let server evidence promote the account.
+      return persist({ ...input, role: 'student' }, 'supabase');
     }
     throw new Error('Enter your email and password to sign in.');
   }, [persist]);
 
   const register = useCallback(async (input: Required<SessionInput>) => {
     if (input.email.trim() && input.password) {
-      const { data, error } = await supabase.auth.signUp({
-        email: input.email.trim(),
-        password: input.password,
-        options: { data: { full_name: input.name, role: input.role } },
-      });
+      const { data, error } = await withTimeout(
+        supabase.auth.signUp({
+          email: input.email.trim(),
+          password: input.password,
+          options: { data: { full_name: input.name, role: input.role } },
+        }),
+        AUTH_REQUEST_TIMEOUT_MS,
+        AUTH_TIMEOUT_MESSAGE,
+      );
       if (error) throw new Error(authErrorMessage(error.message));
       if (!data.session) return { session: null, confirmationRequired: true };
       return { session: await persist(input, 'supabase'), confirmationRequired: false };

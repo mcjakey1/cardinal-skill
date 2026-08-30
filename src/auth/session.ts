@@ -67,25 +67,21 @@ export interface RoleEvidence {
  * request that failed — and the stored role then stands. Being offline is not
  * grounds for a demotion.
  *
- * This promotes and never demotes, which is not the same as trusting the
- * client. The three signals are proof of teaching, but their absence is not
- * proof of the opposite: an instructor is created before anyone verifies them,
- * and until an administrator adds that row they own nothing but practice
- * courses and may have registered through the student tab. Demoting on absent
- * evidence would take the workspace away from exactly that account and persist
- * it. Nothing is granted by the role either way — publishing, analytics and
- * every instructor read are gated on the server — so the cost of believing a
- * claimed instructor is a navigation cell they cannot use.
+ * When the server answers, its evidence decides both promotion and demotion.
+ * A role selected in the client cannot survive evidence that the account is a
+ * student; otherwise any student can enter the instructor surface by choosing
+ * a different sign-in role.
  */
 export function resolveSessionRole(
   session: UserSession | null,
   evidence: RoleEvidence | null,
 ): UserSession | null {
   if (!session || session.source !== 'supabase' || !evidence) return session;
-  const instructor = evidence.verifiedInstructor
+  const role: AuthRole = evidence.verifiedInstructor
     || evidence.ownsOfficialCourse
-    || evidence.metadataRole === 'instructor';
-  const role: AuthRole = instructor ? 'instructor' : session.role;
+    || evidence.metadataRole === 'instructor'
+    ? 'instructor'
+    : 'student';
   return role === session.role ? session : { ...session, role };
 }
 

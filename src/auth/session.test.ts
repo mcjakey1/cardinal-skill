@@ -72,9 +72,9 @@ test('a session the server agrees with is returned untouched', () => {
   );
 });
 
-test('an instructor the server cannot vouch for yet keeps the workspace', () => {
+test('a claimed instructor becomes a student when the server finds no instructor evidence', () => {
   const instructor: UserSession = { ...STUDENT, role: 'instructor' };
-  assert.equal(resolveSessionRole(instructor, NO_EVIDENCE), instructor);
+  assert.equal(resolveSessionRole(instructor, NO_EVIDENCE)?.role, 'student');
 });
 
 test('a demo instructor keeps its role with no server to ask', () => {

@@ -6,6 +6,7 @@ import {
   ADMIN_POWERS,
   EMPTY_AUDIT_FILTER,
   addableAccounts,
+  accountsOfType,
   administratorRoster,
   appendAuditPage,
   auditCsv,
@@ -57,11 +58,20 @@ test('the right password unlocks for the session, and locking closes it again', 
 });
 
 test('the promised powers are stated, not implied', () => {
-  assert.equal(ADMIN_POWERS.length, 5);
+  assert.equal(ADMIN_POWERS.length, 6);
   for (const power of ADMIN_POWERS) {
     assert.ok(power.length > 20, `too terse to be honest: ${power}`);
     assert.ok(power.endsWith('.'), `not a sentence: ${power}`);
   }
+});
+
+test('account type tabs partition the non-administrator directory', () => {
+  const accounts = [
+    { userId: 's', displayName: 'Student', email: 's@example.test', accountType: 'student' as const },
+    { userId: 'i', displayName: 'Instructor', email: 'i@example.test', accountType: 'instructor' as const },
+  ];
+  assert.deepEqual(accountsOfType(accounts, 'student').map((row) => row.userId), ['s']);
+  assert.deepEqual(accountsOfType(accounts, 'instructor').map((row) => row.userId), ['i']);
 });
 
 // --------------------------------------------------- publication transitions
@@ -312,6 +322,10 @@ test('every action an administrator can take reads as a sentence', () => {
     said({ action: 'administrator.revoked', subjectName: 'A. Reyes' }),
     'Removed A. Reyes as an administrator',
   );
+  assert.equal(
+    said({ action: 'account.role_changed', subjectName: 'A. Reyes', detail: { from: 'student', to: 'instructor' } }),
+    'Changed A. Reyes to instructor',
+  );
 });
 
 test('a publication change says what the course was before', () => {
@@ -555,6 +569,7 @@ test('two chosen groups narrow to both, not to the last one pressed', () => {
     'instructor.revoked',
     'administrator.granted',
     'administrator.revoked',
+    'account.role_changed',
   ]);
 });
 

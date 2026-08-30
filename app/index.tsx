@@ -40,7 +40,8 @@ export default function AuthScreen() {
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
   const { signIn, register, continueDemo } = useAuth();
-  const [role, setRole] = useState<AuthRole>('student');
+  const [registrationRole, setRegistrationRole] = useState<AuthRole>('student');
+  const [demoRole, setDemoRole] = useState<AuthRole>('student');
   const [mode, setMode] = useState<AuthMode>('sign-in');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -86,16 +87,17 @@ export default function AuthScreen() {
     setBusy(true);
     try {
       if (mode === 'register') {
-        const result = await register({ role, email, name: fullName, password });
+        const result = await register({ role: registrationRole, email, name: fullName, password });
         if (result.confirmationRequired) {
           setNotice('Account created. Confirm your email, then return here and sign in.');
           setMode('sign-in');
           return;
         }
       } else {
-        await signIn({ role, email, password });
+        const signedIn = await signIn({ email, password });
+        prefs.set('role', signedIn.role);
       }
-      prefs.set('role', role);
+      if (mode === 'register') prefs.set('role', registrationRole);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Authentication failed. Try again.');
     } finally {
@@ -109,8 +111,8 @@ export default function AuthScreen() {
     setNotice(null);
     setBusy(true);
     try {
-      await continueDemo({ role, email: '' });
-      prefs.set('role', role);
+      await continueDemo({ role: demoRole, email: '' });
+      prefs.set('role', demoRole);
     } catch {
       setError('Demo mode could not be started on this device. Try again.');
     } finally {
@@ -158,15 +160,22 @@ export default function AuthScreen() {
               ))}
             </Window>
 
-            <Bevel tone="panel" style={styles.selectorGroup}>
-              <PixelText variant="micro" colour={t.inkMuted}>OPERATING ROLE</PixelText>
-              <Choice value={role} options={ROLE_OPTIONS} onChange={setRole} label="Account role" />
-              <PixelText variant="body" colour={t.info}>{ROLE_COPY[role]}</PixelText>
-            </Bevel>
-
             <Choice value={mode} options={MODE_OPTIONS} onChange={setMode} label="Authentication mode" />
 
-            <Window title={mode === 'register' ? 'Register new account' : `${role} sign-in`}>
+            {mode === 'register' ? (
+              <Bevel tone="panel" style={styles.selectorGroup}>
+                <PixelText variant="micro" colour={t.inkMuted}>ACCOUNT ROLE</PixelText>
+                <Choice
+                  value={registrationRole}
+                  options={ROLE_OPTIONS}
+                  onChange={setRegistrationRole}
+                  label="Account role"
+                />
+                <PixelText variant="body" colour={t.info}>{ROLE_COPY[registrationRole]}</PixelText>
+              </Bevel>
+            ) : null}
+
+            <Window title={mode === 'register' ? 'Register new account' : 'Sign in'}>
               {mode === 'register' ? (
                 <PixelInput
                   label="Full name"
@@ -222,7 +231,7 @@ export default function AuthScreen() {
                   ? 'Connecting to Supabase…'
                   : mode === 'register'
                   ? 'Create account'
-                  : `Sign in as ${role}`}
+                  : 'Sign in'}
                 disabled={busy}
                 onPress={submit}
               />
@@ -234,8 +243,15 @@ export default function AuthScreen() {
                 Demo mode stays on this device. Live syllabus uploads and the AI companion require
                 a Supabase account.
               </PixelText>
+              <Choice
+                value={demoRole}
+                options={ROLE_OPTIONS}
+                onChange={setDemoRole}
+                label="Demo role"
+              />
+              <PixelText variant="body" colour={t.info}>{ROLE_COPY[demoRole]}</PixelText>
               <PixelButton
-                label={`Continue as demo ${role}`}
+                label={`Continue as demo ${demoRole}`}
                 tone="panel"
                 disabled={busy}
                 onPress={launchDemo}

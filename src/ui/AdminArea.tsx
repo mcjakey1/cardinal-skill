@@ -5,6 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import {
   AUDIT_GROUPS,
   EMPTY_AUDIT_FILTER,
+  accountsOfType,
   addableAccounts,
   adminActionMessage,
   appendAuditPage,
@@ -21,6 +22,8 @@ import {
   lockAdmin,
   nextAuditCursor,
   unlockAdmin,
+  type AccountType,
+  type AccountTypeAccount,
   type AuditEntry,
   type AdministratorRow,
   type AuditFilter,
@@ -29,12 +32,14 @@ import {
 import { saveCsv } from '@/lib/saveCsv';
 import {
   fetchAccounts,
+  fetchAccountDirectory,
   fetchAdministrators,
   fetchAllCourses,
   fetchAuditTrail,
   fetchCourseInstructors,
   isAdministrator,
   setAdministrator,
+  setAccountType,
   setCoursePublication,
   setEnrollment,
   setInstructorVerification,
@@ -127,7 +132,7 @@ export function AdminArea({
         <LText variant="page">Admin</LText>
         <LText variant="body" tone="muted" style={styles.prose}>
           {unlocked
-            ? 'Every course on the site, who is on them, and who carries a verified badge.'
+            ? 'Every course on the site, who is on them, and which account type they use.'
             : 'This area is for whoever looks after the whole site. It stays closed until the administrator password is typed in.'}
         </LText>
       </View>
@@ -232,6 +237,7 @@ function Unlocked({
         <>
           <Courses selected={courseId} onSelect={onSelectCourse} onOpenChart={onOpenChart} />
           <People courseId={courseId} />
+          <AccountTypes />
           <Badges />
           <Administrators />
           <AuditLog onOpenChart={onOpenChart} onOpenPerson={onOpenPerson} />
@@ -246,9 +252,10 @@ function Unlocked({
               than no button.
             </Notice>
             <LText variant="small" style={styles.prose}>
-              An administrator can edit and publish any course, archive one without losing a single
-              student record, grant and revoke an instructor’s verified badge, put a student on a
-              course or take them off, and read a named student’s progress on any course.
+              An administrator can correct whether a registered account is a student or instructor.
+              They can also edit and publish any course, archive one without losing a student
+              record, grant and revoke verified badges, manage course enrolment, and read a named
+              student’s progress on any course.
             </LText>
           </View>
         </Panel>
@@ -919,6 +926,184 @@ function personRow(
         disabled={pending}
         onPress={() => onSet(!person.enrolled)}
       />,
+    ],
+  };
+}
+
+// ------------------------------------------------------------- account types
+
+const ACCOUNT_TYPE_COLUMNS = [
+  { key: 'who', label: 'Account', flex: 3 },
+  { key: 'type', label: 'Account type', flex: 2 },
+];
+
+function AccountTypes() {
+  const client = useQueryClient();
+  const [active, setActive] = useState<AccountType>('student');
+  const [search, setSearch] = useState('');
+  const [confirming, setConfirming] = useState<AccountTypeAccount | null>(null);
+
+  const directory = useQuery({
+    queryKey: ['admin-account-directory'],
+    queryFn: fetchAccountDirectory,
+  });
+
+  const change = useMutation({
+    mutationFn: ({ userId, accountType }: { userId: string; accountType: AccountType }) =>
+      setAccountType(userId, accountType),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin-account-directory'] });
+      void client.invalidateQueries({ queryKey: ['admin-accounts'] });
+      void client.invalidateQueries({ queryKey: ['admin-audit'] });
+    },
+    onSettled: () => setConfirming(null),
+  });
+
+  const choose = (account: AccountTypeAccount | null) => {
+    change.reset();
+    setConfirming(account);
+  };
+
+  const accounts = directory.data ?? [];
+  const students = accountsOfType(accounts, 'student');
+  const instructors = accountsOfType(accounts, 'instructor');
+  const shown = findPeople(search, active === 'student' ? students : instructors);
+  const nextType: AccountType = confirming?.accountType === 'student' ? 'instructor' : 'student';
+
+  return (
+    <>
+      <Panel>
+        <PanelHead
+          title="Account types"
+          right={directory.data ? <Badge icon="users" label={`${accounts.length} non-admin accounts`} /> : undefined}
+        />
+        <View style={styles.body}>
+          <LText variant="small" tone="muted" style={styles.prose}>
+            Move a registered account between the student and instructor experiences. Administrator
+            accounts are kept out of this list and cannot be changed here.
+          </LText>
+
+          <Segmented
+            label="Account type"
+            value={active}
+            onChange={setActive}
+            options={[
+              { value: 'student', label: `Students (${students.length})` },
+              { value: 'instructor', label: `Instructors (${instructors.length})` },
+            ]}
+          />
+
+          <Field
+            label={`Find ${active === 'student' ? 'a student' : 'an instructor'}`}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Type a name or email"
+            autoCapitalize="none"
+            style={styles.input}
+          />
+
+          {change.error ? (
+            <Notice tone="error" title="The account type was not changed">
+              {adminActionMessage(change.error)}
+            </Notice>
+          ) : null}
+
+          {directory.isPending ? (
+            <>
+              <Skeleton width="60%" />
+              <Skeleton width="45%" />
+            </>
+          ) : directory.error ? (
+            <Notice tone="error" title="The account directory did not load">
+              {adminActionMessage(directory.error)}
+            </Notice>
+          ) : (
+            <DataTable
+              columns={ACCOUNT_TYPE_COLUMNS}
+              rows={shown.map((account) => accountTypeRow(account, change.isPending, choose))}
+              caption={`${active === 'student' ? 'Students' : 'Instructors'} only. Administrators are excluded.`}
+              empty={
+                <LText variant="small" tone="muted">
+                  {search.trim()
+                    ? `No ${active} account matches that search.`
+                    : `No ${active} accounts to show.`}
+                </LText>
+              }
+            />
+          )}
+        </View>
+      </Panel>
+
+      <LModal
+        visible={confirming !== null}
+        title={`Change ${confirming?.displayName ?? 'this account'} to ${nextType}?`}
+        onRequestClose={() => choose(null)}
+      >
+        <View style={styles.body}>
+          <LText variant="small" style={styles.prose}>
+            {nextType === 'instructor'
+              ? 'They will open the instructor workspace after their next sign-in and may create official courses. Their existing student progress stays intact.'
+              : 'They will open the student experience after their next sign-in. Their courses and student progress are not deleted.'}
+          </LText>
+          {nextType === 'student' ? (
+            <LText variant="small" tone="muted" style={styles.prose}>
+              If they still own an official course, the server will refuse this change until that
+              course is transferred or archived.
+            </LText>
+          ) : null}
+          <View style={styles.row}>
+            <LButton
+              label={`Change to ${nextType}`}
+              variant="primary"
+              disabled={change.isPending}
+              onPress={() => {
+                if (confirming) change.mutate({ userId: confirming.userId, accountType: nextType });
+              }}
+            />
+            <LButton
+              label="Cancel"
+              variant="quiet"
+              disabled={change.isPending}
+              onPress={() => choose(null)}
+            />
+          </View>
+        </View>
+      </LModal>
+    </>
+  );
+}
+
+function accountTypeRow(
+  account: AccountTypeAccount,
+  pending: boolean,
+  onChoose: (account: AccountTypeAccount) => void,
+) {
+  const nextType = account.accountType === 'student' ? 'instructor' : 'student';
+  return {
+    key: account.userId,
+    label: `${account.displayName}, ${account.email}, ${account.accountType}`,
+    cells: [
+      <View key="who" style={styles.rowStack}>
+        <LText variant="small" style={styles.strong} numberOfLines={1}>
+          {account.displayName}
+        </LText>
+        <LText variant="micro" tone="muted" numberOfLines={1}>
+          {account.email || 'No email address'}
+        </LText>
+      </View>,
+      <View key="type" style={styles.rowInline}>
+        <Badge
+          tone={account.accountType === 'instructor' ? 'gold' : 'neutral'}
+          icon={account.accountType === 'instructor' ? 'award' : 'book-open'}
+          label={account.accountType === 'instructor' ? 'Instructor' : 'Student'}
+        />
+        <LButton
+          size="sm"
+          label={`Make ${nextType}`}
+          disabled={pending}
+          onPress={() => onChoose(account)}
+        />
+      </View>,
     ],
   };
 }

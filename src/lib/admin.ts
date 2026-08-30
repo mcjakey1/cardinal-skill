@@ -46,6 +46,7 @@ export const ADMIN_PASSWORD = '123456';
 export const ADMIN_POWERS = [
   'Edit and publish any course, not only the ones they made themselves.',
   'Archive a course, which takes it out of the catalog and keeps every student record.',
+  'Correct a registered account that should be a student or an instructor.',
   'Give an instructor their verified badge, and take it away again.',
   'Add a student to a course, and remove one.',
   'Read the progress of a named student on any course.',
@@ -78,6 +79,25 @@ export function unlockAdmin(input: string): boolean {
 
 export function lockAdmin(): void {
   unlocked = false;
+}
+
+// ---------------------------------------------------------- account types
+
+export type AccountType = 'student' | 'instructor';
+
+export interface AccountTypeAccount {
+  userId: string;
+  displayName: string;
+  email: string;
+  accountType: AccountType;
+}
+
+/** The two admin tabs share one source list and never duplicate an account. */
+export function accountsOfType(
+  accounts: readonly AccountTypeAccount[],
+  accountType: AccountType,
+): AccountTypeAccount[] {
+  return accounts.filter((account) => account.accountType === accountType);
 }
 
 // --------------------------------------------------- publication transitions
@@ -413,6 +433,10 @@ export function describeAuditAction(
       return `Made ${who} an administrator`;
     case 'administrator.revoked':
       return `Removed ${who} as an administrator`;
+    case 'account.role_changed': {
+      const to = entry.detail.to === 'instructor' ? 'instructor' : 'student';
+      return `Changed ${who} to ${to}`;
+    }
     default:
       return entry.action;
   }
@@ -542,6 +566,7 @@ export const AUDIT_GROUPS: readonly {
       'instructor.revoked',
       'administrator.granted',
       'administrator.revoked',
+      'account.role_changed',
     ],
   },
 ];

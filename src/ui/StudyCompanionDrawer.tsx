@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { KeyboardAvoidingView, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -12,12 +12,12 @@ import Animated, {
 
 import type { Mission, SkillNode } from '@/features/skilltree/types';
 import { callEdgeFunction } from '@/lib/edgeFunctions';
-import { parseInlineMarkdown } from '@/lib/inlineMarkdown';
 import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { bevel, space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
 import { Window } from './Window';
 import { PixelButton, PixelInput, PixelText } from './pixel';
+import { CompanionMessageView } from './CompanionMessageView';
 
 interface Message {
   id: number;
@@ -46,6 +46,7 @@ interface Props {
   missions: readonly Mission[];
   prerequisites: readonly SkillNode[];
   reduceMotion?: boolean;
+  initialPrompt?: { key: number; text: string } | null;
 }
 
 export function StudyCompanionDrawer({
@@ -57,6 +58,7 @@ export function StudyCompanionDrawer({
   missions,
   prerequisites,
   reduceMotion,
+  initialPrompt,
 }: Props) {
   const t = useTheme();
   const { width, height } = useWindowDimensions();
@@ -68,6 +70,7 @@ export function StudyCompanionDrawer({
   const [modelStatus, setModelStatus] = useState<ModelStatus>('checking');
   const [modelName, setModelName] = useState('EDGE ENGINE');
   const nextId = useRef(0);
+  const handledInitialPrompt = useRef<number | null>(null);
   const hidden = useSharedValue(visible ? 0 : 1);
 
   useEffect(() => {
@@ -116,8 +119,8 @@ export function StudyCompanionDrawer({
     ],
   }), [height, wide, width]);
 
-  const send = async () => {
-    const text = draft.trim();
+  const send = useCallback(async (prompt?: string) => {
+    const text = (prompt ?? draft).trim();
     if (!text || busy) return;
     const user: Message = { id: nextId.current++, role: 'user', text };
     setMessages((current) => [...current, user]);
@@ -161,7 +164,17 @@ export function StudyCompanionDrawer({
     } finally {
       setBusy(false);
     }
-  };
+  }, [busy, courseId, courseTitle, draft, missions, node, prerequisites]);
+
+  useEffect(() => {
+    if (!visible) {
+      handledInitialPrompt.current = null;
+      return;
+    }
+    if (!initialPrompt || handledInitialPrompt.current === initialPrompt.key) return;
+    handledInitialPrompt.current = initialPrompt.key;
+    void send(initialPrompt.text);
+  }, [initialPrompt, send, visible]);
 
   return (
     <Animated.View
@@ -179,7 +192,12 @@ export function StudyCompanionDrawer({
         style={styles.fill}
         behavior={KEYBOARD_BEHAVIOR}
       >
-        <Window title="AI study companion" onClose={onClose} style={styles.drawer}>
+        <Window
+          title="AI study companion"
+          onClose={onClose}
+          style={styles.drawer}
+          bodyStyle={styles.drawerBody}
+        >
           <ModelStatusPill status={modelStatus} modelName={modelName} reduceMotion={Boolean(reduceMotion)} />
           <PixelText variant="micro" colour={t.inkMuted}>
             CONTEXT · {courseTitle.toUpperCase()} · {node.title.toUpperCase()}
@@ -205,7 +223,7 @@ export function StudyCompanionDrawer({
                 <PixelText variant="micro" colour={t.inkMuted}>
                   {message.role === 'user' ? 'YOU' : 'COMPANION'}
                 </PixelText>
-                <MarkdownMessage text={message.text} />
+                <CompanionMessageView text={message.text} />
               </Animated.View>
             ))}
             {busy ? <TypingBubble reduceMotion={Boolean(reduceMotion)} /> : null}
@@ -221,9 +239,15 @@ export function StudyCompanionDrawer({
             value={draft}
             onChangeText={setDraft}
             multiline
+            scrollEnabled
+            style={styles.questionInput}
             placeholder={`Ask about ${node.title}`}
           />
-          <PixelButton label={busy ? 'Thinking…' : 'Ask companion'} disabled={busy || !draft.trim()} onPress={send} />
+          <PixelButton
+            label={busy ? 'Thinking…' : 'Ask companion ▸'}
+            disabled={busy || !draft.trim()}
+            onPress={() => void send()}
+          />
         </Window>
       </KeyboardAvoidingView>
     </Animated.View>
@@ -234,30 +258,6 @@ function modelLabel(model: unknown): string {
   return typeof model === 'string' && model.trim()
     ? model.trim().replaceAll('-', ' ').toUpperCase()
     : 'EDGE ENGINE';
-}
-
-function MarkdownMessage({ text }: { text: string }) {
-  const t = useTheme();
-  const tokens = parseInlineMarkdown(text);
-  return (
-    <PixelText variant="body" colour={t.ink}>
-      {tokens.map((token, index) => {
-        if (token.kind === 'text') return token.text;
-        return (
-          <Text
-            key={`${token.kind}-${index}`}
-            style={token.kind === 'strong'
-              ? [styles.markdownStrong, { color: t.info }]
-              : token.kind === 'emphasis'
-                ? styles.markdownEmphasis
-                : [styles.markdownCode, { backgroundColor: t.well, color: t.earnedText }]}
-          >
-            {token.text}
-          </Text>
-        );
-      })}
-    </PixelText>
-  );
 }
 
 function ModelStatusPill({ status, modelName, reduceMotion }: {
@@ -339,6 +339,7 @@ const styles = StyleSheet.create({
   panelWide: { right: 0, top: 0, bottom: 0, width: 520 },
   panelNarrow: { left: 0, right: 0, bottom: 0, height: '78%' },
   drawer: { width: '100%', height: '100%', borderWidth: bevel },
+  drawerBody: { flex: 1, minHeight: 0 },
   modelStatus: {
     minHeight: 28,
     alignSelf: 'flex-start',
@@ -349,12 +350,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.cell,
   },
   statusDot: { width: 8, height: 8 },
-  messages: { maxHeight: 320 },
-  messageContent: { gap: space.cell },
+  messages: { flex: 1, minHeight: 0 },
+  messageContent: { gap: space.cell, paddingBottom: space.cell },
   message: { borderWidth: bevel, padding: space.cell, gap: space.xs },
-  markdownStrong: { fontWeight: '700' },
-  markdownEmphasis: { fontStyle: 'italic' },
-  markdownCode: { paddingHorizontal: space.hair },
   typingBubble: {
     width: 64,
     minHeight: touch,
@@ -366,4 +364,5 @@ const styles = StyleSheet.create({
   },
   typingDot: { width: 6, height: 6 },
   errorNotice: { borderWidth: bevel, padding: space.cell, gap: space.xs },
+  questionInput: { minHeight: 48, maxHeight: 72 },
 });

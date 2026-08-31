@@ -6,6 +6,7 @@ import {
   checkBAIHealth,
   requestTextCompletion,
 } from '../_shared/bai.ts';
+import { companionSystemPrompt } from './companionPrompt.ts';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -128,15 +129,15 @@ Deno.serve(async (req) => {
     ? node.learning_objectives
     : boundedList(body.learning_objectives, 12, 500);
   const prerequisites = boundedList(body.prerequisites, 12, 200);
-  const systemPrompt = `You are the Cardinal Skill AI Academic Companion.
-
-You are assisting a student in the course "${courseTitle}", specifically on the node "${node.title}" (topic: "${syllabusTopic}").
-Learning objectives: ${JSON.stringify(learningObjectives)}.
-Universal competency: ${node.universal_skill ?? 'Not specified'}.
-Prerequisites: ${JSON.stringify(prerequisites)}.
-Active missions: ${JSON.stringify(missions)}.
-
-Guide the student with hints, Socratic questions, and structured explanations. Do not complete graded work or simply give away solutions. Stay within the supplied syllabus context. If context is insufficient, say so and ask one focused question.`;
+  const systemPrompt = companionSystemPrompt({
+    courseTitle,
+    nodeTitle: node.title,
+    syllabusTopic,
+    learningObjectives,
+    universalSkill: node.universal_skill,
+    prerequisites,
+    missions,
+  });
   if (!apiKey) return json({ error: 'The study companion is not configured yet.' }, 503);
 
   let answer: string;

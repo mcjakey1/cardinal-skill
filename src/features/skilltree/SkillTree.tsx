@@ -919,7 +919,7 @@ function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLab
       : { label: 'CONNECT NODES', hint: 'Join the selected node to the one that comes after it', onPress: onLink, disabled: false, tone: 'brand' as const },
     { label: deleteLabel ?? 'DELETE NODE', hint: selected ? undefined : 'Select a node on the chart first', onPress: onDelete, disabled: !selected, tone: 'brand' as const },
     { label: 'RESET POSITIONS', hint: 'Put every node back where it was laid out', onPress: onReset, disabled: false, tone: 'brand' as const },
-    { label: 'DONE EDITING', hint: 'Leave edit mode and go back to reading the chart', onPress: onExit, disabled: false, tone: 'earned' as const },
+    { label: 'DONE EDITING', hint: 'Leave edit mode and go back to reading the chart', onPress: onExit, disabled: false, tone: 'brand' as const },
   ];
   return (
     <Animated.View
@@ -929,8 +929,8 @@ function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLab
     >
     <Bevel tone="panel" style={styles.editToolbarInner} accessibilityLabel="Tree edit tools">
       <View style={styles.editHead} accessibilityLiveRegion="polite">
-        <Bevel tone="earned" depth="inset" style={styles.editBadge}>
-          <PixelText variant="label" colour={t.tone.earned.ink}>EDIT MODE IS ON</PixelText>
+        <Bevel tone="brand" depth="inset" style={styles.editBadge}>
+          <PixelText variant="label" colour={t.tone.brand.ink}>EDIT MODE IS ON</PixelText>
         </Bevel>
         {linkNotice ? (
           // Plain ink, not the alarm colour: the same channel carries "Nodes
@@ -938,7 +938,7 @@ function EditToolbar({ linkMode, linkSourceId, selected, reduceMotion, deleteLab
           // reads correctly for both beats colouring by guesswork.
           <PixelText variant="label" colour={t.ink}>{linkNotice}</PixelText>
         ) : linkMode ? (
-          <PixelText variant="label" colour={t.tone.earned.ink}>
+          <PixelText variant="label" colour={t.ink}>
             NOW CLICK THE NODE THAT COMES AFTER IT
           </PixelText>
         ) : (

@@ -20,13 +20,16 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SkillTree } from '@/features/skilltree/SkillTree';
+import { CourseOutlineItem } from '@/features/skilltree/CourseOutlineItem';
+import { NodeMissionCard } from '@/features/skilltree/NodeMissionCard';
+import { NodeAiCoach, type CoachAction } from '@/features/skilltree/NodeAiCoach';
 import { streakDays } from '@/features/skilltree/achievements';
 import { rankNextQuests, shouldOfferHelp } from '@/features/skilltree/adaptive';
 import { effectiveMissionCompletionIds, missionStates, nodeXpEarned, nodeXpFromMissions } from '@/features/skilltree/missions';
-import { missionDifficulty } from '@/features/skilltree/missionBoard';
 import { MAX_NAME, resolveQuestName, type NameSource } from '@/features/skilltree/naming';
 import { learnerSignals, nodeSignal } from '@/features/skilltree/observed';
-import { courseOutline, type OutlineEntry } from '@/features/skilltree/courseOutline';
+import { courseOutline } from '@/features/skilltree/courseOutline';
+import { groupOutlineByModule, type OutlineModule } from '@/features/skilltree/courseOutlineGroups';
 import {
   evaluateSkillUnlockState,
   levelForXp,
@@ -88,6 +91,8 @@ const NAME_SOURCE: Record<NameSource, string> = {
   syllabus: 'SYLLABUS TITLE',
 };
 
+type DrawerMode = 'details' | 'outline';
+
 const unavailableCourseManagement = async () => {
   throw new Error('Course management is unavailable until this chart reconnects.');
 };
@@ -108,8 +113,7 @@ export default function TreeScreen() {
   const prefs = usePrefs();
   const wide = useWide();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Starts collapsed: opening a course shows the outline, not one node's detail.
-  const [infoExpanded, setInfoExpanded] = useState(false);
+  const [drawerMode, setDrawerMode] = useState<DrawerMode>('outline');
   const [justCompleted, setJustCompleted] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState('');
@@ -118,6 +122,7 @@ export default function TreeScreen() {
   const [helpNote, setHelpNote] = useState<string | null>(null);
   const [courseMenuOpen, setCourseMenuOpen] = useState(false);
   const [companionOpen, setCompanionOpen] = useState(false);
+  const [companionPrompt, setCompanionPrompt] = useState<{ key: number; text: string } | null>(null);
   const [claimedMissionId, setClaimedMissionId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(edit === '1');
   const [practiceCopyOpen, setPracticeCopyOpen] = useState(false);
@@ -134,6 +139,7 @@ export default function TreeScreen() {
   const locateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handledLocateRequest = useRef<string | null>(null);
   const linkNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const companionPromptKey = useRef(0);
 
   useEffect(
     () => () => {
@@ -147,7 +153,7 @@ export default function TreeScreen() {
   useEffect(() => {
     setEditMode(edit === '1');
     setSelectedId(null);
-    setInfoExpanded(false);
+    setDrawerMode('outline');
     setLinkMode(false);
     setLinkSourceId(null);
   }, [courseId, edit]);
@@ -267,6 +273,7 @@ export default function TreeScreen() {
     ) return;
     handledLocateRequest.current = request;
     setSelectedId(targetNodeId);
+    setDrawerMode('details');
     setLocatedNodeId(targetNodeId);
     if (locateTimer.current) clearTimeout(locateTimer.current);
     locateTimer.current = setTimeout(() => setLocatedNodeId(null), prefs.motionOff ? 0 : 1500);
@@ -480,7 +487,16 @@ export default function TreeScreen() {
   const selectedMissions = selected
     ? missionStates(missions, selected.id, completedMissionIds, status !== 'locked')
     : [];
+  const activeMission = selectedMissions.find(({ state }) => state === 'open')?.mission
+    ?? selectedMissions[0]?.mission
+    ?? null;
   const missionsDone = selectedMissions.filter((m) => m.state === 'done').length;
+  const outlineEntries = [
+    ...outline.before,
+    ...(outline.current ? [outline.current] : []),
+    ...outline.after,
+  ];
+  const outlineModules = groupOutlineByModule(outlineEntries);
 
   // XP rather than a count, because that is what the work is actually worth and
   // two missions on one node are rarely worth the same.
@@ -490,62 +506,6 @@ export default function TreeScreen() {
     status,
     selected ? nodeProgress(selected, missions, completedMissionIds, isMastered) : 0,
   );
-  // Collapsing hides the node's detail, never the editor. An instructor who taps
-  // the row they are editing should not lose the panel they are typing into.
-  const detailVisible = infoExpanded || editMode;
-
-  const renderOutlineRow = ({ node, position, status: nodeStatus }: OutlineEntry) => {
-    const isCurrent = node.id === selectedId;
-    return (
-      <Pressable
-        key={node.id}
-        onPress={() => {
-          if (!isCurrent) {
-            void selectNode(node);
-            return;
-          }
-          // The editor is not a disclosure. An instructor mid-edit keeps it.
-          if (!editMode) setInfoExpanded((expanded) => !expanded);
-        }}
-        accessibilityRole="button"
-        accessibilityState={{
-          selected: isCurrent,
-          expanded: isCurrent && !editMode ? infoExpanded : undefined,
-        }}
-        accessibilityLabel={`${position}. ${node.title}. ${nodeStatus.replace('_', ' ')}.${
-          isCurrent && editMode
-            ? ''
-            : isCurrent && infoExpanded ? ' Collapse information.' : ' Expand information.'
-        }`}
-        style={({ pressed }) => [
-          styles.outlineRow,
-          {
-            backgroundColor: isCurrent ? t.brand : t.panel,
-            borderColor: isCurrent ? t.brand : t.line,
-            opacity: pressed ? 0.82 : 1,
-          },
-        ]}
-      >
-        <View style={[styles.outlineMarker, { backgroundColor: isCurrent ? t.brandInk : t.well }]}>
-          <PixelIcon
-            name={nodeStatus === 'mastered' ? 'check' : nodeStatus === 'locked' ? 'lock' : 'play'}
-            size={12}
-            colour={isCurrent ? t.brandInk : nodeStatus === 'mastered' ? t.earnedText : t.inkMuted}
-          />
-        </View>
-        <View style={styles.outlineCopy}>
-          <PixelText variant="body" colour={isCurrent ? t.brandInk : t.ink} numberOfLines={2}>
-            {node.title}
-          </PixelText>
-          <PixelText variant="micro" colour={isCurrent ? t.brandInk : t.inkMuted}>
-            {nodeStatus === 'mastered' ? 'MASTERED' : nodeStatus === 'locked' ? 'LOCKED' : 'READY'}
-            {' · '}{node.xpReward} XP
-          </PixelText>
-        </View>
-        <PixelIcon name="play" size={12} colour={isCurrent ? t.brandInk : t.info} />
-      </Pressable>
-    );
-  };
 
   // Every prerequisite, not just the unmet ones. Seeing "2 of 3 mastered" while
   // still locked tells a student how close they are; a list that only appears
@@ -557,6 +517,12 @@ export default function TreeScreen() {
         .filter((n): n is SkillNode => Boolean(n))
     : [];
   const prereqsMastered = prereqNodes.filter((p) => masteredIds.includes(p.id)).length;
+  const downstreamNodes = selected
+    ? tree.prereqs
+        .filter((edge) => edge.prereqId === selected.id)
+        .map((edge) => tree.nodes.find((node) => node.id === edge.nodeId))
+        .filter((node): node is SkillNode => Boolean(node))
+    : [];
 
   const claimMission = async (missionId: string, title: string, xpReward: number, done: boolean) => {
     await toggleMission(missionId, !done);
@@ -602,10 +568,38 @@ export default function TreeScreen() {
       return;
     }
     setSelectedId(node.id);
-    setInfoExpanded(true);
+    setDrawerMode('details');
     setRenaming(false);
     setConfirmingHelp(false);
     setHelpNote(null);
+  };
+
+  const focusFromOutline = async (node: SkillNode) => {
+    await selectNode(node);
+    setLocatedNodeId(node.id);
+    setCameraFocusRequest((request) => request + 1);
+    if (locateTimer.current) clearTimeout(locateTimer.current);
+    locateTimer.current = setTimeout(
+      () => setLocatedNodeId((current) => (current === node.id ? null : current)),
+      prefs.motionOff ? 0 : 1200,
+    );
+  };
+
+  const openCoach = (action: CoachAction, mission: Mission | null = activeMission) => {
+    if (!selected) return;
+    const missionContext = mission
+      ? ` The active mission is “${mission.title}”: ${mission.description}`
+      : '';
+    const prompt = action === 'explain'
+      ? `Explain ${selected.title} step by step in simple language, then give one short example.`
+      : action === 'hint'
+        ? `Give me one useful hint for this mission without revealing the full answer.${missionContext}`
+        : action === 'quiz'
+          ? `Create a three-question practice quiz for ${selected.title}. Ask one question at a time and wait for my answer.`
+          : null;
+    companionPromptKey.current += 1;
+    setCompanionPrompt(prompt ? { key: companionPromptKey.current, text: prompt } : null);
+    setCompanionOpen(true);
   };
 
   const showLinkNotice = (message: string) => {
@@ -935,36 +929,54 @@ export default function TreeScreen() {
         progressByNode={outline.progressByNode}
         focusRequestKey={cameraFocusRequest}
         focusNodeId={locatedNodeId}
-        focusNodeRequestKey={focusRequest ?? 0}
+        focusNodeRequestKey={cameraFocusRequest}
       />
         </View>
 
       {selected && eligibility ? (
         <>
         <Animated.View
-          entering={prefs.motionOff ? undefined : SlideInRight.duration(240).easing(Easing.out(Easing.cubic))}
-          exiting={prefs.motionOff ? undefined : SlideOutRight.duration(200).easing(Easing.in(Easing.cubic))}
+          entering={prefs.motionOff ? undefined : SlideInRight.duration(280).easing(Easing.bezier(0.16, 1, 0.3, 1))}
+          exiting={prefs.motionOff ? undefined : SlideOutRight.duration(220).easing(Easing.in(Easing.cubic))}
           style={wide ? styles.dockWide : styles.dock}
         >
         <Window
-          title="Course outline"
+          title="Node navigator"
           onClose={() => setSelectedId(null)}
           style={styles.detailWindow}
         >
-          {/* Capped on a phone so the window cannot swallow the chart; on a wide
-              screen it has its own column and can use the height it has. */}
-          <StableScrollView style={wide ? styles.sheetScrollWide : styles.sheetScroll}>
-            <View style={styles.outlineIntro}>
-              <PixelText variant="label" colour={t.ink}>COURSE OUTLINE</PixelText>
-              <PixelText variant="micro" colour={t.inkMuted}>
-                {outline.masteredCount} OF {outline.total} NODES MASTERED
-              </PixelText>
-            </View>
-            <View style={styles.outlineList}>
-              {outline.before.map(renderOutlineRow)}
-              {outline.current ? renderOutlineRow(outline.current) : null}
-            </View>
-            {detailVisible ? <>
+          <DrawerModeToggle
+            value={drawerMode}
+            mastered={outline.masteredCount}
+            total={outline.total}
+            onChange={setDrawerMode}
+          />
+          <StableScrollView
+            style={wide ? styles.sheetScrollWide : styles.sheetScroll}
+            contentContainerStyle={styles.drawerScrollContent}
+            showsVerticalScrollIndicator
+          >
+            {drawerMode === 'outline' ? (
+              <>
+                <View style={styles.outlineIntro}>
+                  <PixelText variant="label" colour={t.ink}>COURSE OUTLINE</PixelText>
+                  <PixelText variant="micro" colour={t.inkMuted}>
+                    {outline.masteredCount} OF {outline.total} NODES MASTERED
+                  </PixelText>
+                </View>
+                <View style={styles.moduleList}>
+                  {outlineModules.map((module) => (
+                    <OutlineModuleAccordion
+                      key={module.title}
+                      module={module}
+                      selectedId={selectedId}
+                      reduceMotion={prefs.motionOff}
+                      onSelect={focusFromOutline}
+                    />
+                  ))}
+                </View>
+              </>
+            ) : <>
             <View style={styles.selectedNodeHeader}>
               <View style={styles.rowBetween}>
                 <View style={styles.headerTags}>
@@ -1134,74 +1146,29 @@ export default function TreeScreen() {
                 </PixelText>
 
                 {selectedMissions.map(({ mission, state }) => (
-                  <Pressable
+                  <NodeMissionCard
                     key={mission.id}
-                    disabled={state === 'locked'}
-                    onPress={() => claimMission(mission.id, mission.title, mission.xpReward, state === 'done')}
-                    accessibilityRole="checkbox"
-                    accessibilityState={{ checked: state === 'done', disabled: state === 'locked' }}
-                    accessibilityLabel={`${mission.title}, ${mission.xpReward} XP`}
-                    style={({ pressed }) => [
-                      styles.missionRow,
-                      bevelStyle(t, 'panel', pressed && state !== 'locked' ? 'inset' : 'raised'),
-                    ]}
-                  >
-                    <View style={[styles.missionBox, { backgroundColor: t.well }]}>
-                      {state === 'done' ? (
-                        <PixelIcon name="check" size={14} colour={t.earnedText} />
-                      ) : state === 'locked' ? (
-                        <PixelIcon name="lock" size={12} colour={t.inkMuted} />
-                      ) : null}
-                    </View>
-                    <View style={styles.missionBody}>
-                      <View style={styles.rowBetween}>
-                        <PixelText
-                          variant="body"
-                          colour={state === 'locked' ? t.inkMuted : t.ink}
-                          style={styles.grow}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {mission.title}
-                        </PixelText>
-                        <PixelText
-                          variant="micro"
-                          colour={state === 'done' ? t.earnedText : t.inkMuted}
-                        >
-                          {mission.xpReward} XP
-                        </PixelText>
-                      </View>
-
-                      <PixelText variant="micro" colour={t.inkMuted} numberOfLines={1}>
-                        {mission.description || ' '}
-                      </PixelText>
-
-                      <View style={styles.previewMeta}>
-                        <MissionDifficultyTag difficulty={missionDifficulty(mission, selected)} />
-                        <PixelText variant="micro" colour={t.inkMuted}>
-                        {[mission.kind, mission.estimatedMinutes ? `${mission.estimatedMinutes} MIN` : null]
-                          .filter(Boolean)
-                          .join(' · ')
-                          .toUpperCase()}
-                        </PixelText>
-                      </View>
-
-                      <PixelText
-                        variant="micro"
-                        colour={state === 'done' ? t.earnedText : t.inkMuted}
-                        numberOfLines={1}
-                      >
-                        {state === 'done'
-                          ? 'MARKED COMPLETE · TAP TO UNDO'
-                          : state === 'locked'
-                            ? 'LOCKED · CLEAR PREREQUISITES'
-                            : 'READY · TAP TO CLAIM XP'}
-                      </PixelText>
-                    </View>
-                    {claimedMissionId === mission.id ? (
-                      <XpClaim xp={mission.xpReward} />
-                    ) : null}
-                  </Pressable>
+                    mission={mission}
+                    node={selected}
+                    state={state}
+                    claimed={claimedMissionId === mission.id}
+                    reduceMotion={prefs.motionOff}
+                    onToggle={() => claimMission(
+                      mission.id,
+                      mission.title,
+                      mission.xpReward,
+                      state === 'done',
+                    )}
+                    onHint={() => openCoach('hint', mission)}
+                    onCriteria={() => {
+                      companionPromptKey.current += 1;
+                      setCompanionPrompt({
+                        key: companionPromptKey.current,
+                        text: `Give me a concise completion checklist for “${mission.title}” without solving it for me. The mission is: ${mission.description}`,
+                      });
+                      setCompanionOpen(true);
+                    }}
+                  />
                 ))}
               </CollapsibleSection>
             ) : (
@@ -1271,27 +1238,7 @@ export default function TreeScreen() {
               </Bevel>
             ) : null}
 
-            {/* Context is assembled here, where the selected syllabus node,
-                missions and prerequisites are already in scope. */}
-            {status === 'locked' ? null : (
-              <Pressable
-                onPress={() => setCompanionOpen(true)}
-                accessibilityRole="button"
-                accessibilityLabel={`Ask the AI study companion about ${selected.title}.`}
-                style={({ pressed }) => [
-                  styles.companionRow,
-                  bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
-                ]}
-              >
-                <PixelIcon name="play" size={12} colour={t.info} />
-                <PixelText variant="body" colour={t.ink} style={styles.requireLabel}>
-                  Ask AI about this
-                </PixelText>
-                <PixelText variant="micro" colour={t.inkMuted}>
-                  NODE CONTEXT
-                </PixelText>
-              </Pressable>
-            )}
+            {status === 'locked' ? null : <NodeAiCoach onAction={openCoach} />}
 
             {prereqNodes.length > 0 ? (
               <CollapsibleSection
@@ -1304,7 +1251,7 @@ export default function TreeScreen() {
                   return (
                     <Pressable
                       key={p.id}
-                      onPress={() => setSelectedId(p.id)}
+                      onPress={() => void focusFromOutline(p)}
                       accessibilityRole="button"
                       accessibilityLabel={`${p.title}. ${done ? 'Mastered' : 'Not yet mastered'}. Open it.`}
                       style={({ pressed }) => [
@@ -1334,10 +1281,35 @@ export default function TreeScreen() {
                 </PixelText>
               </CollapsibleSection>
             )}
-            </> : null}
-            <View style={styles.outlineList}>
-              {outline.after.map(renderOutlineRow)}
-            </View>
+
+            <CollapsibleSection
+              title="Downstream unlocks"
+              meta={`${downstreamNodes.length} NEXT`}
+            >
+              {downstreamNodes.length > 0 ? downstreamNodes.map((node) => (
+                <Pressable
+                  key={node.id}
+                  onPress={() => void focusFromOutline(node)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${node.title}. Open downstream node.`}
+                  style={({ pressed }) => [
+                    styles.requireRow,
+                    bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+                  ]}
+                >
+                  <PixelIcon name="link" size={12} colour={t.info} />
+                  <PixelText variant="body" colour={t.ink} style={styles.requireLabel}>
+                    {node.title}
+                  </PixelText>
+                  <PixelText variant="micro" colour={t.info}>VIEW</PixelText>
+                </Pressable>
+              )) : (
+                <PixelText variant="body" colour={t.inkMuted}>
+                  This is the end of its current branch.
+                </PixelText>
+              )}
+            </CollapsibleSection>
+            </>}
           </StableScrollView>
 
           {/* A node made of missions is finished by doing them, so it gets no
@@ -1368,11 +1340,12 @@ export default function TreeScreen() {
           missions={selectedMissions.map(({ mission }) => mission)}
           prerequisites={prereqNodes}
           reduceMotion={prefs.motionOff}
+          initialPrompt={companionPrompt}
         />
         </>
       ) : editMode ? null : next ? (
         <Pressable
-          onPress={() => setSelectedId(next.id)}
+          onPress={() => void selectNode(next)}
           accessibilityRole="button"
           accessibilityLabel={`Next: ${next.title}, worth ${next.xpReward} XP. Open details.`}
           style={({ pressed }) => [
@@ -1465,12 +1438,94 @@ function Field({ label, value, detail }: { label: string; value: string; detail?
   );
 }
 
-function MissionDifficultyTag({ difficulty }: { difficulty: ReturnType<typeof missionDifficulty> }) {
+function DrawerModeToggle({ value, mastered, total, onChange }: {
+  value: DrawerMode;
+  mastered: number;
+  total: number;
+  onChange: (mode: DrawerMode) => void;
+}) {
   const t = useTheme();
-  const colour = difficulty === 'easy' ? t.success : difficulty === 'medium' ? t.warning : t.alarm;
+  const options: { value: DrawerMode; label: string; icon: 'chart' | 'stack' }[] = [
+    { value: 'details', label: 'Node details', icon: 'chart' },
+    { value: 'outline', label: `Outline (${mastered}/${total})`, icon: 'stack' },
+  ];
   return (
-    <View style={[styles.detailBadge, { borderColor: colour, backgroundColor: t.well }]}>
-      <PixelText variant="micro" colour={colour}>{difficulty.toUpperCase()}</PixelText>
+    <View style={styles.drawerModes} accessibilityRole="radiogroup" accessibilityLabel="Drawer view">
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <Pressable
+            key={option.value}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: active }}
+            accessibilityLabel={option.value === 'details'
+              ? 'Node details'
+              : `Course outline, ${mastered} of ${total} mastered`}
+            style={({ pressed }) => [
+              styles.drawerMode,
+              bevelStyle(t, active ? 'brand' : 'panel', active || pressed ? 'inset' : 'raised'),
+            ]}
+          >
+            <PixelIcon name={option.icon} size={12} colour={active ? t.brandInk : t.info} />
+            <PixelText variant="micro" colour={active ? t.brandInk : t.inkMuted} numberOfLines={2} centred>
+              {option.label.toUpperCase()}
+            </PixelText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function OutlineModuleAccordion({
+  module,
+  selectedId,
+  reduceMotion,
+  onSelect,
+}: {
+  module: OutlineModule;
+  selectedId: string | null;
+  reduceMotion: boolean;
+  onSelect: (node: SkillNode) => void;
+}) {
+  const t = useTheme();
+  const [open, setOpen] = useState(
+    () => module.entries.some((entry) => entry.node.id === selectedId),
+  );
+  return (
+    <View style={styles.module}>
+      <Pressable
+        onPress={() => setOpen((value) => !value)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${module.title}. ${module.mastered} of ${module.entries.length} cleared. ${open ? 'Collapse' : 'Expand'}.`}
+        style={({ pressed }) => [
+          styles.moduleHeader,
+          bevelStyle(t, 'panel', pressed ? 'inset' : 'raised'),
+        ]}
+      >
+        <View style={styles.moduleHeadingCopy}>
+          <PixelText variant="body" colour={t.ink}>{module.title}</PixelText>
+          <PixelText variant="micro" colour={t.inkMuted}>
+            {module.mastered}/{module.entries.length} CLEARED
+          </PixelText>
+        </View>
+        <PixelIcon name={open ? 'minus' : 'plus'} size={12} colour={t.info} />
+      </Pressable>
+      <SmoothCollapse open={open} reduceMotion={reduceMotion}>
+        <View style={styles.moduleEntries}>
+          {module.entries.map((entry) => (
+            <CourseOutlineItem
+              key={entry.node.id}
+              entry={entry}
+              active={entry.node.id === selectedId}
+              reduceMotion={reduceMotion}
+              onPress={() => onSelect(entry.node)}
+            />
+          ))}
+        </View>
+      </SmoothCollapse>
     </View>
   );
 }
@@ -1504,7 +1559,7 @@ function CollapsibleSection({
         </PixelText>
         <View style={styles.sectionMeta}>
           {meta ? <PixelText variant="micro" colour={t.inkMuted} style={styles.detailMetaText}>{meta}</PixelText> : null}
-          <PixelText variant="micro" colour={t.info}>{open ? '−' : '+'}</PixelText>
+          <PixelIcon name={open ? 'minus' : 'plus'} size={12} colour={t.info} />
         </View>
       </Pressable>
       <SmoothCollapse open={open} reduceMotion={motionOff}>
@@ -1524,8 +1579,8 @@ function SmoothCollapse({ open, reduceMotion, children }: {
 
   useEffect(() => {
     progress.value = withTiming(open ? 1 : 0, {
-      duration: reduceMotion ? 0 : 250,
-      easing: Easing.inOut(Easing.cubic),
+      duration: reduceMotion ? 0 : 220,
+      easing: Easing.bezier(0.16, 1, 0.3, 1),
     });
   }, [open, progress, reduceMotion]);
 
@@ -1544,27 +1599,6 @@ function SmoothCollapse({ open, reduceMotion, children }: {
       <View onLayout={(event) => { measuredHeight.value = event.nativeEvent.layout.height; }}>
         {children}
       </View>
-    </Animated.View>
-  );
-}
-
-function XpClaim({ xp }: { xp: number }) {
-  const t = useTheme();
-  const rise = useSharedValue(0);
-  useEffect(() => {
-    rise.value = withTiming(1, { duration: 600 });
-  }, [rise]);
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: 1 - rise.value,
-    transform: [{ translateY: -16 * rise.value }],
-  }));
-  return (
-    <Animated.View
-      style={[styles.xpClaim, animatedStyle]}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-    >
-      <PixelText variant="label" colour={t.earnedText}>+{xp} XP CLAIMED</PixelText>
     </Animated.View>
   );
 }
@@ -1766,33 +1800,38 @@ const styles = StyleSheet.create({
   },
   sheetScroll: { maxHeight: 260 },
   sheetScrollWide: { maxHeight: 460 },
-  outlineIntro: { gap: space.hair, paddingBottom: space.cell },
-  outlineList: { gap: space.xs },
-  outlineRow: {
+  drawerModes: { flexDirection: 'row', minHeight: touch, alignItems: 'stretch' },
+  drawerMode: {
+    flex: 1,
+    minWidth: 0,
     minHeight: touch,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.xs,
+    paddingHorizontal: space.xs,
+  },
+  drawerScrollContent: { paddingTop: space.md, paddingBottom: space.xl + space.cell },
+  outlineIntro: { gap: space.hair, paddingBottom: space.cell },
+  moduleList: { gap: space.cell },
+  module: { gap: space.xs },
+  moduleHeader: {
+    minHeight: touch,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: space.cell,
-    borderWidth: bevel,
     paddingHorizontal: space.cell,
   },
-  outlineMarker: {
-    width: touch - space.cell,
-    height: touch - space.cell,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  outlineCopy: { flex: 1, minWidth: 0, gap: space.hair },
-  selectedNodeHeader: { gap: space.xs, marginTop: space.md, paddingTop: space.md, borderTopWidth: bevel },
+  moduleHeadingCopy: { flex: 1, minWidth: 0, gap: space.hair },
+  moduleEntries: { gap: space.xs, paddingTop: space.xs, paddingLeft: space.cell },
+  selectedNodeHeader: { gap: space.xs, marginTop: space.md, paddingTop: space.md },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTags: { gap: space.xs },
   naming: { gap: space.xs, marginBottom: space.cell },
   editProperties: { gap: space.cell, marginBottom: space.md },
-  previewMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: space.cell },
-  detailBadge: { minHeight: 28, borderWidth: bevel, justifyContent: 'center', paddingHorizontal: space.cell },
   renameToggle: { minHeight: touch, justifyContent: 'center', paddingLeft: space.md },
   renameForm: { gap: space.cell, marginTop: space.xs },
-  objective: { marginTop: space.cell, gap: space.hair },
   section: { marginTop: space.cell },
   sectionHeader: {
     minHeight: touch,
@@ -1808,26 +1847,7 @@ const styles = StyleSheet.create({
   detailContent: { fontSize: 12, lineHeight: 17 },
   detailMetaText: { fontSize: 10, lineHeight: 14, textTransform: 'uppercase' },
   field: { gap: space.hair },
-  grow: { flex: 1 },
-  missions: { marginTop: space.md, gap: space.xs },
   help: { marginTop: space.md, padding: space.cell, gap: space.cell },
-  missionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.cell,
-    height: 112,
-    paddingHorizontal: space.cell,
-    position: 'relative',
-  },
-  missionBox: {
-    width: 20,
-    height: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  missionBody: { flex: 1, gap: space.hair },
-  xpClaim: { position: 'absolute', right: space.cell, top: space.cell, zIndex: 2 },
-  requires: { marginTop: space.md, gap: space.xs },
   requireRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1836,14 +1856,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.cell,
   },
   requireLabel: { flexShrink: 1 },
-  companionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.cell,
-    minHeight: touch,
-    paddingHorizontal: space.cell,
-    marginTop: space.md,
-  },
   clearedRow: { flexDirection: 'row', alignItems: 'center', gap: space.cell, minHeight: touch },
 
   nextBar: {

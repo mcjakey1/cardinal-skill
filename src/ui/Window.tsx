@@ -10,7 +10,7 @@
  * answers a tap.
  */
 
-import { Pressable, StyleSheet, View, type ViewProps } from 'react-native';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
 
 import { space, touch } from '@/theme/tokens';
 import { useTheme } from '@/theme/useTheme';
@@ -21,10 +21,11 @@ interface Props extends ViewProps {
   onClose?: () => void;
   /** Announce the contents when they change. On by default. */
   live?: boolean;
+  bodyStyle?: StyleProp<ViewStyle>;
   children: React.ReactNode;
 }
 
-export function Window({ title, onClose, live = true, style, children, ...rest }: Props) {
+export function Window({ title, onClose, live = true, style, bodyStyle, children, ...rest }: Props) {
   const t = useTheme();
   return (
     <Bevel
@@ -58,7 +59,7 @@ export function Window({ title, onClose, live = true, style, children, ...rest }
           </Pressable>
         ) : null}
       </View>
-      <View style={[styles.body, { backgroundColor: t.well }]}>{children}</View>
+      <View style={[styles.body, { backgroundColor: t.well }, bodyStyle]}>{children}</View>
     </Bevel>
   );
 }

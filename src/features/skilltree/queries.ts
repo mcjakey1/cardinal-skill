@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import {
   DEMO_COURSE_ID,
   DEMO_COURSE_TITLE,
+  demoCompletedMissionIds,
   demoMasteredIds,
   demoTree,
   demoXp,
@@ -143,7 +144,7 @@ export async function fetchTree(courseId: string, strictMissionData = false): Pr
       tree: mock.tree,
       missions: mock.missions,
       masteredIds: [],
-      completedMissionIds: [],
+      completedMissionIds: demoCompletedMissionIds,
       xp: 0,
       title: mock.title,
     };

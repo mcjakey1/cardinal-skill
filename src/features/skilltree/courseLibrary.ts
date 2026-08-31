@@ -9,5 +9,5 @@ export function catalogKindForTab(tab: CourseLibraryTab): 'official' | 'communit
 }
 
 export function playgroundCourses(courses: readonly CourseOption[]): CourseOption[] {
-  return courses.filter((course) => course.canEdit && course.kind !== 'official');
+  return courses.filter((course) => course.isFixture || (course.canEdit && course.kind !== 'official'));
 }

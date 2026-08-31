@@ -117,15 +117,18 @@ test('the erratic learner is judged node by node, not labelled as a person', () 
 test('a struggling learner is sent at a cheaper quest than a fast one', () => {
   // Same mastered set for everyone, so the only thing that varies is the
   // learner's pattern — otherwise this would be testing `deriveStatuses`.
-  const mastered = ['describing', 'reading-1', 'probability'];
+  const mastered = [
+    'logic-foundations', 'truth-tables', 'set-operations', 'proof-language',
+    'direct-proofs', 'relations', 'functions',
+  ];
   const top = (id: LearnerProfileId) => rankNextQuests(demoTree, mastered, signalsFor(id), 3)[0]!;
 
   const fast = top('fast');
-  assert.equal(fast.id, 'pset-1', 'a fast learner gets the node that opens the most of the tree');
+  assert.equal(fast.id, 'combinatorics', 'a fast learner gets the node that opens the most of the tree');
 
   for (const id of ['slow', 'plateaued'] as const) {
     const quest = top(id);
-    assert.equal(quest.id, 'distributions', `${id} gets the smallest available win`);
+    assert.equal(quest.id, 'induction', `${id} gets the smallest available win`);
     assert.ok(quest.xpReward < fast.xpReward, `${id} was sent somewhere cheaper than the fast learner`);
   }
 
@@ -148,9 +151,9 @@ test('a brand-new learner gets defaults rather than a divide by zero', () => {
 });
 
 test('a garbage signal scores zero rather than NaN', () => {
-  const node = nodeById.get('midterm')!;
+  const node = nodeById.get('recurrence')!;
   const junk: NodeSignal = {
-    nodeId: 'midterm',
+    nodeId: 'recurrence',
     attempts: Number.NaN,
     msSpent: -1,
     hintsUsed: Number.POSITIVE_INFINITY,
@@ -161,9 +164,9 @@ test('a garbage signal scores zero rather than NaN', () => {
 });
 
 test('the time term uses the node estimate when there is one', () => {
-  const timed: SkillNode = { ...nodeById.get('midterm')!, estimatedMinutes: 20 };
+  const timed: SkillNode = { ...nodeById.get('recurrence')!, estimatedMinutes: 20 };
   const overran: NodeSignal = {
-    nodeId: 'midterm',
+    nodeId: 'recurrence',
     attempts: 1,
     msSpent: 60 * 60_000, // three times the estimate: the time term saturates
     hintsUsed: 0,

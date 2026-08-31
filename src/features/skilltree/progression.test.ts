@@ -125,7 +125,7 @@ test('next quests are unlocked, unfinished, and syllabus-ordered', () => {
   );
 });
 
-test('the demo chart starts clean with available roots and no dangling prerequisites', () => {
+test('the demo chart starts mid-course with valid progress and no dangling prerequisites', () => {
   const ids = new Set(demoTree.nodes.map((n) => n.id));
   for (const { nodeId, prereqId } of demoTree.prereqs) {
     assert.ok(ids.has(nodeId) && ids.has(prereqId), `dangling edge ${prereqId} -> ${nodeId}`);
@@ -135,15 +135,15 @@ test('the demo chart starts clean with available roots and no dangling prerequis
   assert.deepEqual(cyclicNodeIds, []);
   assert.deepEqual(
     new Set([...status.values()]),
-    new Set(['available', 'locked']),
-    'nothing is mastered before a mission is completed',
+    new Set(['mastered', 'available', 'locked']),
+    'the showcase exposes completed, current, and future work',
   );
 
   const earned = demoTree.nodes
     .filter((n) => demoMasteredIds.includes(n.id))
     .reduce((sum, n) => sum + n.xpReward, 0);
-  assert.equal(demoXp, earned, 'the meter would lie otherwise');
-  assert.equal(demoXp, 0);
+  assert.ok(demoXp > earned, 'one available node carries partial mission XP');
+  assert.equal(demoXp, 320);
   assert.ok(demoXp < totalXp(demoTree.nodes), 'a full meter is a boring demo');
 });
 

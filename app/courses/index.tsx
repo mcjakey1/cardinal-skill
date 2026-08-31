@@ -32,6 +32,7 @@ import {
   type CommunityVisibility,
 } from '@/features/skilltree/courseCatalog';
 import { isNewCatalogCourse } from '@/features/skilltree/courseCatalogModel';
+import { demoCatalog } from '@/features/skilltree/demoCatalog';
 import { usePrefs } from '@/lib/prefs';
 import { createStore } from '@/lib/store';
 import { space, touch } from '@/theme/tokens';
@@ -120,7 +121,7 @@ export default function Courses() {
   }, [requestedShareCode, sharedCourse.data, sharedCourse.error, sharedCourse.isPending]);
 
   useEffect(() => {
-    if (data) setOrdered(data.filter((course) => !course.isFixture));
+    if (data) setOrdered(data);
   }, [data]);
 
   const ownedPlaygrounds = useMemo(
@@ -138,9 +139,12 @@ export default function Courses() {
   }, [ownedPlaygrounds, search]);
   const visibleCatalog = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
+    const showcase = demoCatalog(catalogKind);
+    const live = catalog.data ?? [];
+    const merged = [...showcase, ...live.filter((course) => !showcase.some((sample) => sample.id === course.id))];
     const source = tab === 'community' && sharedCourse.data
-      ? [sharedCourse.data, ...(catalog.data ?? []).filter((course) => course.id !== sharedCourse.data?.id)]
-      : catalog.data ?? [];
+      ? [sharedCourse.data, ...merged.filter((course) => course.id !== sharedCourse.data?.id)]
+      : merged;
     if (!needle) return source;
     return source.filter((course) => (
       course.title.toLocaleLowerCase().includes(needle)
@@ -148,7 +152,7 @@ export default function Courses() {
       || course.term?.toLocaleLowerCase().includes(needle)
       || course.ownerDisplayName.toLocaleLowerCase().includes(needle)
     ));
-  }, [catalog.data, search, sharedCourse.data, tab]);
+  }, [catalog.data, catalogKind, search, sharedCourse.data, tab]);
 
   const newCourseIds = useMemo(() => {
     const now = Date.now();
@@ -372,11 +376,11 @@ export default function Courses() {
                 </Notice>
               }
             />
-          ) : catalog.isPending ? (
+          ) : catalog.isPending && visibleCatalog.length === 0 ? (
             <Notice title={tab === 'mine' ? 'Reading your courses' : 'Reading community courses'}>
               <PixelText variant="body" colour={t.inkMuted}>OPENING COURSE CATALOG</PixelText>
             </Notice>
-          ) : catalog.error ? (
+          ) : catalog.error && visibleCatalog.length === 0 ? (
             <Notice title="Catalog unavailable">
               <PixelText variant="body" colour={t.ink}>
                 Couldn&apos;t load {tab === 'mine' ? 'instructor courses' : 'the Community catalog'}. Check your connection and try again.

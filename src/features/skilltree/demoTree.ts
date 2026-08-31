@@ -1,140 +1,91 @@
-/**
- * A hand-written chart for `/tree/demo`, so the app can be shown without a
- * Supabase project behind it.
- *
- * ponytail: fixture, not a seed script. It exists to make the chart visible on a
- * laptop with no backend. Delete this file and the branch in `fetchTree` once
- * `supabase start` plus a seeded course is the normal way to run the app.
- */
+/** A polished, privacy-safe course fixture for local demos and product captures. */
 
 import type { SkillNode, Tree } from './types';
 
 export const DEMO_COURSE_ID = 'demo';
-export const DEMO_COURSE_TITLE = 'Statistics 101';
+export const DEMO_COURSE_TITLE = 'Discrete Mathematics';
 
-/**
- * The extras the detail panel reads: module, objective, difficulty, and the
- * generated quest and achievement names.
- *
- * Keyed separately rather than widening `n()` to eleven positional arguments,
- * which is where that helper stopped being readable. Everything here is fixture
- * copy for a fixture course — the real values come from the syllabus parser and
- * `name-quest`.
- */
-const detail: Record<string, Partial<SkillNode>> = {
-  describing: {
-    moduleName: 'Module 1: Reading data',
-    difficultyLabel: 'Foundational',
-    estimatedMinutes: 45,
-    learningObjective:
-      'Choose the right summary for a distribution, and say what each one hides.',
-    questTitle: 'The Shape of Numbers',
-    questSubtitle: 'Learn what a pile of data is trying to tell you.',
-    achievementTitle: 'First Read',
-    achievementDescription: 'Summarised a distribution without being fooled by its tail.',
-  },
-  'reading-1': {
-    moduleName: 'Module 1: Reading data',
-    difficultyLabel: 'Foundational',
-    estimatedMinutes: 60,
-    learningObjective: 'Arrive at the second lecture knowing the vocabulary it assumes.',
-  },
-  probability: {
-    moduleName: 'Module 2: Uncertainty',
-    difficultyLabel: 'Intermediate',
-    estimatedMinutes: 90,
-    learningObjective:
-      'Work out whether two events are independent, and what changes when they are not.',
-    questTitle: 'Odds and Ends',
-    questSubtitle: 'Where intuition about chance starts going wrong.',
-    achievementTitle: 'Coin Flipper',
-    achievementDescription: 'Told independence and conditional probability apart under pressure.',
-  },
-  'pset-1': {
-    moduleName: 'Module 1: Reading data',
-    difficultyLabel: 'Foundational',
-    estimatedMinutes: 120,
-    learningObjective: 'Compute every summary statistic by hand once, so the formulas stop being magic.',
-  },
-  distributions: {
-    moduleName: 'Module 2: Uncertainty',
-    difficultyLabel: 'Intermediate',
-    estimatedMinutes: 75,
-    learningObjective: 'Pick the distribution that matches a situation, and justify the choice.',
-  },
-  sampling: {
-    moduleName: 'Module 3: Inference',
-    difficultyLabel: 'Intermediate',
-    estimatedMinutes: 75,
-    learningObjective: 'Explain why a sample mean behaves better than a single observation.',
-  },
-  midterm: {
-    moduleName: 'Module 3: Inference',
-    difficultyLabel: 'Advanced',
-    estimatedMinutes: 90,
-    learningObjective: 'Hold everything through sampling in your head at once.',
-  },
-  'final-project': {
-    moduleName: 'Module 4: Practice',
-    difficultyLabel: 'Advanced',
-    estimatedMinutes: 300,
-    learningObjective: 'Defend a method against someone who would have chosen a different one.',
-  },
-};
+interface DemoNodeSpec {
+  id: string;
+  title: string;
+  moduleName: string;
+  description: string;
+  objective: string;
+  difficulty: NonNullable<SkillNode['difficultyLabel']>;
+  kind: SkillNode['kind'];
+  xp: number;
+  minutes: number;
+  x: number;
+  y: number;
+  iconKey: SkillNode['iconKey'];
+}
 
-/** Statistics 101, half a semester in. Coordinates read left to right. */
-const nodes: SkillNode[] = [
-  n('describing', 'Describing data', 'topic', 50, 0, 0, 1, 'Mean, median, spread, and the shapes a histogram can take.'),
-  n('reading-1', 'Chapters 1–2', 'reading', 30, 0, 130, 2, 'Read before the second lecture.'),
-  n('probability', 'Probability', 'topic', 60, 150, 65, 3, 'Events, independence, and conditional probability.'),
-  n('pset-1', 'Problem set 1', 'assignment', 80, 150, 205, 4, 'Ten problems on summary statistics.'),
-  n('distributions', 'Distributions', 'topic', 60, 300, 0, 5, 'Normal, binomial, and when each one applies.'),
-  n('sampling', 'Sampling', 'topic', 60, 300, 145, 6, 'Sampling error and the central limit theorem.'),
-  n('midterm', 'Midterm', 'assessment', 150, 450, 70, 7, 'Covers everything through sampling.'),
-  n('final-project', 'Final analysis', 'project', 200, 600, 70, 8, 'Analyse a dataset of your choosing and defend the method.'),
+const specs: readonly DemoNodeSpec[] = [
+  { id: 'logic-foundations', title: 'Logic Foundations', moduleName: 'Module 1: Logic & Sets', description: 'Translate statements into propositions and evaluate logical operators.', objective: 'Build and interpret compound propositions using precise logical notation.', difficulty: 'Foundational', kind: 'topic', xp: 60, minutes: 45, x: 0, y: 80, iconKey: 'pixel_gate' },
+  { id: 'truth-tables', title: 'Truth Tables', moduleName: 'Module 1: Logic & Sets', description: 'Test equivalence, implication, and validity one row at a time.', objective: 'Use truth tables to classify arguments and logical identities.', difficulty: 'Foundational', kind: 'assignment', xp: 70, minutes: 55, x: 180, y: 0, iconKey: 'pixel_grid' },
+  { id: 'set-operations', title: 'Set Operations', moduleName: 'Module 1: Logic & Sets', description: 'Work fluently with union, intersection, complements, and power sets.', objective: 'Model relationships with set notation and verify identities.', difficulty: 'Foundational', kind: 'topic', xp: 70, minutes: 50, x: 180, y: 170, iconKey: 'pixel_brackets' },
+  { id: 'proof-language', title: 'Language of Proof', moduleName: 'Module 2: Proof Techniques', description: 'Turn definitions, quantifiers, and claims into proof-ready statements.', objective: 'Identify assumptions, conclusions, witnesses, and counterexamples.', difficulty: 'Intermediate', kind: 'reading', xp: 80, minutes: 60, x: 360, y: 80, iconKey: 'pixel_pointer' },
+  { id: 'direct-proofs', title: 'Direct & Contrapositive Proofs', moduleName: 'Module 2: Proof Techniques', description: 'Choose a direct or contrapositive route and justify each inference.', objective: 'Construct concise proofs from definitions and known results.', difficulty: 'Intermediate', kind: 'assignment', xp: 90, minutes: 80, x: 540, y: 0, iconKey: 'pixel_brackets' },
+  { id: 'induction', title: 'Mathematical Induction', moduleName: 'Module 2: Proof Techniques', description: 'Prove statements over the natural numbers with a clear inductive step.', objective: 'Connect the base case, hypothesis, and k + 1 case without hidden assumptions.', difficulty: 'Advanced', kind: 'assessment', xp: 100, minutes: 95, x: 720, y: 0, iconKey: 'pixel_binary_tree' },
+  { id: 'relations', title: 'Relations & Equivalence', moduleName: 'Module 3: Discrete Structures', description: 'Recognize reflexive, symmetric, transitive, and equivalence relations.', objective: 'Classify relations and derive their equivalence classes.', difficulty: 'Intermediate', kind: 'topic', xp: 90, minutes: 70, x: 360, y: 240, iconKey: 'pixel_circuit' },
+  { id: 'functions', title: 'Functions & Cardinality', moduleName: 'Module 3: Discrete Structures', description: 'Reason about injections, surjections, bijections, and countability.', objective: 'Use mappings to compare finite and infinite sets.', difficulty: 'Intermediate', kind: 'assignment', xp: 80, minutes: 75, x: 540, y: 240, iconKey: 'pixel_pointer' },
+  { id: 'combinatorics', title: 'Counting Principles', moduleName: 'Module 3: Discrete Structures', description: 'Apply product, sum, permutation, and combination rules.', objective: 'Select a counting strategy and explain why it counts every outcome once.', difficulty: 'Intermediate', kind: 'topic', xp: 110, minutes: 120, x: 540, y: 120, iconKey: 'pixel_grid' },
+  { id: 'graph-theory', title: 'Graph Theory', moduleName: 'Module 4: Networks & Recurrence', description: 'Analyze paths, connectivity, trees, and graph representations.', objective: 'Model a network as a graph and justify a traversal or connectivity claim.', difficulty: 'Advanced', kind: 'project', xp: 110, minutes: 100, x: 720, y: 180, iconKey: 'pixel_binary_tree' },
+  { id: 'recurrence', title: 'Recurrence Relations', moduleName: 'Module 4: Networks & Recurrence', description: 'Describe recursive processes and solve common recurrence patterns.', objective: 'Connect recursive definitions to closed forms and growth rates.', difficulty: 'Advanced', kind: 'assessment', xp: 120, minutes: 110, x: 900, y: 80, iconKey: 'pixel_circuit' },
+  { id: 'capstone', title: 'Discrete Systems Capstone', moduleName: 'Module 4: Networks & Recurrence', description: 'Combine proofs, counting, graphs, and recurrence in one modeled system.', objective: 'Defend a complete discrete model and communicate its assumptions.', difficulty: 'Advanced', kind: 'project', xp: 160, minutes: 180, x: 1080, y: 80, iconKey: 'pixel_chip' },
 ];
+
+const nodes: SkillNode[] = specs.map((spec, sortOrder) => ({
+  id: spec.id,
+  courseId: DEMO_COURSE_ID,
+  trackId: null,
+  title: spec.title,
+  moduleName: spec.moduleName,
+  description: spec.description,
+  learningObjective: spec.objective,
+  difficultyLabel: spec.difficulty,
+  kind: spec.kind,
+  xpReward: spec.xp,
+  estimatedMinutes: spec.minutes,
+  x: spec.x,
+  y: spec.y,
+  sortOrder,
+  iconKey: spec.iconKey,
+  questTitle: spec.title,
+  questSubtitle: spec.description,
+  achievementTitle: `${spec.title} cleared`,
+  achievementDescription: `Completed the ${spec.title.toLocaleLowerCase()} skill path.`,
+}));
 
 export const demoTree: Tree = {
   nodes,
   prereqs: [
-    { nodeId: 'probability', prereqId: 'describing' },
-    { nodeId: 'probability', prereqId: 'reading-1' },
-    { nodeId: 'pset-1', prereqId: 'reading-1' },
-    { nodeId: 'distributions', prereqId: 'probability' },
-    { nodeId: 'sampling', prereqId: 'probability' },
-    { nodeId: 'sampling', prereqId: 'pset-1' },
-    { nodeId: 'midterm', prereqId: 'distributions' },
-    { nodeId: 'midterm', prereqId: 'sampling' },
-    { nodeId: 'final-project', prereqId: 'midterm' },
+    { nodeId: 'truth-tables', prereqId: 'logic-foundations' },
+    { nodeId: 'set-operations', prereqId: 'logic-foundations' },
+    { nodeId: 'proof-language', prereqId: 'truth-tables' },
+    { nodeId: 'proof-language', prereqId: 'set-operations' },
+    { nodeId: 'direct-proofs', prereqId: 'proof-language' },
+    { nodeId: 'induction', prereqId: 'direct-proofs' },
+    { nodeId: 'relations', prereqId: 'set-operations' },
+    { nodeId: 'functions', prereqId: 'relations' },
+    { nodeId: 'combinatorics', prereqId: 'truth-tables' },
+    { nodeId: 'graph-theory', prereqId: 'functions' },
+    { nodeId: 'graph-theory', prereqId: 'combinatorics' },
+    { nodeId: 'recurrence', prereqId: 'induction' },
+    { nodeId: 'recurrence', prereqId: 'graph-theory' },
+    { nodeId: 'capstone', prereqId: 'recurrence' },
   ],
 };
 
-/** A first launch starts clean; roots are available and every mission is untouched. */
-export const demoMasteredIds: string[] = [];
+/** The capture starts mid-semester, with a proof skill visibly in progress. */
+export const demoMasteredIds = ['logic-foundations', 'truth-tables', 'set-operations', 'proof-language'];
 
-export const demoXp = 0;
+export const demoCompletedMissionIds = [
+  'logic-symbols', 'logic-translation',
+  'truth-build', 'truth-equivalence',
+  'sets-venn', 'sets-identities',
+  'proof-quantifiers', 'proof-counterexamples',
+  'direct-even-square',
+];
 
-function n(
-  id: string,
-  title: string,
-  kind: SkillNode['kind'],
-  xpReward: number,
-  x: number,
-  y: number,
-  sortOrder: number,
-  description: string,
-): SkillNode {
-  return {
-    id,
-    courseId: DEMO_COURSE_ID,
-    trackId: null,
-    title,
-    description,
-    kind,
-    xpReward,
-    x,
-    y,
-    sortOrder,
-    ...detail[id],
-  };
-}
+export const demoXp = 320;

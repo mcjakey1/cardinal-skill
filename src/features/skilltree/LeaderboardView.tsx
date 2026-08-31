@@ -13,6 +13,7 @@ interface Props {
   pending: boolean;
   error: boolean;
   available: boolean;
+  sample?: boolean;
   courseKind: CourseKind | null;
   viewerIsAuthor: boolean;
   unavailableTitle: string;
@@ -32,6 +33,7 @@ export function LeaderboardView({
   pending,
   error,
   available,
+  sample = false,
   courseKind,
   viewerIsAuthor,
   unavailableTitle,
@@ -80,7 +82,8 @@ export function LeaderboardView({
   );
 
   return (
-    <View style={styles.view}>
+    <View style={[styles.view, sample && styles.sampleView]}>
+      {!sample ? <>
       <Bevel tone="panel" depth="inset" style={styles.scopeLabel}>
         <PixelText variant="micro" colour={courseKind === 'community' ? t.brand : t.inkMuted}>
           {courseKind === 'community'
@@ -125,6 +128,7 @@ export function LeaderboardView({
           />
         )}
       </Bevel>
+      </> : null}
 
       {entries.length === 0 ? (
         <Bevel tone="panel" style={styles.state}>
@@ -151,6 +155,7 @@ const styles = StyleSheet.create({
     gap: space.md,
     paddingBottom: space.xl + space.cell,
   },
+  sampleView: { marginTop: -space.cell },
   board: { gap: space.cell },
   state: { padding: space.md, gap: space.cell },
   scopeLabel: { paddingHorizontal: space.md, paddingVertical: space.cell },

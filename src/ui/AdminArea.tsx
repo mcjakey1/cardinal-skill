@@ -219,12 +219,7 @@ function Unlocked({
               : 'The password opened this page, and that is all it did. Being an administrator is a record the server keeps, and this account is not in it, so every action below would be refused.'}
           </LText>
 
-          {!liveSession ? (
-            <LText variant="small" tone="muted" style={styles.prose}>
-              This is a local demo session, so there is no server to ask. Sign out and sign in with
-              a real account to see the real answer.
-            </LText>
-          ) : admin.isError ? (
+          {liveSession && admin.isError ? (
             <LText variant="small" tone="muted" style={styles.prose}>
               The server could not be reached just now, so this account is treated as not an
               administrator. Check your internet connection and open this page again.

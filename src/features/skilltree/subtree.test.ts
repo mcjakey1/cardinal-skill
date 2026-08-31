@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 // Explicit .ts extension: `node --test` strips types but does not resolve
 // extensionless specifiers the way Metro does.
-import { demoMasteredIds, demoTree, demoXp } from './demoTree.ts';
+import { demoMasteredIds, demoTree } from './demoTree.ts';
 import { deriveStatuses, totalXp } from './progression.ts';
 import { buildHelpSubtree, fragmentXp, HELP_SHARE, xpBreakdown } from './subtree.ts';
 import type { HelpStep, SkillNode } from './types.ts';
@@ -149,7 +149,7 @@ test('untrusted step keys are dropped rather than allowed to build a cycle', () 
 });
 
 test('fragmenting a node does not change what the tree is worth', () => {
-  const parent = demoTree.nodes.find((n) => n.id === 'probability')!;
+  const parent = demoTree.nodes.find((n) => n.id === 'direct-proofs')!;
   const sub = buildHelpSubtree(parent, [step('a'), step('b', ['a'])], mint);
 
   const tree = {
@@ -167,7 +167,10 @@ test('fragmenting a node does not change what the tree is worth', () => {
   assert.equal(after.available, before, 'the ceiling is the same tree, help or no help');
   assert.equal(after.supplemental.available, sub.nodes[0]!.xpReward * 2);
   assert.equal(after.graded.available, before - after.supplemental.available);
-  assert.equal(after.earned, demoXp);
+  const masteredXp = demoTree.nodes
+    .filter((node) => demoMasteredIds.includes(node.id))
+    .reduce((total, node) => total + node.xpReward, 0);
+  assert.equal(after.earned, masteredXp);
   assert.equal(after.supplemental.earned, 0, 'no help step is finished yet');
 
   const withHelp = xpBreakdown(tree, [...demoMasteredIds, 'help-a']);

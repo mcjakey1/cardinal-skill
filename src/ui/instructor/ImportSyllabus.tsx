@@ -33,11 +33,9 @@ const PHASE_COPY: Record<Exclude<ImportPhase, 'idle'>, { label: string; percent:
 export function ImportSyllabus({
   liveSession,
   onDrawn,
-  onSignIn,
 }: {
   liveSession: boolean;
   onDrawn: (courseId: string) => void;
-  onSignIn: () => void;
 }) {
   const styles = useInstructorStyles();
   const queryClient = useQueryClient();
@@ -236,18 +234,6 @@ export function ImportSyllabus({
               students. {instructorImportError(verification.error)}
             </LText>
             <LButton label="Check again" icon="refresh-cw" onPress={() => void verification.refetch()} />
-          </View>
-        </Notice>
-      ) : null}
-
-      {!liveSession ? (
-        <Notice tone="attention" title="Sign in to import a live course">
-          <View style={styles.noticeActions}>
-            <LText variant="small">
-              You are using the local instructor demo. Syllabus parsing and saved courses require a
-              Supabase instructor account so the new course has a verified owner.
-            </LText>
-            <LButton label="Go to sign in" icon="log-in" onPress={onSignIn} />
           </View>
         </Notice>
       ) : null}

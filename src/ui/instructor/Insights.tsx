@@ -14,7 +14,7 @@ import {
   type ProgressRow,
   type WatchRow,
 } from '@/features/skilltree/classInsights';
-import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
+import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
 import { findMockCourse } from '@/features/skilltree/mockCourses';
 import { resolveName } from '@/features/skilltree/naming';
 import { fetchTree } from '@/features/skilltree/queries';
@@ -37,7 +37,7 @@ import {
 } from './shared';
 
 /** Fixed so the sample class does not drift as the real clock moves. */
-const SAMPLE_NOW = new Date('2026-03-01T09:00:00.000Z');
+const SAMPLE_NOW = new Date('2026-08-31T09:00:00.000Z');
 
 const daysBefore = (from: Date, days: number): string =>
   new Date(from.getTime() - days * 86_400_000).toISOString();
@@ -75,12 +75,12 @@ const SAMPLE_INSIGHTS: {
     })),
   ],
   nodes: [
-    { id: 'sample-1', title: 'Describing data' },
-    { id: 'sample-2', title: 'Probability basics' },
-    { id: 'sample-3', title: 'Sampling distributions' },
-    { id: 'sample-4', title: 'Confidence intervals' },
-    { id: 'sample-5', title: 'Hypothesis testing' },
-    { id: 'sample-6', title: 'Reporting a result' },
+    { id: 'sample-1', title: 'Logic foundations' },
+    { id: 'sample-2', title: 'Truth tables' },
+    { id: 'sample-3', title: 'Language of proof' },
+    { id: 'sample-4', title: 'Mathematical induction' },
+    { id: 'sample-5', title: 'Counting principles' },
+    { id: 'sample-6', title: 'Graph theory' },
   ],
   prereqs: [
     { nodeId: 'sample-2', prereqId: 'sample-1' },
@@ -125,10 +125,10 @@ const SAMPLE_INSIGHTS: {
  */
 export function Insights({ course }: { course: CourseRow }) {
   const styles = useInstructorStyles();
-  const [sample, setSample] = useState(false);
   // Fixture courses have ids like 'demo' and no class behind them; every query
   // below would either fail its uuid cast or return nothing.
   const fixture = course.id === DEMO_COURSE_ID || Boolean(findMockCourse(course.id));
+  const [sample, setSample] = useState(fixture);
 
   const roster = useQuery({
     queryKey: ['instructor-roster', course.id],
@@ -220,24 +220,6 @@ export function Insights({ course }: { course: CourseRow }) {
         title="Class insights"
         lede={`What ${course.title} needs from you next week. Each panel says what it means and what to do about it. Anything worked out over a group smaller than ${MIN_COHORT} students stays hidden, because a figure over a handful of people points at those people.`}
       />
-
-      {sample ? (
-        <Notice tone="attention" title="Sample class — every student and number below is made up">
-          No database was read and nobody is signed in. This is the layout, filled with an invented
-          class of twenty chosen to show the panels working.
-        </Notice>
-      ) : null}
-
-      {!sample && fixture ? (
-        <>
-          <Notice title="The example chart has no class">
-            {DEMO_COURSE_TITLE} is a sample chart for looking at, not a course anybody is enrolled
-            on, so there is nothing to measure. Open one of your own courses, or look at a sample
-            class below.
-          </Notice>
-          {toggle}
-        </>
-      ) : null}
 
       {pending ? (
         <Panel>

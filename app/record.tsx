@@ -10,6 +10,8 @@ import { useAuth } from '@/auth/AuthContext';
 import { achievements, streakDays } from '@/features/skilltree/achievements';
 import { fetchInstructorVerification } from '@/features/skilltree/courseCatalog';
 import { fetchCourseOptions } from '@/features/skilltree/courseQueries';
+import { demoLeaderboard } from '@/features/skilltree/demoLeaderboard';
+import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
 import { LeaderboardStickyBar } from '@/features/skilltree/LeaderboardList';
 import { LeaderboardView } from '@/features/skilltree/LeaderboardView';
 import { effectiveMissionCompletionIds } from '@/features/skilltree/missions';
@@ -94,15 +96,17 @@ export default function Record() {
   const liveScope = scopeId === 'all' || Boolean(selectedCourse && !selectedCourse.isFixture);
   const recordRemoteEnabled = signedInLive && liveScope;
   const remoteCourseId = scopeId === 'all' ? null : scopeId;
+  const sampleLeaderboard = selectedCourse?.id === DEMO_COURSE_ID;
   const leaderboardAvailable = Boolean(
-    signedInLive
+    sampleLeaderboard
+      || (signedInLive
       && scopeId !== 'all'
       && selectedCourse
       && !selectedCourse.isFixture
       && (!selectedCourse.canEdit || selectedCourse.kind === 'community')
       && (selectedCourse.kind === 'official' || selectedCourse.kind === 'community')
       && (selectedCourse.publicationStatus === 'published'
-        || selectedCourse.publicationStatus === 'archived'),
+        || selectedCourse.publicationStatus === 'archived')),
   );
   const leaderboardUnavailable = useMemo(() => {
     if (!signedInLive) return {
@@ -130,7 +134,7 @@ export default function Record() {
   const leaderboardQuery = useQuery({
     queryKey: ['student-leaderboard', remoteCourseId],
     queryFn: () => fetchLeaderboard(remoteCourseId),
-    enabled: leaderboardAvailable,
+    enabled: leaderboardAvailable && !sampleLeaderboard,
   });
   const eventsQuery = useQuery({
     queryKey: ['record-events', remoteCourseId],
@@ -224,7 +228,8 @@ export default function Record() {
     };
   }, [activeCourseIds, eventsQuery.data, logs, treeQueries]);
 
-  const currentRank = leaderboardQuery.data?.find((entry) => entry.isCurrentUser) ?? null;
+  const leaderboardEntries = sampleLeaderboard ? demoLeaderboard : (leaderboardQuery.data ?? []);
+  const currentRank = leaderboardEntries.find((entry) => entry.isCurrentUser) ?? null;
   const level = levelForXp(dossier.xp);
   const stamps = achievements(dossier.tree, dossier.masteredIds, dossier.streak);
   const pending = coursesPending || treeQueries.some((query) => query.isPending) || !progressReady;
@@ -300,10 +305,11 @@ export default function Record() {
           <Animated.View key={view} entering={prefs.motionOff ? undefined : FadeIn.duration(180)}>
             {view === 'leaderboard' ? (
               <LeaderboardView
-                entries={leaderboardQuery.data ?? []}
-                pending={leaderboardQuery.isPending && leaderboardAvailable}
-                error={leaderboardQuery.isError}
+                entries={leaderboardEntries}
+                pending={!sampleLeaderboard && leaderboardQuery.isPending && leaderboardAvailable}
+                error={!sampleLeaderboard && leaderboardQuery.isError}
                 available={leaderboardAvailable}
+                sample={sampleLeaderboard}
                 courseKind={selectedCourse?.kind ?? null}
                 viewerIsAuthor={Boolean(selectedCourse?.canEdit)}
                 unavailableTitle={leaderboardUnavailable.title}

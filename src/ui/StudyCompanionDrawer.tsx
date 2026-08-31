@@ -11,6 +11,8 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import type { Mission, SkillNode } from '@/features/skilltree/types';
+import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
+import { demoCompanionAnswer } from '@/features/skilltree/demoCompanion';
 import { callEdgeFunction } from '@/lib/edgeFunctions';
 import { KEYBOARD_BEHAVIOR } from '@/ui/keyboard';
 import { bevel, space, touch } from '@/theme/tokens';
@@ -68,7 +70,6 @@ export function StudyCompanionDrawer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus>('checking');
-  const [modelName, setModelName] = useState('EDGE ENGINE');
   const nextId = useRef(0);
   const handledInitialPrompt = useRef<number | null>(null);
   const hidden = useSharedValue(visible ? 0 : 1);
@@ -82,6 +83,11 @@ export function StudyCompanionDrawer({
 
   useEffect(() => {
     if (!visible) return;
+    if (courseId === DEMO_COURSE_ID) {
+      setModelStatus('online');
+      setError(null);
+      return;
+    }
     let live = true;
     const checkModel = async () => {
       setModelStatus('checking');
@@ -94,7 +100,6 @@ export function StudyCompanionDrawer({
         );
         if (data.status !== 'online') throw new Error('Offline.');
         if (live) {
-          setModelName(modelLabel(data.model));
           setModelStatus('online');
         }
       } catch (cause) {
@@ -129,6 +134,16 @@ export function StudyCompanionDrawer({
     setError(null);
     setModelStatus('generating');
 
+    if (courseId === DEMO_COURSE_ID) {
+      setModelStatus('online');
+      setMessages((current) => [
+        ...current,
+        { id: nextId.current++, role: 'assistant', text: demoCompanionAnswer(node.title, text) },
+      ]);
+      setBusy(false);
+      return;
+    }
+
     try {
       const data = await callEdgeFunction<CompanionResponse>('study-companion', {
         courseId,
@@ -148,7 +163,6 @@ export function StudyCompanionDrawer({
       if (typeof data.answer !== 'string' || !data.answer.trim()) {
         throw new Error('The companion returned an empty answer. Try again.');
       }
-      setModelName(modelLabel(data.model));
       setModelStatus('online');
       setMessages((current) => [
         ...current,
@@ -198,7 +212,7 @@ export function StudyCompanionDrawer({
           style={styles.drawer}
           bodyStyle={styles.drawerBody}
         >
-          <ModelStatusPill status={modelStatus} modelName={modelName} reduceMotion={Boolean(reduceMotion)} />
+          <ModelStatusPill status={modelStatus} reduceMotion={Boolean(reduceMotion)} />
           <PixelText variant="micro" colour={t.inkMuted}>
             CONTEXT · {courseTitle.toUpperCase()} · {node.title.toUpperCase()}
           </PixelText>
@@ -254,15 +268,8 @@ export function StudyCompanionDrawer({
   );
 }
 
-function modelLabel(model: unknown): string {
-  return typeof model === 'string' && model.trim()
-    ? model.trim().replaceAll('-', ' ').toUpperCase()
-    : 'EDGE ENGINE';
-}
-
-function ModelStatusPill({ status, modelName, reduceMotion }: {
+function ModelStatusPill({ status, reduceMotion }: {
   status: ModelStatus;
-  modelName: string;
   reduceMotion: boolean;
 }) {
   const t = useTheme();
@@ -280,7 +287,7 @@ function ModelStatusPill({ status, modelName, reduceMotion }: {
   const dotMotion = useAnimatedStyle(() => ({ opacity: pulse.value }));
   const colour = status === 'online' ? t.success : status === 'offline' ? t.alarm : t.warning;
   const label = status === 'online'
-    ? `CONNECTED · ${modelName}`
+    ? 'AGENT CONNECTED'
     : status === 'generating'
       ? 'GENERATING…'
       : status === 'offline'

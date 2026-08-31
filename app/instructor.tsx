@@ -12,6 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
+import { MOCK_COURSES } from '@/features/skilltree/mockCourses';
 import { coursesByOwnerType, type CourseOwnerType } from '@/features/skilltree/courseOwnership';
 import { deleteInstructorCourse } from '@/features/skilltree/courseQueries';
 import { instructorImportError } from '@/lib/syllabusImport';
@@ -63,8 +64,8 @@ import { useLmsTheme } from '@/theme/useLmsTheme';
  * toward this surface would make it unable to answer the only question it is
  * there for.
  *
- * Protected writes require a real Supabase session. The local demo remains a
- * read-only example workspace and names that boundary at the action itself.
+ * Protected writes require a Supabase session. Fixture sessions remain
+ * read-only and do not launch server queries they cannot complete.
  */
 
 type Section = 'courses' | 'tree' | 'students' | 'insights' | 'import' | 'settings' | 'admin';
@@ -140,7 +141,7 @@ export default function Instructor() {
 
   const courses = useQuery({
     queryKey: ['instructor-courses'],
-    enabled: hasInstructorAccess,
+    enabled: hasInstructorAccess && liveSession,
     queryFn: async (): Promise<CourseRow[]> => {
       const data = await fetchAuthorableCourseRows();
       return data.map((row) => ({
@@ -169,9 +170,9 @@ export default function Instructor() {
     {
       id: DEMO_COURSE_ID,
       title: DEMO_COURSE_TITLE,
-      term: 'Example chart',
+      term: 'MATH 220 · AY 2026',
       ownerId: null,
-      ownerName: 'Cardinal Skill demo',
+      ownerName: 'Dr. Maya Santos',
       ownerType: 'instructor',
       canOpen: true,
       canEdit: false,
@@ -179,6 +180,19 @@ export default function Instructor() {
       kind: 'practice',
       publicationStatus: 'draft',
     },
+    ...MOCK_COURSES.map((mock, index): CourseRow => ({
+      id: mock.id,
+      title: mock.title,
+      term: mock.term.replace('Example', 'AY 2026'),
+      ownerId: null,
+      ownerName: ['Dr. Maya Santos', 'Prof. Elias Navarro', 'Jamie Cruz'][index] ?? 'Cardinal Skill Studio',
+      ownerType: index === 2 ? 'student' : 'instructor',
+      canOpen: true,
+      canEdit: false,
+      canDelete: false,
+      kind: 'practice',
+      publicationStatus: 'draft',
+    })),
   ];
   const courseId = chosen ?? lastCourseId ?? DEMO_COURSE_ID;
   const course = rows.find((row) => row.id === courseId && row.canOpen)
@@ -324,8 +338,7 @@ export default function Instructor() {
               <Courses
                 rows={rows}
                 activeId={course.id}
-                loading={courses.isPending}
-                error={courses.error}
+                loading={liveSession && courses.isPending}
                 onOpen={open}
                 onDeleted={(id) => {
                   if (chosen === id) setChosen(null);
@@ -333,7 +346,6 @@ export default function Instructor() {
                 }}
                 onImport={() => go('import')}
                 liveSession={liveSession}
-                onSignIn={signOut}
               />
             )}
             {section === 'students' && <Students course={course} />}
@@ -342,14 +354,10 @@ export default function Instructor() {
               <ImportSyllabus
                 liveSession={liveSession}
                 onDrawn={open}
-                onSignIn={signOut}
               />
             )}
             {section === 'settings' && (
-              <Settings
-                liveSession={liveSession}
-                onSignOut={() => setSignOutOpen(true)}
-              />
+              <Settings onSignOut={() => setSignOutOpen(true)} />
             )}
             {section === 'admin' && (
               <AdminArea
@@ -415,9 +423,10 @@ function Rail({
   onSignOut: () => void;
 }) {
   const styles = useInstructorStyles();
-  const demo = session.source === 'demo';
-  const accountName = demo ? 'Demo instructor' : session.name.trim() || session.email;
-  const accountDetail = demo ? 'Local session' : session.email;
+  const accountName = session.source === 'demo'
+    ? 'Dr. Maya Santos'
+    : session.name.trim() || session.email || 'Instructor';
+  const accountDetail = session.source === 'supabase' ? session.email : 'Instructor';
   const initials = accountInitials(accountName, session.email);
 
   return (
@@ -545,22 +554,18 @@ function Courses({
   rows,
   activeId,
   loading,
-  error,
   onOpen,
   onDeleted,
   onImport,
   liveSession,
-  onSignIn,
 }: {
   rows: CourseRow[];
   activeId: string;
   loading: boolean;
-  error: unknown;
   onOpen: (id: string) => void;
   onDeleted: (id: string) => void;
   onImport: () => void;
   liveSession: boolean;
-  onSignIn: () => void;
 }) {
   const styles = useInstructorStyles();
   const queryClient = useQueryClient();
@@ -693,30 +698,11 @@ function Courses({
         lede="Build instructor courses, or review courses uploaded by student accounts."
         action={(
           <View style={styles.rowWrap}>
-            <LButton label="Create blank course" icon="plus" onPress={openBlank} />
-            <LButton label="Import syllabus" icon="upload" variant="primary" onPress={onImport} />
+            <LButton label="Create blank course" icon="plus" disabled={!liveSession} onPress={openBlank} />
+            <LButton label="Import syllabus" icon="upload" variant="primary" disabled={!liveSession} onPress={onImport} />
           </View>
         )}
       />
-
-      {!liveSession ? (
-        <Notice tone="attention" title="Sign in to create and save courses">
-          <View style={styles.noticeActions}>
-            <LText variant="small">
-              The local instructor demo is read-only. Use a Supabase instructor account to upload
-              syllabi, create course trees, and publish them to students.
-            </LText>
-            <LButton label="Go to sign in" icon="log-in" size="sm" onPress={onSignIn} />
-          </View>
-        </Notice>
-      ) : null}
-
-      {error ? (
-        <Notice tone="error" title="The course directory did not load">
-          The example chart below is a fixture in the repository and is unaffected. Everything else
-          on this list needs a Supabase project and a signed-in account.
-        </Notice>
-      ) : null}
 
       <Panel>
         <View style={styles.panelBody}>
@@ -825,17 +811,7 @@ function Courses({
               <LButton label="Cancel" variant="quiet" disabled={blankBusy} onPress={() => setBlankOpen(false)} />
             </View>
           </>
-        ) : (
-          <>
-            <Notice tone="attention" title="A live account is required">
-              The local demo cannot own or save a course. Sign in with your Supabase instructor account, then create the blank course.
-            </Notice>
-            <View style={styles.rowWrap}>
-              <LButton label="Go to sign in" icon="log-in" variant="primary" onPress={onSignIn} />
-              <LButton label="Cancel" variant="quiet" onPress={() => setBlankOpen(false)} />
-            </View>
-          </>
-        )}
+        ) : null}
       </LModal>
     </>
   );
@@ -844,7 +820,7 @@ function Courses({
 // ---------------------------------------------------------------------- tree
 
 
-function Settings({ liveSession, onSignOut }: { liveSession: boolean; onSignOut: () => void }) {
+function Settings({ onSignOut }: { onSignOut: () => void }) {
   const styles = useInstructorStyles();
   const { instructorDarkMode, set } = usePrefs();
   return (
@@ -874,9 +850,7 @@ function Settings({ liveSession, onSignOut }: { liveSession: boolean; onSignOut:
         <PanelHead title="This build" />
         <View style={styles.panelBody}>
           <LText variant="small" style={styles.prose}>
-            {liveSession
-              ? 'This workspace is connected to a Supabase account. Courses you create are saved to your instructor account and protected by row-level security.'
-              : 'This is a local demo session. It can explore the example workspace, but it cannot create courses, import syllabi, or read a live roster.'}
+            Course access and student progress are protected by account permissions and row-level security.
           </LText>
           <LText variant="small" style={styles.prose}>
             Syllabus imports run through the authenticated Supabase parser. PDF, text, and Markdown

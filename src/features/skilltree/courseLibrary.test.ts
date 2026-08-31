@@ -22,18 +22,23 @@ function course(id: string, kind: CourseOption['kind'], canEdit: boolean): Cours
   };
 }
 
+function fixture(id: string): CourseOption {
+  return { ...course(id, 'practice', false), isFixture: true };
+}
+
 test('course tabs route My courses to official and Playground to local content', () => {
   assert.equal(catalogKindForTab('mine'), 'official');
   assert.equal(catalogKindForTab('playground'), null);
   assert.equal(catalogKindForTab('community'), 'community');
 });
 
-test('Playground keeps owned drafts and student-made publications only', () => {
+test('Playground keeps owned drafts, student publications, and bundled showcase courses', () => {
   const result = playgroundCourses([
     course('private', 'practice', true),
     course('shared', 'community', true),
     course('joined-community', 'community', false),
     course('official', 'official', true),
+    fixture('showcase'),
   ]);
-  assert.deepEqual(result.map(({ id }) => id), ['private', 'shared']);
+  assert.deepEqual(result.map(({ id }) => id), ['private', 'shared', 'showcase']);
 });

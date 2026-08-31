@@ -46,8 +46,8 @@ export async function fetchCourseOptions(): Promise<CourseOption[]> {
     loadCachedCourseOrder(),
   ]);
   const fixtures: CourseOption[] = [
-    { id: DEMO_COURSE_ID, courseCode: null, title: DEMO_COURSE_TITLE, term: 'Example chart', ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_000 },
-    ...MOCK_COURSES.map(({ id, title, term }, index) => ({ id, courseCode: null, title, term, ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_001 + index })),
+    { id: DEMO_COURSE_ID, courseCode: 'MATH 220', title: DEMO_COURSE_TITLE, term: 'AY 2026', ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_000 },
+    ...MOCK_COURSES.map(({ id, title, term }, index) => ({ id, courseCode: term.split(' · ')[0] ?? null, title, term: 'AY 2026', ...PRIVATE_PRACTICE_DISTRIBUTION, canEdit: false, canDelete: false, canRemove: false, isFixture: true, sortOrder: 10_001 + index })),
   ];
   if (error) {
     if (!auth.user) return fixtures;

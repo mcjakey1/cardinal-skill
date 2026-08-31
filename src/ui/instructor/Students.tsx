@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { STALE_DAYS } from '@/features/skilltree/cohort';
+import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
+import { findMockCourse } from '@/features/skilltree/mockCourses';
 import {
   rosterFlag,
   sortRoster,
@@ -37,12 +39,12 @@ import {
  * without a database.
  */
 const SAMPLE_ROSTER: RosterEntry[] = [
-  { userId: 's1', displayName: 'A. Reyes', email: 'a.reyes@example.edu', enrolled: true, mastered: 0, gradedNodes: 8, progress: 0, xp: 0, lastActive: null },
-  { userId: 's2', displayName: 'B. Okafor', email: 'b.okafor@example.edu', enrolled: true, mastered: 1, gradedNodes: 8, progress: 13, xp: 50, lastActive: '2026-01-04T09:00:00.000Z' },
-  { userId: 's3', displayName: 'C. Lindqvist', email: 'c.lindqvist@example.edu', enrolled: true, mastered: 3, gradedNodes: 8, progress: 38, xp: 140, lastActive: '2026-02-26T16:20:00.000Z' },
-  { userId: 's4', displayName: 'D. Mwangi', email: 'd.mwangi@example.edu', enrolled: true, mastered: 5, gradedNodes: 8, progress: 63, xp: 260, lastActive: '2026-02-28T11:05:00.000Z' },
-  { userId: 's5', displayName: 'E. Fontaine', email: 'e.fontaine@example.edu', enrolled: true, mastered: 6, gradedNodes: 8, progress: 75, xp: 320, lastActive: '2026-03-01T08:40:00.000Z' },
-  { userId: 's6', displayName: 'F. Halvorsen', email: 'f.halvorsen@example.edu', enrolled: true, mastered: 8, gradedNodes: 8, progress: 100, xp: 480, lastActive: '2026-02-27T19:15:00.000Z' },
+  { userId: 's1', displayName: 'Alex Reyes', email: 'alex.reyes@example.edu', enrolled: true, mastered: 0, gradedNodes: 12, progress: 0, xp: 0, lastActive: null },
+  { userId: 's2', displayName: 'Bianca Okafor', email: 'bianca.okafor@example.edu', enrolled: true, mastered: 2, gradedNodes: 12, progress: 17, xp: 130, lastActive: '2026-08-04T09:00:00.000Z' },
+  { userId: 's3', displayName: 'Chen Lindqvist', email: 'chen.lindqvist@example.edu', enrolled: true, mastered: 4, gradedNodes: 12, progress: 33, xp: 280, lastActive: '2026-08-27T16:20:00.000Z' },
+  { userId: 's4', displayName: 'Dalia Mwangi', email: 'dalia.mwangi@example.edu', enrolled: true, mastered: 7, gradedNodes: 12, progress: 58, xp: 540, lastActive: '2026-08-29T11:05:00.000Z' },
+  { userId: 's5', displayName: 'Emil Fontaine', email: 'emil.fontaine@example.edu', enrolled: true, mastered: 9, gradedNodes: 12, progress: 75, xp: 750, lastActive: '2026-08-31T08:40:00.000Z' },
+  { userId: 's6', displayName: 'Farah Halvorsen', email: 'farah.halvorsen@example.edu', enrolled: true, mastered: 12, gradedNodes: 12, progress: 100, xp: 1140, lastActive: '2026-08-30T19:15:00.000Z' },
 ];
 
 /**
@@ -106,11 +108,13 @@ const FLAG_LABEL = {
  */
 export function Students({ course }: { course: CourseRow }) {
   const styles = useInstructorStyles();
-  const [sample, setSample] = useState(false);
+  const fixture = course.id === DEMO_COURSE_ID || Boolean(findMockCourse(course.id));
+  const [sample, setSample] = useState(fixture);
   const [filter, setFilter] = useState<'all' | 'flagged'>('all');
   const { data, error, isPending, refetch } = useQuery({
     queryKey: ['instructor-roster', course.id],
     queryFn: () => fetchRoster(course.id),
+    enabled: !fixture,
   });
 
   // Read once per render rather than per row, so a list cannot flag one student
@@ -147,13 +151,6 @@ export function Students({ course }: { course: CourseRow }) {
         }
       />
 
-      {sample ? (
-        <Notice tone="attention" title="Sample roster — these people do not exist">
-          Six invented students, so the screen can be looked at without a database. No row below was
-          read from anywhere, and no address below can be written to.
-        </Notice>
-      ) : null}
-
       {!sample && error ? (
         <>
           <Notice tone="error" title="The roster did not load">
@@ -161,7 +158,7 @@ export function Students({ course }: { course: CourseRow }) {
           </Notice>
           <View style={styles.rowWrap}>
             <LButton label="Try again" onPress={() => refetch()} />
-            {toggle}
+            {fixture ? null : toggle}
           </View>
         </>
       ) : null}
@@ -172,7 +169,7 @@ export function Students({ course }: { course: CourseRow }) {
             A roster is only ever returned to the account that owns the course, and sign-in is not
             wired in this build. Nobody is invented to fill the table.
           </Notice>
-          {toggle}
+          {fixture ? null : toggle}
         </>
       ) : null}
 
@@ -182,7 +179,7 @@ export function Students({ course }: { course: CourseRow }) {
             It is here so you can see how the workspace is laid out. To see a real roster, open
             Courses and choose one of your own.
           </Notice>
-          {toggle}
+          {fixture ? null : toggle}
         </>
       ) : null}
 
@@ -192,7 +189,7 @@ export function Students({ course }: { course: CourseRow }) {
             Only the instructor who owns a course can see who is on it. Open Courses and choose one
             of your own.
           </Notice>
-          {toggle}
+          {fixture ? null : toggle}
         </>
       ) : null}
 

@@ -184,7 +184,26 @@ export async function duplicateCourse(courseId: string): Promise<string> {
 }
 
 export async function deleteCourse(courseId: string): Promise<void> {
-  const { error } = await supabase.from('courses').delete().eq('id', courseId);
+  const { data, error } = await supabase
+    .from('courses')
+    .delete()
+    .eq('id', courseId)
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  // RLS reports an unauthorized DELETE as zero affected rows, not an error.
+  // Treat that as a refusal so the screen never claims a course disappeared.
+  if (!data) throw new Error('Only the instructor who added this course can delete it.');
+  await Promise.all([
+    purgeCourseCache(courseId),
+    removeCachedCourse(courseId),
+    clearLocal(courseId),
+  ]);
+}
+
+/** Moderated delete: the server accepts an owned course or a student upload. */
+export async function deleteInstructorCourse(courseId: string): Promise<void> {
+  const { error } = await supabase.rpc('instructor_delete_course', { p_course_id: courseId });
   if (error) throw error;
   await Promise.all([
     purgeCourseCache(courseId),

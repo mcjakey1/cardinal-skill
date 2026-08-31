@@ -1,7 +1,9 @@
 import * as DocumentPicker from 'expo-document-picker';
+import { useMemo } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { lms } from '@/theme/lms';
+import { lms, type LmsColour } from '@/theme/lms';
+import { useLmsTheme } from '@/theme/useLmsTheme';
 import { Icon, LText } from './lms';
 
 export interface LmsFileSelection {
@@ -27,6 +29,8 @@ export function LmsFileDropzone({
   disabled,
   onSelect,
 }: Props) {
+  const theme = useLmsTheme();
+  const styles = useMemo(() => createStyles(theme.colour), [theme]);
   const browse = async () => {
     const result = await DocumentPicker.getDocumentAsync({
       type: ['text/plain', 'text/markdown', 'application/pdf'],
@@ -65,8 +69,8 @@ export function LmsFileDropzone({
   );
 }
 
-const c = lms.colour;
-const styles = StyleSheet.create({
+function createStyles(c: LmsColour) {
+  return StyleSheet.create({
   dropzone: {
     minHeight: lms.touch * 2,
     padding: lms.space.lg,
@@ -85,4 +89,5 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.56 },
   copy: { flex: 1, minWidth: 0, gap: lms.space.xs },
   strong: { fontWeight: '600' },
-});
+  });
+}

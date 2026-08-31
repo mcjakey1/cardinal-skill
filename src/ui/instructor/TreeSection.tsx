@@ -38,7 +38,7 @@ import {
   Notice,
   Skeleton,
 } from '@/ui/lms';
-import { styles, type CourseRow } from './shared';
+import { useInstructorStyles, type CourseRow } from './shared';
 
 export function TreeSection({
   course,
@@ -57,6 +57,7 @@ export function TreeSection({
   onImport: () => void;
   onStudentView: () => void;
 }) {
+  const styles = useInstructorStyles();
   const [selected, setSelected] = useState<SkillNode | null>(null);
   // Which node's form is open, rather than a bare flag: a different node means a
   // fresh form, and adding a node can open its form in the same turn it selects
@@ -827,6 +828,7 @@ function NodeInspector({
   canEdit: boolean;
   onStartEdit: () => void;
 }) {
+  const styles = useInstructorStyles();
   if (!node) {
     return (
       <View style={styles.inspectorSection}>
@@ -874,6 +876,7 @@ function NodeInspector({
 }
 
 function Figure({ label, value }: { label: string; value: string }) {
+  const styles = useInstructorStyles();
   return (
     <View style={styles.figure}>
       <LText variant="small" tone="muted">

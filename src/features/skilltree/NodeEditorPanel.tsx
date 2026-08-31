@@ -43,6 +43,7 @@ import { SubjectPixelIcon } from '@/ui/SubjectPixelIcon';
 import { PixelButton, PixelIcon, PixelInput, PixelText, StatusTag, Toggle, bevelStyle } from '@/ui/pixel';
 import { Field, Icon, LButton, LText } from '@/ui/lms';
 import { lms } from '@/theme/lms';
+import { useLmsTheme } from '@/theme/useLmsTheme';
 
 import { missionDraftTotal, type MissionDraft } from './missionEditing';
 import type { DisplayStatus } from './nodeVisualState';
@@ -100,13 +101,17 @@ export function NodeEditorPanel({
   onCancel: () => void;
 }) {
   const t = useTheme();
+  const workspaceTheme = useLmsTheme();
   const { theme } = useAppTheme();
   // Memoised because `kit`'s members are rendered as components (`<kit.Input>`),
   // and React reconciles by element type. A kit rebuilt on every render is a new
   // set of function identities, so every keystroke unmounted the field being
   // typed into and mounted a fresh one — the caret went with it and only the
   // first character ever landed.
-  const kit = useMemo(() => (surface === 'workspace' ? workspaceKit(t) : studentKit(t)), [surface, t]);
+  const kit = useMemo(
+    () => (surface === 'workspace' ? workspaceKit(t, workspaceTheme.colour) : studentKit(t)),
+    [surface, t, workspaceTheme],
+  );
   const [form, setForm] = useState(() => nodeEditForm(node, missions));
 
   const problems = nodeEditProblems(form);
@@ -477,8 +482,7 @@ function studentKit(t: PixelTheme): Kit {
  * the check that this is the workspace's own grammar and not the pixel one
  * repainted.
  */
-function workspaceKit(_t: PixelTheme): Kit {
-  const c = lms.colour;
+function workspaceKit(_t: PixelTheme, c: ReturnType<typeof useLmsTheme>['colour']): Kit {
   return {
     Caption: ({ children }) => <LText variant="micro" tone="muted">{children}</LText>,
     Value: ({ children }) => <LText variant="small" style={styles.workspaceValue}>{children}</LText>,

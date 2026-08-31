@@ -19,7 +19,7 @@ import {
   Notice,
   Panel,
 } from '@/ui/lms';
-import { PageHead, styles } from './shared';
+import { PageHead, useInstructorStyles } from './shared';
 
 type ImportPhase = 'idle' | 'creating' | 'parsing' | 'publishing' | 'done';
 
@@ -39,6 +39,7 @@ export function ImportSyllabus({
   onDrawn: (courseId: string) => void;
   onSignIn: () => void;
 }) {
+  const styles = useInstructorStyles();
   const queryClient = useQueryClient();
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');

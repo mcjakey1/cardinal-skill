@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { mergeRoster, type RosterView } from '@/features/skilltree/roster';
@@ -5,7 +6,8 @@ import { DEMO_COURSE_ID } from '@/features/skilltree/demoTree';
 import { findMockCourse } from '@/features/skilltree/mockCourses';
 import type { CourseKind, CoursePublicationStatus } from '@/features/skilltree/courseDistribution';
 import { supabase } from '@/lib/supabase';
-import { lms } from '@/theme/lms';
+import { lms, type LmsTheme } from '@/theme/lms';
+import { useLmsTheme } from '@/theme/useLmsTheme';
 import { LText } from '@/ui/lms';
 
 /**
@@ -23,8 +25,16 @@ export interface CourseRow {
   id: string;
   title: string;
   term: string | null;
+  ownerId: string | null;
+  ownerName: string;
+  /** Protected server classification used to separate moderated uploads. */
+  ownerType: 'student' | 'instructor';
+  /** Student uploads can be moderated without exposing their private chart. */
+  canOpen: boolean;
   /** True only for the signed-in owner. Publishing is owner-gated in RLS too. */
   canEdit: boolean;
+  /** True for the owner and for a student upload an instructor may moderate. */
+  canDelete: boolean;
   kind: CourseKind;
   publicationStatus: CoursePublicationStatus;
 }
@@ -154,6 +164,7 @@ export function PageHead({
   lede: string;
   action?: React.ReactNode;
 }) {
+  const styles = useInstructorStyles();
   return (
     <View style={styles.pageHead}>
       <View style={styles.pageHeadText}>
@@ -167,9 +178,14 @@ export function PageHead({
   );
 }
 
-export const c = lms.colour;
+export function useInstructorStyles() {
+  const theme = useLmsTheme();
+  return useMemo(() => createInstructorStyles(theme), [theme]);
+}
 
-export const styles = StyleSheet.create({
+function createInstructorStyles(theme: LmsTheme) {
+  const c = theme.colour;
+  return StyleSheet.create({
   shell: { flex: 1, flexDirection: 'row', backgroundColor: c.ground },
   main: { flex: 1, minWidth: 0 },
 
@@ -365,4 +381,5 @@ export const styles = StyleSheet.create({
     borderLeftColor: c.line,
   },
   inspectorSection: { gap: lms.space.sm },
-});
+  });
+}

@@ -29,6 +29,7 @@ export type Role = 'student' | 'instructor';
 interface Stored {
   reduceMotion: boolean;
   lowBandwidth: boolean;
+  instructorDarkMode: boolean;
   lastCourseId: string | null;
   role: Role | null;
 }
@@ -36,6 +37,7 @@ interface Stored {
 const DEFAULTS: Stored = {
   reduceMotion: false,
   lowBandwidth: false,
+  instructorDarkMode: false,
   lastCourseId: null,
   role: null,
 };

@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import Head from 'expo-router/head';
 import { useEffect, useState } from 'react';
 import {
+  AccessibilityInfo,
   Pressable,
   ScrollView,
   View,
@@ -11,13 +12,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DEMO_COURSE_ID, DEMO_COURSE_TITLE } from '@/features/skilltree/demoTree';
+import { coursesByOwnerType, type CourseOwnerType } from '@/features/skilltree/courseOwnership';
+import { deleteInstructorCourse } from '@/features/skilltree/courseQueries';
 import { instructorImportError } from '@/lib/syllabusImport';
 import type { CourseKind, CoursePublicationStatus } from '@/features/skilltree/courseDistribution';
 import { usePrefs } from '@/lib/prefs';
 import { useAuth, type UserSession } from '@/auth/AuthContext';
 import { usePixelTransition } from '@/ui/PixelTransition';
-import { authorableCourses } from '@/lib/admin';
-import { isAdministrator, readEveryRow } from '@/lib/adminApi';
 import { supabase } from '@/lib/supabase';
 import { lms } from '@/theme/lms';
 import { AdminArea } from '@/ui/AdminArea';
@@ -29,9 +30,11 @@ import {
   LButton,
   LModal,
   LText,
+  LToggle,
   Notice,
   Panel,
   PanelHead,
+  Segmented,
   Skeleton,
   type Column,
   type IconName,
@@ -41,7 +44,8 @@ import { ImportSyllabus } from '@/ui/instructor/ImportSyllabus';
 import { Insights } from '@/ui/instructor/Insights';
 import { Students } from '@/ui/instructor/Students';
 import { TreeSection } from '@/ui/instructor/TreeSection';
-import { PageHead, styles, type CourseRow } from '@/ui/instructor/shared';
+import { PageHead, useInstructorStyles, type CourseRow } from '@/ui/instructor/shared';
+import { useLmsTheme } from '@/theme/useLmsTheme';
 
 
 /**
@@ -84,48 +88,28 @@ const SECTION_LABEL: Record<Section, string> = {
 };
 
 /** The `courses` columns this workspace reads. */
-type WorkspaceCourseRow = {
+type InstructorCourseDirectoryRow = {
   id: string;
   title: string;
   term: string | null;
-  owner_id: string | null;
-  course_kind?: CourseKind;
-  publication_status?: CoursePublicationStatus;
+  owner_id: string;
+  owner_name: string;
+  owner_type: string;
+  course_kind: CourseKind;
+  publication_status: CoursePublicationStatus;
+  can_open: boolean;
+  can_delete: boolean;
 };
 
-/**
- * Every course this account may read, paged.
- *
- * `max_rows` truncates a bare select at a thousand and says nothing about it,
- * and this is the read that deliberately hands an administrator the whole site
- * — the one account for whom a thousand is reachable, and the one for whom a
- * missing course reads as a course that was never made.
- *
- * The narrower select is the pre-0021 fallback: app and migration roll out
- * independently, and a database without the distribution columns answers 42703
- * rather than dropping them.
- */
-async function fetchAuthorableCourseRows(): Promise<WorkspaceCourseRow[]> {
-  try {
-    return await readEveryRow<WorkspaceCourseRow>(
-      'courses',
-      'id, title, term, owner_id, course_kind, publication_status',
-      'id',
-      { column: 'created_at', ascending: false },
-    );
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code !== '42703' && code !== 'PGRST204') throw error;
-    return readEveryRow<WorkspaceCourseRow>(
-      'courses',
-      'id, title, term, owner_id',
-      'id',
-      { column: 'created_at', ascending: false },
-    );
-  }
+/** The server returns only owned instructor courses and moderated student uploads. */
+async function fetchAuthorableCourseRows(): Promise<InstructorCourseDirectoryRow[]> {
+  const { data, error } = await supabase.rpc('instructor_course_directory');
+  if (error) throw error;
+  return (data ?? []) as InstructorCourseDirectoryRow[];
 }
 
 export default function Instructor() {
+  const styles = useInstructorStyles();
   const router = useRouter();
   const { logout, session } = useAuth();
   const { transition } = usePixelTransition();
@@ -158,29 +142,20 @@ export default function Instructor() {
     queryKey: ['instructor-courses'],
     enabled: hasInstructorAccess,
     queryFn: async (): Promise<CourseRow[]> => {
-      const [{ data: auth }, data, admin] = await Promise.all([
-        supabase.auth.getUser(),
-        fetchAuthorableCourseRows(),
-        // Never the reason the workspace fails to open. An administrator who
-        // cannot be confirmed is scoped like any other instructor.
-        isAdministrator().catch(() => false),
-      ]);
-      // RLS hands back every course this account may read, which for an
-      // instructor includes ones they joined as a learner. This is an authoring
-      // workspace, so it keeps what they author — and the whole site for an
-      // administrator, who is the account that has to be able to fix things.
-      return authorableCourses(
-        data.map((row) => ({
-          id: row.id,
-          title: row.title,
-          term: row.term,
-          ownerId: row.owner_id ?? null,
-          kind: row.course_kind ?? 'practice',
-          publicationStatus: row.publication_status ?? 'draft',
-        })),
-        auth.user?.id ?? null,
-        admin,
-      );
+      const data = await fetchAuthorableCourseRows();
+      return data.map((row) => ({
+        id: row.id,
+        title: row.title,
+        term: row.term,
+        ownerId: row.owner_id,
+        ownerName: row.owner_name,
+        ownerType: row.owner_type === 'student' ? 'student' : 'instructor',
+        canOpen: row.can_open,
+        canEdit: row.can_open,
+        canDelete: row.can_delete,
+        kind: row.course_kind,
+        publicationStatus: row.publication_status,
+      }));
     },
   });
 
@@ -195,13 +170,19 @@ export default function Instructor() {
       id: DEMO_COURSE_ID,
       title: DEMO_COURSE_TITLE,
       term: 'Example chart',
+      ownerId: null,
+      ownerName: 'Cardinal Skill demo',
+      ownerType: 'instructor',
+      canOpen: true,
       canEdit: false,
+      canDelete: false,
       kind: 'practice',
       publicationStatus: 'draft',
     },
   ];
   const courseId = chosen ?? lastCourseId ?? DEMO_COURSE_ID;
-  const course = rows.find((r) => r.id === courseId) ?? rows[rows.length - 1]!;
+  const course = rows.find((row) => row.id === courseId && row.canOpen)
+    ?? rows.find((row) => row.id === DEMO_COURSE_ID)!;
 
   const go = (next: Section) => {
     // Any deliberate navigation ends the detour. Leaving the trail set would
@@ -346,6 +327,10 @@ export default function Instructor() {
                 loading={courses.isPending}
                 error={courses.error}
                 onOpen={open}
+                onDeleted={(id) => {
+                  if (chosen === id) setChosen(null);
+                  if (lastCourseId === id) set('lastCourseId', null);
+                }}
                 onImport={() => go('import')}
                 liveSession={liveSession}
                 onSignIn={signOut}
@@ -429,6 +414,7 @@ function Rail({
   session: UserSession;
   onSignOut: () => void;
 }) {
+  const styles = useInstructorStyles();
   const demo = session.source === 'demo';
   const accountName = demo ? 'Demo instructor' : session.name.trim() || session.email;
   const accountDetail = demo ? 'Local session' : session.email;
@@ -525,6 +511,8 @@ function RailCell({
   active: boolean;
   onPress: () => void;
 }) {
+  const styles = useInstructorStyles();
+  const theme = useLmsTheme();
   return (
     <Pressable
       onPress={onPress}
@@ -533,7 +521,7 @@ function RailCell({
       style={({ hovered }: { pressed: boolean; hovered?: boolean }) => [
         styles.railCell,
         active ? styles.railCellActive : null,
-        !active && hovered ? { backgroundColor: lms.colour.surfaceHover } : null,
+        !active && hovered ? { backgroundColor: theme.colour.surfaceHover } : null,
       ]}
     >
       <Icon name={icon} size={16} tone={active ? 'brand' : 'muted'} />
@@ -547,9 +535,10 @@ function RailCell({
 // -------------------------------------------------------------------- courses
 
 const COURSE_COLUMNS: Column[] = [
-  { key: 'course', label: 'Course', flex: 3 },
-  { key: 'term', label: 'Term', flex: 1.5 },
-  { key: 'go', label: '', flex: 0.4, num: true },
+  { key: 'course', label: 'Course', flex: 2.5 },
+  { key: 'owner', label: 'Added by', flex: 2 },
+  { key: 'term', label: 'Term', flex: 1.2 },
+  { key: 'actions', label: 'Actions', flex: 1.8 },
 ];
 
 function Courses({
@@ -558,6 +547,7 @@ function Courses({
   loading,
   error,
   onOpen,
+  onDeleted,
   onImport,
   liveSession,
   onSignIn,
@@ -567,16 +557,23 @@ function Courses({
   loading: boolean;
   error: unknown;
   onOpen: (id: string) => void;
+  onDeleted: (id: string) => void;
   onImport: () => void;
   liveSession: boolean;
   onSignIn: () => void;
 }) {
+  const styles = useInstructorStyles();
   const queryClient = useQueryClient();
   const [blankOpen, setBlankOpen] = useState(false);
   const [blankTitle, setBlankTitle] = useState('');
   const [blankCode, setBlankCode] = useState('');
   const [blankBusy, setBlankBusy] = useState(false);
   const [blankError, setBlankError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<CourseRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [ownerType, setOwnerType] = useState<CourseOwnerType>('instructor');
+  const visibleRows = coursesByOwnerType(rows, ownerType);
 
   const openBlank = () => {
     setBlankError(null);
@@ -616,27 +613,76 @@ function Courses({
     }
   };
 
+  const askDelete = (course: CourseRow | null) => {
+    setDeleteError(null);
+    setDeleting(course);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteInstructorCourse(deleting.id);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['instructor-courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['course-catalog'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-courses'] }),
+        queryClient.invalidateQueries({ queryKey: ['admin-audit'] }),
+      ]);
+      onDeleted(deleting.id);
+      AccessibilityInfo.announceForAccessibility(`${deleting.title} deleted.`);
+      setDeleting(null);
+    } catch (cause) {
+      const message = cause instanceof Error && cause.message.trim()
+        ? cause.message
+        : 'The course could not be deleted. Check your connection and try again.';
+      setDeleteError(message);
+      AccessibilityInfo.announceForAccessibility('The course could not be deleted.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   const tableRows: TableRow[] = loading
     ? [0, 1, 2].map((i) => ({
         key: `skeleton-${i}`,
-        cells: [<Skeleton key="a" width="60%" />, <Skeleton key="b" width="40%" />, null],
+        cells: [
+          <Skeleton key="a" width="60%" />,
+          <Skeleton key="b" width="55%" />,
+          <Skeleton key="c" width="40%" />,
+          <Skeleton key="d" width="70%" />,
+        ],
       }))
-    : rows.map((c) => ({
+    : visibleRows.map((c) => ({
         key: c.id,
         active: c.id === activeId,
-        label: `${c.title}, open the skill tree`,
-        onPress: () => onOpen(c.id),
+        label: `${c.title}, added by ${c.ownerName}`,
         cells: [
           <View key="title" style={styles.rowStack}>
             <LText variant="small" style={styles.strong} numberOfLines={1}>
               {c.title}
             </LText>
-            <LText variant="small" tone="muted">
-              Open the skill tree
-            </LText>
           </View>,
+          <LText key="owner" variant="small" numberOfLines={1}>
+            {c.ownerName}
+          </LText>,
           c.term ?? '—',
-          <Icon key="go" name="chevron-right" size={16} />,
+          <View key="actions" style={styles.rowInline}>
+            {c.canOpen ? <LButton size="sm" label="Open" onPress={() => onOpen(c.id)} /> : null}
+            {c.canDelete && liveSession ? (
+              <LButton
+                size="sm"
+                label={`Delete ${c.title}`}
+                icon="trash-2"
+                hideLabel
+                variant="danger"
+                disabled={deleteBusy}
+                onPress={() => askDelete(c)}
+              />
+            ) : null}
+          </View>,
         ],
       }));
 
@@ -644,7 +690,7 @@ function Courses({
     <>
       <PageHead
         title="Courses"
-        lede="Create a course from a syllabus, or start with an empty skill tree and build it yourself."
+        lede="Build instructor courses, or review courses uploaded by student accounts."
         action={(
           <View style={styles.rowWrap}>
             <LButton label="Create blank course" icon="plus" onPress={openBlank} />
@@ -666,19 +712,85 @@ function Courses({
       ) : null}
 
       {error ? (
-        <Notice tone="error" title="Your courses did not load">
+        <Notice tone="error" title="The course directory did not load">
           The example chart below is a fixture in the repository and is unaffected. Everything else
           on this list needs a Supabase project and a signed-in account.
         </Notice>
       ) : null}
 
       <Panel>
+        <View style={styles.panelBody}>
+          <Segmented
+            label="Course owner type"
+            value={ownerType}
+            onChange={setOwnerType}
+            options={[
+              {
+                value: 'instructor',
+                label: `Instructor courses (${coursesByOwnerType(rows, 'instructor').length})`,
+              },
+              {
+                value: 'student',
+                label: `Student uploads (${coursesByOwnerType(rows, 'student').length})`,
+              },
+            ]}
+          />
+        </View>
         <DataTable
-          caption={loading ? 'Reading courses' : `${rows.length} courses`}
+          caption={loading
+            ? 'Reading courses'
+            : ownerType === 'student'
+              ? `${visibleRows.length} student uploads`
+              : `${visibleRows.length} instructor courses`}
           columns={COURSE_COLUMNS}
           rows={tableRows}
+          empty={(
+            <LText variant="small" tone="muted">
+              {ownerType === 'student'
+                ? 'No student-uploaded courses need review.'
+                : 'No instructor courses have been added yet.'}
+            </LText>
+          )}
         />
       </Panel>
+
+      <LModal
+        visible={deleting !== null}
+        title={`Delete ${deleting?.title ?? 'this course'}?`}
+        onRequestClose={() => { if (!deleteBusy) askDelete(null); }}
+      >
+        <View style={styles.panelBody}>
+          <Notice tone="error" title="This cannot be undone">
+            Deleting this course permanently removes its skill tree, enrolments, and every
+            student&apos;s progress on it. Archive the course instead if those records must remain.
+          </Notice>
+          <LText variant="small" tone="muted" style={styles.prose}>
+            {deleting?.ownerType === 'student'
+              ? `This student upload was added by ${deleting.ownerName}. Your deletion will be recorded in the administrator audit log.`
+              : 'Only the instructor who added the course can confirm this action. The deletion will be recorded in the administrator audit log.'}
+          </LText>
+          {deleteError ? (
+            <Notice tone="error" title="The course was not deleted">
+              {deleteError}
+            </Notice>
+          ) : null}
+          <View style={styles.rowWrap}>
+            <LButton
+              label={deleteBusy ? 'Deleting…' : 'Delete course'}
+              icon="trash-2"
+              variant="danger"
+              disabled={deleteBusy}
+              onPress={confirmDelete}
+            />
+            <LButton
+              label="Keep course"
+              variant="quiet"
+              disabled={deleteBusy}
+              onPress={() => askDelete(null)}
+            />
+          </View>
+        </View>
+      </LModal>
 
       <LModal visible={blankOpen} title="Create a blank course" onRequestClose={() => setBlankOpen(false)}>
         {liveSession ? (
@@ -733,9 +845,30 @@ function Courses({
 
 
 function Settings({ liveSession, onSignOut }: { liveSession: boolean; onSignOut: () => void }) {
+  const styles = useInstructorStyles();
+  const { instructorDarkMode, set } = usePrefs();
   return (
     <>
       <PageHead title="Settings" lede="What this build can actually do, and the way out." />
+
+      <Panel>
+        <PanelHead title="Appearance" />
+        <View style={styles.panelBody}>
+          <View style={styles.figure}>
+            <View style={styles.rowStack}>
+              <LText variant="body" style={styles.strong}>Dark mode</LText>
+              <LText variant="small" tone="muted">
+                Use the charcoal instructor workspace on this device.
+              </LText>
+            </View>
+            <LToggle
+              label="Dark mode"
+              value={instructorDarkMode}
+              onChange={(value) => set('instructorDarkMode', value)}
+            />
+          </View>
+        </View>
+      </Panel>
 
       <Panel>
         <PanelHead title="This build" />

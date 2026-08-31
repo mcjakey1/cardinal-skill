@@ -32,7 +32,7 @@ const face =
     ? '"DM Sans", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif'
     : undefined;
 
-const colour = {
+export const lmsLightColour = {
   /** The page. */
   ground: '#f7f3ea',
   /** Panels, tables, the rail, the topbar. */
@@ -70,6 +70,35 @@ const colour = {
   lineStrong: '#8f8270',
 } as const;
 
+/** Warm charcoal counterpart to the paper workspace; semantic roles stay put. */
+export type LmsColour = { [K in keyof typeof lmsLightColour]: string };
+
+export const lmsDarkColour: LmsColour = {
+  ground: '#151719',
+  surface: '#1e2023',
+  surfaceSunk: '#292c30',
+  surfaceHover: '#272a2e',
+  ink: '#f5f1e8',
+  inkMuted: '#b9b1a8',
+  brand: '#dc6676',
+  brandInk: '#180d10',
+  brandWash: '#382329',
+  brandHover: '#ef7b8a',
+  gold: '#d7ad4d',
+  goldInk: '#efcb72',
+  goldWash: '#332c1d',
+  ok: '#69c99e',
+  okWash: '#19352a',
+  attention: '#e6ad55',
+  attentionWash: '#382a18',
+  attentionLine: '#6f5227',
+  errorLine: '#704047',
+  line: '#3d4147',
+  lineStrong: '#858b93',
+};
+
+export type LmsScheme = 'light' | 'dark';
+
 const type = {
   /** One per screen. */
   page: { fontFamily: face, fontSize: 24, lineHeight: 32, fontWeight: '600', letterSpacing: -0.24 },
@@ -104,7 +133,7 @@ const lift: ViewStyle = {
 };
 
 export const lms = {
-  colour,
+  colour: lmsLightColour,
   type,
   lift,
   /** 4/8/12/16/24/32, the vertical rhythm the brief sets. */
@@ -123,3 +152,9 @@ export const lms = {
   /** Minimum touch target, same floor the student app keeps. */
   touch: 44,
 } as const;
+
+export type LmsTheme = Omit<typeof lms, 'colour'> & { colour: LmsColour };
+
+export function lmsTheme(scheme: LmsScheme): LmsTheme {
+  return { ...lms, colour: scheme === 'dark' ? lmsDarkColour : lmsLightColour };
+}

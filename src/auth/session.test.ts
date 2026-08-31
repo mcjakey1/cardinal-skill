@@ -19,7 +19,7 @@ const STUDENT: UserSession = {
 };
 
 const NO_EVIDENCE: RoleEvidence = {
-  metadataRole: 'student',
+  metadataRole: undefined,
   verifiedInstructor: false,
   ownsOfficialCourse: false,
 };
@@ -75,6 +75,15 @@ test('a session the server agrees with is returned untouched', () => {
 test('a claimed instructor becomes a student when the server finds no instructor evidence', () => {
   const instructor: UserSession = { ...STUDENT, role: 'instructor' };
   assert.equal(resolveSessionRole(instructor, NO_EVIDENCE)?.role, 'student');
+});
+
+test('a protected student account outranks stale instructor evidence', () => {
+  const staleInstructorEvidence = {
+    metadataRole: 'student',
+    verifiedInstructor: true,
+    ownsOfficialCourse: true,
+  };
+  assert.equal(resolveSessionRole({ ...STUDENT, role: 'instructor' }, staleInstructorEvidence)?.role, 'student');
 });
 
 test('a demo instructor keeps its role with no server to ask', () => {

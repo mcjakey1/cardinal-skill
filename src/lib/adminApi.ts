@@ -356,7 +356,11 @@ export async function fetchAuditTrail(
     actorName: String(row.actor_name || 'An administrator'),
     // Narrowed rather than cast: the column is `text` with a check constraint,
     // and a value from a newer migration must not be asserted into this union.
-    actorRole: row.actor_role === 'owner' ? 'owner' : 'administrator',
+    actorRole: row.actor_role === 'owner'
+      ? 'owner'
+      : row.actor_role === 'instructor'
+        ? 'instructor'
+        : 'administrator',
     action: String(row.action),
     subjectUserId: row.subject_user_id ? String(row.subject_user_id) : null,
     subjectName: row.subject_name ? String(row.subject_name) : null,

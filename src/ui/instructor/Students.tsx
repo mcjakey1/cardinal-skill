@@ -24,7 +24,7 @@ import {
 import {
   PageHead,
   fetchRoster,
-  styles,
+  useInstructorStyles,
   type CourseRow,
 } from './shared';
 
@@ -105,6 +105,7 @@ const FLAG_LABEL = {
  * standing in for a roster, never a student on this course.
  */
 export function Students({ course }: { course: CourseRow }) {
+  const styles = useInstructorStyles();
   const [sample, setSample] = useState(false);
   const [filter, setFilter] = useState<'all' | 'flagged'>('all');
   const { data, error, isPending, refetch } = useQuery({

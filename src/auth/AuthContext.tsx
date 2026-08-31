@@ -69,9 +69,9 @@ async function readRoleEvidence(): Promise<RoleEvidence | null> {
     );
     if (courses.error) throw courses.error;
     return {
-      // `account_type` is protected app metadata from 0043. The user metadata
-      // fallback keeps older projects usable until that migration is applied.
-      metadataRole: user.app_metadata?.account_type ?? user.user_metadata?.role,
+      // Protected app metadata is authoritative once present. Legacy evidence
+      // is considered only when an older project has not written this field.
+      metadataRole: user.app_metadata?.account_type,
       verifiedInstructor,
       ownsOfficialCourse: (courses.data ?? []).length > 0,
     };

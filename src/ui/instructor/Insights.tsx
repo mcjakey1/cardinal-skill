@@ -32,7 +32,7 @@ import {
   PageHead,
   fetchMissionReach,
   fetchRoster,
-  styles,
+  useInstructorStyles,
   type CourseRow,
 } from './shared';
 
@@ -124,6 +124,7 @@ const SAMPLE_INSIGHTS: {
  * keys, so this tab reuses their cache instead of asking again.
  */
 export function Insights({ course }: { course: CourseRow }) {
+  const styles = useInstructorStyles();
   const [sample, setSample] = useState(false);
   // Fixture courses have ids like 'demo' and no class behind them; every query
   // below would either fail its uuid cast or return nothing.
@@ -333,6 +334,7 @@ function InsightPanel({
   action?: string;
   children: React.ReactNode;
 }) {
+  const styles = useInstructorStyles();
   return (
     <Panel>
       <PanelHead title={title} />
@@ -356,6 +358,7 @@ function InsightPanel({
 
 /** Shown in place of a figure, saying which rule hid it and why. */
 function Withheld({ reason }: { reason: string }) {
+  const styles = useInstructorStyles();
   return (
     <View style={styles.panelBody}>
       <Notice tone="attention" title="Not enough students to say">
@@ -374,6 +377,7 @@ function StuckPanel({
   rows: Bottleneck[] | { suppressed: true; size: number; reason: string };
   classSize: number;
 }) {
+  const styles = useInstructorStyles();
   const meaning =
     'A skill counts as a hold-up when a lot of people have not cleared it and a lot of the course sits behind it. The top row is costing this class the most.';
 
@@ -434,6 +438,7 @@ function StuckPanel({
 // --------------------------------------------------------------- 2. watch
 
 function WatchPanel({ list }: { list: ReturnType<typeof studentsToWatch> }) {
+  const styles = useInstructorStyles();
   const meaning = `Students who have never finished anything, or who were working and have cleared nothing for ${STALE_DAYS} days. How recently somebody worked is the earliest warning this data can give.`;
 
   return (
@@ -485,6 +490,7 @@ function watchWords(row: WatchRow): string {
 // -------------------------------------------------------------- 3. spread
 
 function SpreadPanel({ result }: { result: ReturnType<typeof classSpread> }) {
+  const styles = useInstructorStyles();
   const meaning =
     'Where the class sits, as a shape rather than one average. An average hides the class that has split in two: half finished and half not started still averages out to a comfortable middle.';
 
@@ -546,6 +552,7 @@ function SpreadPanel({ result }: { result: ReturnType<typeof classSpread> }) {
  * than an instructor discovering it after acting on it.
  */
 function LimitsPanel() {
+  const styles = useInstructorStyles();
   return (
     <InsightPanel
       title="What this page cannot see"
@@ -586,6 +593,7 @@ function LimitsPanel() {
 }
 
 function Limit({ children }: { children: React.ReactNode }) {
+  const styles = useInstructorStyles();
   return (
     <View style={styles.limitRow}>
       <Icon name="minus" size={16} tone="muted" />

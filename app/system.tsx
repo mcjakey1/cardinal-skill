@@ -179,12 +179,8 @@ export default function System() {
             />
           </Row>
 
-          {/* Only an account the server calls an instructor. `resolveSessionRole`
-              promotes on metadata, a verified-instructor row, or an owned
-              official course, and never demotes — so a real instructor keeps
-              this way in even when they signed in through the student tab. An
-              account that said "student" at sign-up never asked to teach, and
-              handing it a course-authoring workspace is not a shortcut. */}
+          {/* Protected account metadata is authoritative. Legacy verification
+              and course evidence are fallbacks only when that type is absent. */}
           {session?.role === 'instructor' ? (
             <Row
               title="Instructor view"

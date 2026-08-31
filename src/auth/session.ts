@@ -53,7 +53,7 @@ export function buildSession(
  * back to their workspace. These three facts outrank that claim.
  */
 export interface RoleEvidence {
-  /** `role` from the user metadata written at sign-up. */
+  /** Protected `account_type` from app metadata, absent on legacy projects. */
   metadataRole: unknown;
   verifiedInstructor: boolean;
   ownsOfficialCourse: boolean;
@@ -77,11 +77,11 @@ export function resolveSessionRole(
   evidence: RoleEvidence | null,
 ): UserSession | null {
   if (!session || session.source !== 'supabase' || !evidence) return session;
-  const role: AuthRole = evidence.verifiedInstructor
-    || evidence.ownsOfficialCourse
-    || evidence.metadataRole === 'instructor'
-    ? 'instructor'
-    : 'student';
+  const protectedRole = evidence.metadataRole === 'student' || evidence.metadataRole === 'instructor'
+    ? evidence.metadataRole
+    : null;
+  const role: AuthRole = protectedRole
+    ?? (evidence.verifiedInstructor || evidence.ownsOfficialCourse ? 'instructor' : 'student');
   return role === session.role ? session : { ...session, role };
 }
 

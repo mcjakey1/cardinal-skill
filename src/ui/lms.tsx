@@ -11,7 +11,7 @@
  * rings, eyebrows, and cards nested in cards.
  */
 
-import { useId } from 'react';
+import { useId, useMemo } from 'react';
 
 import { Feather } from '@expo/vector-icons';
 import {
@@ -29,9 +29,14 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { lms } from '@/theme/lms';
+import { lms, type LmsTheme } from '@/theme/lms';
+import { useLmsTheme } from '@/theme/useLmsTheme';
 
-const c = lms.colour;
+function useLmsUi() {
+  const theme = useLmsTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  return { c: theme.colour, styles };
+}
 
 export type IconName = React.ComponentProps<typeof Feather>['name'];
 
@@ -55,6 +60,7 @@ export function LText({
   style?: StyleProp<TextStyle>;
   children: React.ReactNode;
 } & Omit<React.ComponentProps<typeof Text>, 'style' | 'children'>) {
+  const { c, styles } = useLmsUi();
   const colours: Record<string, string> = {
     ink: c.ink,
     muted: c.inkMuted,
@@ -87,6 +93,7 @@ export function Icon({
   size?: number;
   tone?: 'ink' | 'muted' | 'brand' | 'ok' | 'attention' | 'onBrand';
 }) {
+  const { c } = useLmsUi();
   const colours: Record<string, string> = {
     ink: c.ink,
     muted: c.inkMuted,
@@ -107,10 +114,12 @@ export function Panel({
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { styles } = useLmsUi();
   return <View style={[styles.panel, style]}>{children}</View>;
 }
 
 export function PanelHead({ title, right }: { title: string; right?: React.ReactNode }) {
+  const { styles } = useLmsUi();
   return (
     <View style={styles.panelHead}>
       <LText variant="section">{title}</LText>
@@ -139,6 +148,7 @@ export function LButton({
   hideLabel?: boolean;
   style?: StyleProp<ViewStyle>;
 } & Omit<PressableProps, 'style' | 'children'>) {
+  const { c, styles } = useLmsUi();
   const primary = variant === 'primary';
   const danger = variant === 'danger';
   const tone = disabled ? 'muted' : primary || danger ? 'onBrand' : 'ink';
@@ -187,6 +197,7 @@ export function Badge({
   tone?: 'neutral' | 'ok' | 'attention' | 'brand' | 'gold';
   icon?: IconName;
 }) {
+  const { c, styles } = useLmsUi();
   const skin: Record<string, { bg: string; fg: string; line: string }> = {
     neutral: { bg: c.surfaceSunk, fg: c.inkMuted, line: c.line },
     ok: { bg: c.okWash, fg: c.ok, line: c.okWash },
@@ -209,6 +220,7 @@ export function Badge({
  * like the number printed next to it.
  */
 export function Meter({ percent, label }: { percent: number; label?: string }) {
+  const { c, styles } = useLmsUi();
   const value = Math.max(0, Math.min(100, Math.round(percent)));
   return (
     <View style={styles.meter} accessibilityRole="progressbar" accessibilityValue={{ now: value }}>
@@ -257,6 +269,7 @@ export function Notice({
   title?: string;
   children?: React.ReactNode;
 }) {
+  const { c, styles } = useLmsUi();
   const skin = {
     neutral: { bg: c.surface, line: c.line, icon: 'info' as IconName, fg: 'muted' as const },
     attention: {
@@ -300,6 +313,7 @@ export function Field({
   style,
   ...rest
 }: { label: string; hint?: string; tall?: boolean; error?: string } & TextInputProps) {
+  const { c, styles } = useLmsUi();
   // The line under the box is not a loose sibling of it. `aria-describedby` is
   // what makes a reader hear the hint, and hear the error replace it; without
   // `aria-invalid` the box goes red and announces exactly as it did before.
@@ -345,6 +359,7 @@ export function Segmented<T extends string>({
   onChange: (next: T) => void;
   label: string;
 }) {
+  const { styles } = useLmsUi();
   return (
     <View style={styles.segmented} accessibilityRole="tablist" accessibilityLabel={label}>
       {options.map((option) => {
@@ -367,6 +382,32 @@ export function Segmented<T extends string>({
   );
 }
 
+/** Persistent binary workspace preference with a full-size touch target. */
+export function LToggle({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const { c, styles } = useLmsUi();
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: value }}
+      onPress={() => onChange(!value)}
+      style={styles.toggleTarget}
+    >
+      <View style={[styles.toggleTrack, value ? { backgroundColor: c.brand } : null]}>
+        <View style={[styles.toggleKnob, value ? styles.toggleKnobOn : null]} />
+      </View>
+    </Pressable>
+  );
+}
+
 // --------------------------------------------------------------------- dialog
 
 /**
@@ -386,6 +427,7 @@ export function LModal({
   children: React.ReactNode;
   onRequestClose: () => void;
 }) {
+  const { styles } = useLmsUi();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onRequestClose}>
       <View style={styles.modalBackdrop}>
@@ -463,6 +505,7 @@ export function DataTable({
   caption?: string;
   empty?: React.ReactNode;
 }) {
+  const { c, styles } = useLmsUi();
   return (
     <View>
       {caption ? (
@@ -548,10 +591,13 @@ export function DataTable({
 
 /** Loading is skeleton rows, not a spinner, so the layout does not jump. */
 export function Skeleton({ width = '100%' }: { width?: number | `${number}%` }) {
+  const { styles } = useLmsUi();
   return <View style={[styles.skeleton, { width }]} />;
 }
 
-const styles = StyleSheet.create({
+function createStyles(theme: LmsTheme) {
+  const c = theme.colour;
+  return StyleSheet.create({
   numeric: { fontVariant: ['tabular-nums'] },
   right: { textAlign: 'right' },
   row: { flexDirection: 'row', alignItems: 'center', gap: lms.space.sm },
@@ -664,6 +710,29 @@ const styles = StyleSheet.create({
   },
   segmentActive: { backgroundColor: c.surface },
 
+  toggleTarget: {
+    minWidth: 52,
+    minHeight: lms.touch,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toggleTrack: {
+    width: 42,
+    height: 24,
+    padding: 3,
+    borderRadius: lms.radius.pill,
+    backgroundColor: c.surfaceSunk,
+    borderWidth: 1,
+    borderColor: c.lineStrong,
+  },
+  toggleKnob: {
+    width: 16,
+    height: 16,
+    borderRadius: lms.radius.pill,
+    backgroundColor: c.surface,
+  },
+  toggleKnobOn: { alignSelf: 'flex-end' },
+
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(37,31,32,0.4)',
@@ -723,4 +792,5 @@ const styles = StyleSheet.create({
   cellRight: { alignItems: 'flex-end' },
 
   skeleton: { height: 12, borderRadius: lms.radius.xs, backgroundColor: c.surfaceSunk },
-});
+  });
+}

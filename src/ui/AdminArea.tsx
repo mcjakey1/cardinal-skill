@@ -2091,7 +2091,11 @@ function auditRow(
       <Badge
         key="role"
         tone={entry.actorRole === 'owner' ? 'neutral' : 'attention'}
-        label={entry.actorRole === 'owner' ? 'Owner' : 'Administrator'}
+        label={entry.actorRole === 'owner'
+          ? 'Owner'
+          : entry.actorRole === 'instructor'
+            ? 'Instructor'
+            : 'Administrator'}
       />,
       <View key="what" style={styles.rowStack}>
         <LText variant="small">{sentence}</LText>

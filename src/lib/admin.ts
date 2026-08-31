@@ -341,7 +341,7 @@ export interface AuditEntry {
    * badge — never a word inside the sentence, for the reason
    * `describeAuditAction` gives about keeping the actor out of the line.
    */
-  actorRole: 'owner' | 'administrator';
+  actorRole: 'owner' | 'instructor' | 'administrator';
   action: string;
   /** The ids are what makes a row openable. Null when there is nowhere to go. */
   subjectUserId: string | null;

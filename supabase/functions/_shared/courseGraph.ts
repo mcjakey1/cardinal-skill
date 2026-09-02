@@ -12,6 +12,68 @@ export interface SemanticTieredCourseGraphNode extends TieredCourseGraphNode {
   description?: unknown;
 }
 
+export interface CourseGraphTopology {
+  forks: number;
+  convergences: number;
+  longestPath: number;
+}
+
+/**
+ * Reject a semester graph that is valid as a DAG but still behaves like a
+ * week-by-week checklist. Small workshops may genuinely be sequential; larger
+ * curricula need both branching and supported convergence to work as a tree.
+ */
+export function requirePedagogicalCourseGraph<T extends CourseGraphNode>(
+  nodes: readonly T[],
+): readonly T[] {
+  if (nodes.length < 10) return nodes;
+
+  const topology = courseGraphTopology(nodes);
+  const minForks = nodes.length >= 16 ? 2 : 1;
+  const minConvergences = nodes.length >= 16 ? 2 : 1;
+  const maxLongestPath = Math.max(6, Math.ceil(nodes.length * (nodes.length >= 16 ? 0.7 : 0.8)));
+
+  if (
+    topology.forks < minForks
+    || topology.convergences < minConvergences
+    || topology.longestPath > maxLongestPath
+  ) {
+    throw new Error(
+      `The graph is too linear for a skill tree: ${nodes.length} skills require at least ${minForks} branch points, ${minConvergences} multi-prerequisite convergences, and a longest prerequisite path of at most ${maxLongestPath} skills; the graph returned ${topology.forks}, ${topology.convergences}, and ${topology.longestPath}. Rewire existing competencies by conceptual dependency; syllabus week order alone is not a prerequisite.`,
+    );
+  }
+
+  return nodes;
+}
+
+export function courseGraphTopology(nodes: readonly CourseGraphNode[]): CourseGraphTopology {
+  const knownKeys = new Set(nodes.map((node) => node.key));
+  const unlockCount = new Map(nodes.map((node) => [node.key, 0]));
+  const longestPathByKey = new Map<string, number>();
+
+  for (const node of nodes) {
+    const prerequisites = [...new Set(node.prereq_keys)].filter((key) => knownKeys.has(key));
+    for (const prerequisite of prerequisites) {
+      unlockCount.set(prerequisite, (unlockCount.get(prerequisite) ?? 0) + 1);
+    }
+    longestPathByKey.set(
+      node.key,
+      1 + prerequisites.reduce(
+        (longest, prerequisite) => Math.max(longest, longestPathByKey.get(prerequisite) ?? 0),
+        0,
+      ),
+    );
+  }
+
+  return {
+    forks: [...unlockCount.values()].filter((count) => count >= 2).length,
+    convergences: nodes.filter((node) =>
+      new Set(node.prereq_keys.filter((key) => knownKeys.has(key))).size >= 2
+    ).length,
+    longestPath: Math.max(0, ...longestPathByKey.values()),
+  };
+}
+
 /**
  * A named synthesis/capstone is a convergence, never an early prerequisite.
  * Put it after the academic tracks and make every non-synthesis terminal feed
@@ -21,18 +83,22 @@ export interface SemanticTieredCourseGraphNode extends TieredCourseGraphNode {
 export function placeSynthesisAtCourseEnd<T extends SemanticTieredCourseGraphNode>(
   nodes: readonly T[],
 ): T[] {
-  const synthesisKeys = new Set(nodes
-    .filter(isSynthesisNode)
-    .map((node) => node.key));
-  if (synthesisKeys.size === 0) {
+  const finalSynthesisIndex = nodes.findLastIndex(isSynthesisNode);
+  if (finalSynthesisIndex < 0) {
     return nodes.map((node) => ({ ...node, prereq_keys: [...node.prereq_keys] }));
   }
 
+  // Models sometimes label several track-level integrations as "Synthesis".
+  // Making every one depend on every terminal creates a dense parallel comb.
+  // The provider orders the genuine course-wide convergence last, so only that
+  // node closes the whole graph; earlier integrations retain their own track.
+  const finalSynthesis = nodes[finalSynthesisIndex]!;
+
   const ordinary = nodes
-    .filter((node) => !synthesisKeys.has(node.key))
+    .filter((_, index) => index !== finalSynthesisIndex)
     .map((node) => ({
       ...node,
-      prereq_keys: node.prereq_keys.filter((key) => !synthesisKeys.has(key)),
+      prereq_keys: node.prereq_keys.filter((key) => key !== finalSynthesis.key),
     }));
   const ordinaryKeys = new Set(ordinary.map((node) => node.key));
   const unlocksOrdinary = new Set<string>();
@@ -45,14 +111,11 @@ export function placeSynthesisAtCourseEnd<T extends SemanticTieredCourseGraphNod
     .filter((node) => !unlocksOrdinary.has(node.key))
     .map((node) => node.key);
 
-  const synthesis = nodes
-    .filter((node) => synthesisKeys.has(node.key))
-    .map((node) => ({
-      ...node,
-      tier: 4,
-      prereq_keys: [...terminalKeys],
-    }));
-  return [...ordinary, ...synthesis];
+  return [...ordinary, {
+    ...finalSynthesis,
+    tier: 4,
+    prereq_keys: [...terminalKeys],
+  }];
 }
 
 function isSynthesisNode(node: SemanticTieredCourseGraphNode): boolean {

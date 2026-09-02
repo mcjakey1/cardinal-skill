@@ -53,7 +53,7 @@ test('a 14-week DSP syllabus cannot collapse to ten weekly-heading nodes', () =>
   assert.equal(requireSyllabusScaledSkillCount(new Array(18).fill(null), 14).length, 18);
 });
 
-test('multi-week DSP filter coverage must expand and cannot disappear behind padding', () => {
+test('continued syllabus rows do not manufacture a node count', () => {
   const coverage = [
     { week: 9, topics: ['Discrete Fourier Transform'] },
     { week: 10, topics: ['Fast Fourier Transform'] },
@@ -62,20 +62,27 @@ test('multi-week DSP filter coverage must expand and cannot disappear behind pad
     { week: 13, topics: ['Design of Digital Filter: FIR and IIR'] },
   ];
 
-  assert.throws(
-    () => requireSyllabusCoverage([
-      { unit: 'Discrete Fourier Transform' },
-      { unit: 'Fast Fourier Transform' },
-      { unit: 'Design of Digital Filter: FIR and IIR' },
-    ], coverage),
-    /spans 3 weeks and requires at least 3 progressive skills/i,
-  );
   assert.doesNotThrow(() => requireSyllabusCoverage([
     { unit: 'Discrete Fourier Transform' },
     { unit: 'Fast Fourier Transform' },
     { unit: 'Design of Digital Filter: FIR and IIR' },
-    { unit: 'Design of Digital Filter: FIR and IIR' },
-    { unit: 'Design of Digital Filter: FIR and IIR' },
+  ], coverage));
+});
+
+test('repeated rows still require every distinct academic topic', () => {
+  const coverage = [
+    { week: 11, topics: ['Finite Impulse Response Filters', 'Infinite Impulse Response Filters'] },
+    { week: 12, topics: ['Finite Impulse Response Filters', 'Infinite Impulse Response Filters'] },
+    { week: 13, topics: ['Finite Impulse Response Filters', 'Infinite Impulse Response Filters'] },
+  ];
+
+  assert.throws(
+    () => requireSyllabusCoverage([{ unit: 'Finite Impulse Response Filters' }], coverage),
+    /omitted syllabus coverage: Infinite Impulse Response Filters/i,
+  );
+  assert.doesNotThrow(() => requireSyllabusCoverage([
+    { unit: 'Finite Impulse Response Filters' },
+    { unit: 'Infinite Impulse Response Filters' },
   ], coverage));
 });
 
@@ -277,7 +284,12 @@ test('the curriculum prompt is discipline-neutral and handles institutional tabl
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /continuation markers/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /illustrative only/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /single-file railroad/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /weeks as a coverage inventory, not an edge order/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /branch point directly unlocks at least 2/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /16 or more nodes need at least 2 of each/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /exactly four integer tiers/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /at most one course-wide synthesis/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /repeated or merged table cell alone never justifies invented skills/i);
   assert.doesNotMatch(
     SYLLABUS_GRAPH_SYSTEM_PROMPT,
     /Boolean Algebra|K-Map|Combinatorics|Plate Tectonics|Renaissance Literature/i,

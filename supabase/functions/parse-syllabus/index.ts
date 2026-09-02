@@ -1,8 +1,12 @@
 /** Parse a syllabus into an owner-scoped course DAG. Provider keys stay server-side. */
-import Dagre, { layout as runDagreLayout } from 'npm:@dagrejs/dagre@3.1.0';
 import { createClient } from 'npm:@supabase/supabase-js@^2.58.0';
 import { parseJsonObjectText } from '../_shared/bai.ts';
-import { normalizeTieredCourseDag, placeSynthesisAtCourseEnd } from '../_shared/courseGraph.ts';
+import {
+  normalizeTieredCourseDag,
+  placeSynthesisAtCourseEnd,
+  requirePedagogicalCourseGraph,
+} from '../_shared/courseGraph.ts';
+import { layoutCourseGraph } from '../_shared/courseLayout.ts';
 import {
   isMeaningfulSyllabusTopic,
   MAX_PARSED_SKILLS,
@@ -46,7 +50,7 @@ const TREE_SCHEMA = {
   type: 'object',
   properties: {
     courseTitle: { type: 'string' },
-    courseCode: { type: 'string', nullable: true },
+    courseCode: { type: ['string', 'null'] },
     nodes: {
       type: 'array', minItems: MIN_PARSED_SKILLS, maxItems: MAX_PARSED_SKILLS,
       items: {
@@ -95,7 +99,7 @@ const OUTLINE_SCHEMA = {
   type: 'object',
   properties: {
     courseTitle: { type: 'string' },
-    courseCode: { type: 'string', nullable: true },
+    courseCode: { type: ['string', 'null'] },
     estimatedWeeks: { type: 'integer', minimum: 1, maximum: 52 },
     coverage: {
       type: 'array',
@@ -259,7 +263,7 @@ Deno.serve(async (req) => {
   }));
 
   const graphSchema = treeSchemaForRange(skillRange.min, skillRange.max);
-  const parserSystem = `${SYLLABUS_GRAPH_SYSTEM_PROMPT}\nThis cleaned outline spans ${outline.estimatedWeeks} weeks. Return ${skillRange.min} to ${skillRange.max} nodes. Cover every listed topic, and expand repeated multi-week topics into progressive skills.\nRequired JSON shape:\n${JSON.stringify(graphSchema)}`;
+  const parserSystem = `${SYLLABUS_GRAPH_SYSTEM_PROMPT}\nThis cleaned outline spans ${outline.estimatedWeeks} weeks. Return ${skillRange.min} to ${skillRange.max} nodes. Cover every listed topic at syllabus-supported granularity; repetition alone does not require extra skills.\nRequired JSON shape:\n${JSON.stringify(graphSchema)}`;
   const prompt = `Build the complete course graph from this cleaned syllabus outline.\n\n<cleanedSyllabus>\n${JSON.stringify(outline)}\n</cleanedSyllabus>`;
   const completionInput = {
     apiKey,
@@ -345,7 +349,7 @@ Deno.serve(async (req) => {
       }, 422);
     }
   }
-  const laidOut = layoutWithDagre(parsed.nodes);
+  const laidOut = layoutCourseGraph(parsed.nodes);
 
   const courseMetadata = {
     course_code: clean(parsed.course_code, 32) || null,
@@ -413,7 +417,7 @@ Deno.serve(async (req) => {
     node_count: laidOut.length,
     mission_count: missions.length,
     edge_count: edges.length,
-    layout_engine: 'dagre-3.1.0',
+    layout_engine: 'ranked-compact-v1',
     model: GEMINI_MODEL,
   }, 201);
 });
@@ -495,8 +499,6 @@ interface ParsedTree {
   semester_description: string;
   nodes: ParsedNode[];
 }
-
-type LaidOutNode = ParsedNode & { x: number; y: number; sort_order: number };
 
 function clean(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -663,6 +665,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
       }],
     };
   });
+  requirePedagogicalCourseGraph(nodes);
   return {
     course_code: clean(input.courseCode, 32),
     course_name: clean(input.courseTitle, 160),
@@ -701,43 +704,6 @@ function inferIcon(value: string): typeof ICONS[number] {
   if (/\b(logic|boolean|circuit|gate)\b/i.test(value)) return 'pixel_gate';
   if (/\b(set|relation|function)\b/i.test(value)) return 'pixel_atom';
   return 'pixel_spellbook';
-}
-
-function layoutWithDagre(nodes: ParsedNode[]): LaidOutNode[] {
-  const nodeWidth = 108;
-  const nodeHeight = 88;
-  const rankSep = 180;
-  const rankByKey = new Map<string, number>();
-  for (const node of nodes) {
-    const rank = node.prereq_keys.length === 0
-      ? 0
-      : Math.max(...node.prereq_keys.map((key) => rankByKey.get(key) ?? 0)) + 1;
-    rankByKey.set(node.key, rank);
-  }
-
-  const graph = new Dagre.graphlib.Graph()
-    .setGraph({ rankdir: 'LR', ranksep: rankSep, nodesep: 104, edgesep: 48 })
-    .setDefaultEdgeLabel(() => ({}));
-
-  for (const node of nodes) graph.setNode(node.key, { width: nodeWidth, height: nodeHeight });
-  for (const node of nodes) {
-    for (const prerequisite of node.prereq_keys) graph.setEdge(prerequisite, node.key);
-  }
-  runDagreLayout(graph);
-
-  return nodes.map((node, sort_order) => {
-    const position = graph.node(node.key);
-    return {
-      ...node,
-      // Dagre's x and y must stay paired. Replacing only x with a simpler rank
-      // can collapse nodes that Dagre separated into different horizontal lanes.
-      x: Number.isFinite(position?.x)
-        ? position.x
-        : (rankByKey.get(node.key) ?? 0) * (nodeWidth + rankSep),
-      y: Number.isFinite(position?.y) ? position.y : sort_order * 140,
-      sort_order,
-    };
-  });
 }
 
 function json(body: unknown, status: number): Response {

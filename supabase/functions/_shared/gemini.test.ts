@@ -53,7 +53,7 @@ test('an unrelated 400 surfaces instead of silently re-running without the schem
     async () => {
       calls += 1;
       return Response.json(
-        { error: { message: 'Request payload size exceeds the limit.' } },
+        { error: { message: 'Request payload size exceeds the limit.', status: 'INVALID_ARGUMENT' } },
         { status: 400 },
       );
     },
@@ -95,6 +95,75 @@ test('a schema rejection retries once without the schema but keeps JSON mode', a
       assert.equal(retry.responseJsonSchema, undefined, 'the schema is what was rejected');
       assert.equal(retry.responseMimeType, 'application/json', 'JSON mode must survive');
       assert.equal(retry.maxOutputTokens, 100, 'the token cap must survive');
+    },
+  );
+});
+
+test('a generic invalid-argument response retries without the schema', async () => {
+  const payloads: Record<string, unknown>[] = [];
+  await withFetch(
+    async (_input, init) => {
+      payloads.push(JSON.parse(String(init?.body)));
+      if (payloads.length === 1) {
+        return Response.json(
+          { error: { message: 'Request contains an invalid argument.', status: 'INVALID_ARGUMENT' } },
+          { status: 400 },
+        );
+      }
+      return Response.json({
+        candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"ok":true}' }] } }],
+      });
+    },
+    async () => {
+      const result = await requestGeminiCompletion({
+        ...baseRequest,
+        responseJsonSchema: { type: 'object' },
+        document: {
+          base64: 'JVBERi0xLjQ=',
+          mediaType: 'application/pdf',
+          filename: 'syllabus.pdf',
+        },
+      });
+      assert.equal(result, '{"ok":true}');
+      assert.equal(payloads.length, 2);
+      const retry = payloads[1]!.generationConfig as Record<string, unknown>;
+      assert.equal(retry.responseJsonSchema, undefined);
+      const contents = payloads[1]!.contents as Array<{ parts: Array<Record<string, unknown>> }>;
+      assert.deepEqual(contents[0]!.parts[1], {
+        inlineData: { mimeType: 'application/pdf', data: 'JVBERi0xLjQ=' },
+      });
+    },
+  );
+});
+
+test('a repeated generic invalid-argument response drops optional generation config once', async () => {
+  const payloads: Record<string, unknown>[] = [];
+  await withFetch(
+    async (_input, init) => {
+      payloads.push(JSON.parse(String(init?.body)));
+      if (payloads.length < 3) {
+        return Response.json(
+          { error: { message: 'Request contains an invalid argument.', status: 'INVALID_ARGUMENT' } },
+          { status: 400 },
+        );
+      }
+      return Response.json({
+        candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"ok":true}' }] } }],
+      });
+    },
+    async () => {
+      const result = await requestGeminiCompletion({
+        ...baseRequest,
+        seed: 7,
+        responseJsonSchema: { type: 'object' },
+      });
+      assert.equal(result, '{"ok":true}');
+      assert.equal(payloads.length, 3);
+      const retry = payloads[2]!.generationConfig as Record<string, unknown>;
+      assert.equal(retry.responseJsonSchema, undefined);
+      assert.equal(retry.seed, undefined);
+      assert.equal(retry.responseMimeType, 'application/json');
+      assert.equal(retry.maxOutputTokens, 100);
     },
   );
 });

@@ -31,12 +31,14 @@ interface GeminiResponse {
 }
 
 /**
- * Gemini rejects an unsupported generationConfig field with a 400 that names
- * that field. These gate the two retries so only a rejection of the field we
- * are about to drop is retried — every other 400 is a real error and surfaces.
+ * Gemini usually names an unsupported generationConfig field, but some model
+ * versions reduce schema/config validation failures to the exact generic
+ * INVALID_ARGUMENT message. These gates keep the fallback bounded while all
+ * other 400s (for example, payload-size failures) surface immediately.
  */
 const SCHEMA_REJECTION = /response_?json_?schema|response_?schema/i;
 const CONFIG_REJECTION = /generation_?config|\bseed\b|max_?output_?tokens/i;
+const GENERIC_INVALID_ARGUMENT = /^request contains an invalid argument\.?$/i;
 
 export class GeminiError extends Error {
   readonly status: number;
@@ -112,11 +114,17 @@ export async function requestGeminiCompletion({
   );
   const body = await parseBody<GeminiResponse>(response);
   if (!response.ok) {
-    // Only retry when the provider actually named the field it rejected.
-    // Retrying on any 400 meant a malformed PDF or an oversized request bought
-    // a second full-price call and then reported a misleading schema problem.
+    // Retry a named field rejection or Gemini's exact generic INVALID_ARGUMENT.
+    // Retrying on every 400 would make a malformed PDF or oversized request buy
+    // a second full-price call and then report a misleading schema problem.
     const providerMessage = body.error?.message ?? '';
-    if (response.status === 400 && responseJsonSchema && SCHEMA_REJECTION.test(providerMessage)) {
+    const genericInvalidArgument = response.status === 400
+      && GENERIC_INVALID_ARGUMENT.test(providerMessage.trim());
+    if (
+      response.status === 400
+      && responseJsonSchema
+      && (SCHEMA_REJECTION.test(providerMessage) || genericInvalidArgument)
+    ) {
       console.warn(JSON.stringify({
         event: 'gemini.schema_fallback',
         operation,
@@ -134,7 +142,11 @@ export async function requestGeminiCompletion({
         document,
       });
     }
-    if (response.status === 400 && !minimalGenerationConfig && CONFIG_REJECTION.test(providerMessage)) {
+    if (
+      response.status === 400
+      && !minimalGenerationConfig
+      && (CONFIG_REJECTION.test(providerMessage) || genericInvalidArgument)
+    ) {
       console.warn(JSON.stringify({
         event: 'gemini.config_fallback',
         operation,

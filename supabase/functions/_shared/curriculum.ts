@@ -47,7 +47,7 @@ Content filtering and table recovery:
 - Focus on course coverage, weekly schedules, course outlines, modular content, and course learning outcomes.
 - Ignore institutional vision, mission, and values; attendance, absence, and tardiness policies; academic-integrity and sanction clauses; grading scales, point distributions, and passing formulas; faculty lists, office hours, and publisher metadata.
 - Reconstruct topics split across table cells, wrapped lines, repeated headers, blank week cells, and continuation markers. A continuation row belongs to the preceding academic topic unless the document clearly starts a new topic.
-- When one topic spans several weeks or continuation rows, never emit one generic node. Decompose it into 2 to 4 distinct, syllabus-supported competencies that progress from foundations through technique or application.
+- When one topic spans several weeks or continuation rows, preserve that duration context. Decompose it only when the syllabus names distinct concepts, methods, or outcomes that support distinct competencies. A repeated or merged table cell alone never justifies invented skills.
 
 Granularity:
 - Do not produce one-node-per-unit summaries. Decompose each broad academic unit into concrete, unlockable competencies.
@@ -59,11 +59,13 @@ Granularity:
 
 Four-tier topology:
 - Use exactly four integer tiers. Tier 1 contains 1 or 2 genuine foundational roots. Tier 2 contains core mechanisms, techniques, and standard methods. Tier 3 contains advanced applications, specialized analysis, and multi-step problem solving. Tier 4 contains cumulative synthesis, integrated review, design, evaluation, or capstone outcomes supported by the syllabus.
-- Use pedagogical prerequisites rather than calendar order; use chronology only to break ties between otherwise independent topics.
+- Treat syllabus weeks as a coverage inventory, not an edge order. First identify which competencies are conceptually required to learn each later competency. Use chronology only to break ties between otherwise independent topics.
 - Avoid a single-file railroad longer than 3 nodes. Develop independent subject areas as parallel tracks, and develop each major track through 2 to 3 progressive competencies before a supported convergence.
+- A branch point directly unlocks at least 2 later competencies. A convergence directly requires at least 2 earlier competencies. Graphs with 10 to 15 nodes need at least 1 of each and a longest prerequisite path no longer than 80% of all nodes. Graphs with 16 or more nodes need at least 2 of each and a longest path no longer than 70% of all nodes.
+- Add multiple prerequisites only when each parent supplies a distinct capability used by the child. A week occurring earlier is not, by itself, evidence of dependency.
 - Do not invent a shared prerequisite or arbitrary middle bottleneck merely to connect unrelated tracks.
 - Every non-root node needs at least one earlier prerequisite. Every Tier 1 to Tier 3 node must unlock a later competency. Tier 4 nodes may be terminal.
-- A node explicitly named as synthesis, capstone, comprehensive review, or cumulative integration must be Tier 4, appear after all ordinary competencies, depend on the terminal competency of every major track, and have no outgoing edge to an ordinary topic.
+- Return at most one course-wide synthesis, capstone, comprehensive review, or cumulative integration node. It must be Tier 4, appear after all ordinary competencies, depend on the terminal competency of every major track, and have no outgoing edge. Keep track-level integrations inside their own branch with subject-specific titles and prerequisites.
 - Edges must be unique, acyclic, non-self-referential, and point from an earlier node to a later node. Omit transitive bypasses: if A unlocks B and B unlocks C, omit A to C.
 - Keep related nodes adjacent in the nodes array. Connect within the same conceptual track or a neighboring track, and order converging parents beside one another to reduce crossings.
 - Return exactly one connected course graph. Do not split weeks, modules, or parallel tracks into separate course entities.
@@ -152,44 +154,27 @@ export function requireSyllabusCoverage(
   nodes: readonly SyllabusCoverageNode[],
   coverage: readonly AcademicCoverageRow[],
 ): void {
-  const expected = new Map<string, { label: string; weeks: Set<number> }>();
+  const expected = new Map<string, string>();
   for (const row of coverage) {
     for (const topic of row.topics) {
       const key = comparableTopic(topic);
       // Wrapped table fragments such as "And The" are extraction noise, not a
       // competency that a generated graph could meaningfully demonstrate.
       if (!key || !isMeaningfulSyllabusTopic(topic)) continue;
-      const entry = expected.get(key) ?? { label: topic.trim(), weeks: new Set<number>() };
-      entry.weeks.add(row.week);
-      expected.set(key, entry);
+      if (!expected.has(key)) expected.set(key, topic.trim());
     }
   }
 
-  const actual = new Map<string, number>();
+  const actual = new Set<string>();
   for (const [key] of expected) {
-    const matchCount = topicCoverageCount(nodes, key);
-    if (matchCount > 0) actual.set(key, matchCount);
+    if (topicCoverageCount(nodes, key) > 0) actual.add(key);
   }
 
   const missing = [...expected.entries()]
     .filter(([key]) => !actual.has(key))
-    .map(([, entry]) => entry.label);
+    .map(([, label]) => label);
   if (missing.length > 0) {
     throw new Error(`The graph omitted syllabus coverage: ${missing.slice(0, 4).join('; ')}.`);
-  }
-
-  for (const [key, entry] of expected) {
-    // A two-week unit range does not prove that every bullet under the unit is
-    // independently taught in both weeks. Three repeated weekly rows are a
-    // strong enough signal to require progressive nodes (the DSP filter case).
-    if (entry.weeks.size < 3) continue;
-    const requiredNodes = Math.min(4, entry.weeks.size);
-    const actualNodes = actual.get(key) ?? 0;
-    if (actualNodes < requiredNodes) {
-      throw new Error(
-        `${entry.label} spans ${entry.weeks.size} weeks and requires at least ${requiredNodes} progressive skills; the graph returned ${actualNodes}.`,
-      );
-    }
   }
 }
 
@@ -214,6 +199,8 @@ The candidate failed validation: ${failure}
 
 Return exactly ${exactCount} nodes. Count the final nodes array before responding. Preserve valid competencies, split broad competencies into distinct progressive skills, and add only skills supported by the outline. Do not satisfy the count with duplicates, administrative material, exams, or invented subject matter. Every node unit must exactly match one primary topic string from the cleaned outline. Every other outline topic must be named explicitly in a node label, description, or mission when related topics share a node. Return the entire repaired JSON object, not a patch.
 
+When the validation failure says the graph is too linear, keep the existing competencies and repair the edges by conceptual dependency. Create independent learning branches, then converge them only where the child genuinely uses distinct capabilities from multiple parents. Meet every branch-point, convergence, and longest-path limit named in the failure. Do not use week order as proof of dependency and do not add duplicate skills merely to change the shape.
+
 When the validation failure names omitted syllabus topics, copy each named topic verbatim into at least one node's unit, label, description, or mission. Do not replace those named topics with a broader umbrella or a paraphrase.
 
 <cleanedSyllabus>
@@ -234,11 +221,7 @@ export function repairNodeTarget(
   const omitted = failure.match(/graph omitted syllabus coverage:\s*(.*?)(?:\.\s*$|$)/i)?.[1]
     ?.split(';')
     .filter((topic) => topic.trim()).length ?? 0;
-  const repeated = failure.match(/requires at least\s+(\d+)\s+progressive skills;.*returned\s+(\d+)/i);
-  const repeatedShortfall = repeated
-    ? Math.max(0, Number(repeated[1]) - Number(repeated[2]))
-    : 0;
-  return Math.min(range.max, Math.max(range.min, boundedCandidate + omitted + repeatedShortfall));
+  return Math.min(range.max, Math.max(range.min, boundedCandidate + omitted));
 }
 
 export interface SyllabusCoverageNode {

@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  courseGraphTopology,
   ensureSingleCourseDag,
   normalizeTieredCourseDag,
   placeSynthesisAtCourseEnd,
+  requirePedagogicalCourseGraph,
 } from '../../../supabase/functions/_shared/courseGraph.ts';
 
 test('parser graph cleanup produces one connected acyclic graph', () => {
@@ -104,4 +106,89 @@ test('an advanced specialist topic is not treated as a cumulative synthesis', ()
   ];
 
   assert.deepEqual(placeSynthesisAtCourseEnd(input), input);
+});
+
+test('only the final synthesis closes the whole course', () => {
+  const nodes = placeSynthesisAtCourseEnd([
+    { key: 'logic', title: 'Logic Foundations', tier: 1, prereq_keys: [] },
+    { key: 'logic-synthesis', title: 'Logic Synthesis', tier: 3, prereq_keys: ['logic'] },
+    { key: 'graphs', title: 'Graph Foundations', tier: 1, prereq_keys: [] },
+    { key: 'network-capstone', title: 'Network Capstone', tier: 3, prereq_keys: ['graphs'] },
+    {
+      key: 'course-synthesis',
+      title: 'Discrete Mathematics Synthesis',
+      tier: 4,
+      prereq_keys: ['logic-synthesis', 'network-capstone'],
+    },
+  ]);
+
+  assert.deepEqual(nodes.find((node) => node.key === 'logic-synthesis')?.prereq_keys, ['logic']);
+  assert.deepEqual(nodes.find((node) => node.key === 'network-capstone')?.prereq_keys, ['graphs']);
+  assert.deepEqual(
+    new Set(nodes.at(-1)?.prereq_keys),
+    new Set(['logic-synthesis', 'network-capstone']),
+  );
+  assert.equal(nodes.filter((node) => node.prereq_keys.length > 2).length, 0);
+});
+
+test('a semester timeline with one cosmetic fork is rejected as too linear', () => {
+  const nodes = new Array(18).fill(null).map((_, index) => ({
+    key: `skill-${index + 1}`,
+    prereq_keys: index === 0
+      ? []
+      : index === 16
+      ? ['skill-15']
+      : index === 17
+      ? ['skill-16', 'skill-17']
+      : [`skill-${index}`],
+  }));
+
+  assert.deepEqual(courseGraphTopology(nodes), {
+    forks: 1,
+    convergences: 1,
+    longestPath: 17,
+  });
+  assert.throws(
+    () => requirePedagogicalCourseGraph(nodes),
+    /too linear.*at least 2 branch points, 2 multi-prerequisite convergences.*at most 13 skills/i,
+  );
+});
+
+test('a semester graph with meaningful branches and convergence passes', () => {
+  const nodes = [
+    { key: 'root-a', prereq_keys: [] },
+    { key: 'root-b', prereq_keys: [] },
+    { key: 'a-one', prereq_keys: ['root-a'] },
+    { key: 'a-two', prereq_keys: ['root-a'] },
+    { key: 'b-one', prereq_keys: ['root-b'] },
+    { key: 'b-two', prereq_keys: ['root-b'] },
+    { key: 'a-method', prereq_keys: ['a-one'] },
+    { key: 'a-analysis', prereq_keys: ['a-two'] },
+    { key: 'b-method', prereq_keys: ['b-one'] },
+    { key: 'b-analysis', prereq_keys: ['b-two'] },
+    { key: 'a-integration', prereq_keys: ['a-method', 'a-analysis'] },
+    { key: 'b-integration', prereq_keys: ['b-method', 'b-analysis'] },
+    { key: 'a-application', prereq_keys: ['a-integration'] },
+    { key: 'b-application', prereq_keys: ['b-integration'] },
+    { key: 'comparison', prereq_keys: ['a-integration', 'b-integration'] },
+    { key: 'design-a', prereq_keys: ['a-application', 'comparison'] },
+    { key: 'design-b', prereq_keys: ['b-application', 'comparison'] },
+    { key: 'synthesis', prereq_keys: ['design-a', 'design-b'] },
+  ];
+
+  assert.deepEqual(courseGraphTopology(nodes), {
+    forks: 5,
+    convergences: 6,
+    longestPath: 7,
+  });
+  assert.doesNotThrow(() => requirePedagogicalCourseGraph(nodes));
+});
+
+test('a small sequential workshop is not forced into artificial branches', () => {
+  const nodes = new Array(8).fill(null).map((_, index) => ({
+    key: `workshop-${index + 1}`,
+    prereq_keys: index === 0 ? [] : [`workshop-${index}`],
+  }));
+
+  assert.doesNotThrow(() => requirePedagogicalCourseGraph(nodes));
 });

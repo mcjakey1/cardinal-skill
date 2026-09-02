@@ -18,6 +18,61 @@ export interface CourseGraphTopology {
   longestPath: number;
 }
 
+const BEGINNER_ROOT_TITLE = /\b(?:intro(?:duction|ductory)?|fundamentals?|foundations?|basics?|overview|orientation|terminology|notation|concepts?|principles)\b/i;
+const ADVANCED_ROOT_TITLE = /\b(?:advanced|applications?|analysis|design|implementation|integration|optimization|synthesis|capstone|evaluation|assessment|simulation)\b/i;
+
+/**
+ * A root is the student's entry point, not merely a topic with a missing edge.
+ * Keep this discipline-neutral: provider tiers enforce the broad progression,
+ * while title signals catch obviously terminal work that was mislabeled Tier 1.
+ */
+export function requireBeginnerReadyCourseRoots<T extends SemanticTieredCourseGraphNode>(
+  nodes: readonly T[],
+): readonly T[] {
+  if (nodes.length === 0) return nodes;
+
+  const knownKeys = new Set(nodes.map((node) => node.key));
+  const roots = nodes.filter((node) =>
+    !node.prereq_keys.some((key) => knownKeys.has(key))
+  );
+  const rootNames = roots
+    .map((node) => readableNodeTitle(node))
+    .join('; ');
+
+  if (roots.length === 0) {
+    throw new Error(
+      'The graph has no beginner-ready starting node. Remove the prerequisite cycle and begin with 1 or 2 foundational competencies.',
+    );
+  }
+  if (roots.length > 2) {
+    throw new Error(
+      `The graph has ${roots.length} starting nodes, but a course may have at most 2 beginner-ready roots: ${rootNames}. Rewire advanced starting nodes through their direct conceptual prerequisites.`,
+    );
+  }
+
+  for (const root of roots) {
+    const title = readableNodeTitle(root);
+    const tier = Math.max(1, Math.min(4, Math.round(Number(root.tier) || 1)));
+    if (tier !== 1) {
+      throw new Error(
+        `The starting node "${title}" was assigned Tier ${tier}, so it is not a foundational entry skill. Attach it to its direct conceptual prerequisites or replace the root with a supported beginner competency.`,
+      );
+    }
+    if (ADVANCED_ROOT_TITLE.test(title) && !BEGINNER_ROOT_TITLE.test(title)) {
+      throw new Error(
+        `The starting node "${title}" is not beginner-ready. Design, application, analysis, implementation, optimization, synthesis, and evaluation skills must depend on concrete enabling concepts unless explicitly introductory or foundational.`,
+      );
+    }
+  }
+
+  return nodes;
+}
+
+function readableNodeTitle(node: SemanticTieredCourseGraphNode): string {
+  const title = typeof node.title === 'string' ? node.title.trim() : '';
+  return title || node.key;
+}
+
 /**
  * Reject a semester graph that is valid as a DAG but still behaves like a
  * week-by-week checklist. Small workshops may genuinely be sequential; larger
@@ -29,7 +84,11 @@ export function requirePedagogicalCourseGraph<T extends CourseGraphNode>(
   if (nodes.length < 10) return nodes;
 
   const topology = courseGraphTopology(nodes);
-  const minForks = nodes.length >= 16 ? 2 : 1;
+  // A single fork can open several independent tracks. Counting fork nodes
+  // cannot distinguish that valid shape from two tiny cosmetic splits, so the
+  // convergence and longest-path checks carry the remaining anti-linearity
+  // constraint without forcing invented prerequisite relationships.
+  const minForks = 1;
   // One genuine merge is enough. Requiring several across every discipline
   // makes the repair model invent relationships between otherwise independent
   // branches; forks and longest-path limits already reject a disguised chain.
@@ -41,9 +100,10 @@ export function requirePedagogicalCourseGraph<T extends CourseGraphNode>(
     || topology.convergences < minConvergences
     || topology.longestPath > maxLongestPath
   ) {
+    const forkLabel = `${minForks} branch point${minForks === 1 ? '' : 's'}`;
     const convergenceLabel = `${minConvergences} multi-prerequisite convergence${minConvergences === 1 ? '' : 's'}`;
     throw new Error(
-      `The graph is too linear for a skill tree: ${nodes.length} skills require at least ${minForks} branch points, ${convergenceLabel}, and a longest prerequisite path of at most ${maxLongestPath} skills; the graph returned ${topology.forks}, ${topology.convergences}, and ${topology.longestPath}. Rewire existing competencies by conceptual dependency; syllabus week order alone is not a prerequisite.`,
+      `The graph is too linear for a skill tree: ${nodes.length} skills require at least ${forkLabel}, ${convergenceLabel}, and a longest prerequisite path of at most ${maxLongestPath} skills; the graph returned ${topology.forks}, ${topology.convergences}, and ${topology.longestPath}. Rewire existing competencies by conceptual dependency; syllabus week order alone is not a prerequisite.`,
     );
   }
 

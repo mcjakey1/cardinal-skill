@@ -4,6 +4,7 @@ import { parseJsonObjectText } from '../_shared/bai.ts';
 import {
   normalizeTieredCourseDag,
   placeSynthesisAtCourseEnd,
+  requireBeginnerReadyCourseRoots,
   requirePedagogicalCourseGraph,
 } from '../_shared/courseGraph.ts';
 import { layoutCourseGraph } from '../_shared/courseLayout.ts';
@@ -12,6 +13,7 @@ import {
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
   missionDifficultyForTier,
+  isCourseGraphStructureFailure,
   requireSyllabusCoverage,
   requireSyllabusScaledSkillCount,
   requireUniqueParserNodeIds,
@@ -20,7 +22,9 @@ import {
   repairNodeTarget,
   reconcileGroupedSyllabusCoverage,
   scaleMission,
+  syllabusEdgeRepairPrompt,
   syllabusGraphRepairPrompt,
+  SYLLABUS_EDGE_REPAIR_SYSTEM_PROMPT,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
   SYLLABUS_OUTLINE_SYSTEM_PROMPT,
   skillCountRangeForWeeks,
@@ -122,6 +126,15 @@ const OUTLINE_SCHEMA = {
     },
   },
   required: ['courseTitle', 'courseCode', 'estimatedWeeks', 'coverage'],
+  additionalProperties: false,
+} as const;
+
+const EDGE_REPAIR_SCHEMA = {
+  type: 'object',
+  properties: {
+    edges: TREE_SCHEMA.properties.edges,
+  },
+  required: ['edges'],
   additionalProperties: false,
 } as const;
 
@@ -335,6 +348,8 @@ Deno.serve(async (req) => {
       }));
     } catch (retryCause) {
       const retryProviderError = retryCause instanceof GeminiError ? retryCause : null;
+      const retryValidationFailure = validationMessage(retryCause);
+      const retryCandidate = tryParseCourseGraph(responseText);
       console.error(JSON.stringify({
         event: 'parser.stage',
         stage: 'json_retry_failed',
@@ -344,9 +359,59 @@ Deno.serve(async (req) => {
       if (retryProviderError) {
         return json({ error: retryProviderError.message }, retryProviderError.status === 422 ? 422 : 502);
       }
-      return json({
-        error: `Gemini returned course data Cardinal could not validate: ${validationMessage(retryCause)} Nothing was saved; retry the same file.`,
-      }, 422);
+      if (!retryCandidate || !isCourseGraphStructureFailure(retryValidationFailure)) {
+        return json({
+          error: `Gemini returned course data Cardinal could not validate: ${retryValidationFailure} Nothing was saved; retry the same file.`,
+        }, 422);
+      }
+
+      console.info(JSON.stringify({
+        event: 'parser.stage',
+        stage: 'edge_repair_started',
+        duration_ms: Date.now() - startedAt,
+        candidate_nodes: retryCandidate.nodes.length,
+      }));
+      try {
+        const edgeResponseText = await requestGeminiCompletion({
+          ...completionInput,
+          maxTokens: 6_000,
+          seed: repairGenerationSeed(repairGenerationSeed(sourceSeed)),
+          system: `${SYLLABUS_EDGE_REPAIR_SYSTEM_PROMPT}\nRequired JSON shape:\n${JSON.stringify(EDGE_REPAIR_SCHEMA)}`,
+          prompt: syllabusEdgeRepairPrompt({
+            outline,
+            candidate: retryCandidate,
+            failure: retryValidationFailure,
+          }),
+          operation: 'parse-syllabus-edge-repair',
+          responseJsonSchema: EDGE_REPAIR_SCHEMA,
+        });
+        const repairedEdges = parseJsonObjectText<ParsedCourseEdges>(edgeResponseText);
+        parsed = normalizeTree({
+          ...retryCandidate,
+          edges: Array.isArray(repairedEdges.edges) ? repairedEdges.edges : [],
+        }, outline);
+        console.info(JSON.stringify({
+          event: 'parser.stage',
+          stage: 'edge_repair_complete',
+          duration_ms: Date.now() - startedAt,
+        }));
+      } catch (edgeRepairCause) {
+        const edgeProviderError = edgeRepairCause instanceof GeminiError ? edgeRepairCause : null;
+        console.error(JSON.stringify({
+          event: 'parser.stage',
+          stage: 'edge_repair_failed',
+          duration_ms: Date.now() - startedAt,
+          message: edgeRepairCause instanceof Error
+            ? edgeRepairCause.message.slice(0, 240)
+            : 'Unknown edge repair error',
+        }));
+        if (edgeProviderError) {
+          return json({ error: edgeProviderError.message }, edgeProviderError.status === 422 ? 422 : 502);
+        }
+        return json({
+          error: `Gemini could not repair the prerequisite relationships: ${validationMessage(edgeRepairCause)} Nothing was saved; retry the same file.`,
+        }, 422);
+      }
     }
   }
   const laidOut = layoutCourseGraph(parsed.nodes);
@@ -477,6 +542,10 @@ interface ParsedCourseGraph {
   edges: Array<{ source: string; target: string }>;
 }
 
+interface ParsedCourseEdges {
+  edges: Array<{ source: string; target: string }>;
+}
+
 interface ParsedNode {
   key: string;
   title: string;
@@ -602,7 +671,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
   }
 
   const rawNodeByKey = new Map<string, ParsedCourseGraphNode>();
-  const nodes = normalizeTieredCourseDag(placeSynthesisAtCourseEnd(coveredNodes.map((node, index): ParsedNode => {
+  const preparedNodes = placeSynthesisAtCourseEnd(coveredNodes.map((node, index): ParsedNode => {
     const key = normalizedKeys[index]!;
     rawNodeByKey.set(key, node);
     const title = compactLabel(node.label);
@@ -642,7 +711,12 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
         difficulty: missionScale.difficulty.toLowerCase() as ParsedMission['difficulty'],
       }],
     };
-  }))).map((node) => {
+  }));
+  // Validate before normalization so an advanced root's requested tier is not
+  // silently rewritten to Tier 1, then validate again after DAG repair in case
+  // dropping an invalid edge exposed a new semantic root.
+  requireBeginnerReadyCourseRoots(preparedNodes);
+  const nodes = normalizeTieredCourseDag(preparedNodes).map((node) => {
     const rawNode = rawNodeByKey.get(node.key)!;
     const mission = node.missions[0]!;
     const difficulty = missionDifficultyForTier(
@@ -665,6 +739,7 @@ function normalizeTree(input: ParsedCourseGraph, outline: SyllabusOutline): Pars
       }],
     };
   });
+  requireBeginnerReadyCourseRoots(nodes);
   requirePedagogicalCourseGraph(nodes);
   return {
     course_code: clean(input.courseCode, 32),

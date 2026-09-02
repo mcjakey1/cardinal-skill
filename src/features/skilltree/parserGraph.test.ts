@@ -6,6 +6,7 @@ import {
   ensureSingleCourseDag,
   normalizeTieredCourseDag,
   placeSynthesisAtCourseEnd,
+  requireBeginnerReadyCourseRoots,
   requirePedagogicalCourseGraph,
 } from '../../../supabase/functions/_shared/courseGraph.ts';
 
@@ -131,6 +132,47 @@ test('only the final synthesis closes the whole course', () => {
   assert.equal(nodes.filter((node) => node.prereq_keys.length > 2).length, 0);
 });
 
+test('advanced filter work cannot become a beginner starting node', () => {
+  assert.throws(
+    () => requireBeginnerReadyCourseRoots([
+      { key: 'signals', title: 'Signal Introduction', tier: 1, prereq_keys: [] },
+      { key: 'fir-design', title: 'FIR Filter Design', tier: 1, prereq_keys: [] },
+      { key: 'application', title: 'DSP Application', tier: 2, prereq_keys: ['signals', 'fir-design'] },
+    ]),
+    /FIR Filter Design.*not beginner-ready/i,
+  );
+});
+
+test('a provider cannot hide an advanced root behind a foundational title', () => {
+  assert.throws(
+    () => requireBeginnerReadyCourseRoots([
+      { key: 'signals', title: 'Signal Introduction', tier: 1, prereq_keys: [] },
+      { key: 'frequency', title: 'Frequency Concepts', tier: 3, prereq_keys: [] },
+    ]),
+    /Frequency Concepts.*Tier 3.*not a foundational entry skill/i,
+  );
+});
+
+test('a course graph has at most two beginner-ready roots', () => {
+  assert.throws(
+    () => requireBeginnerReadyCourseRoots([
+      { key: 'signals', title: 'Signal Introduction', tier: 1, prereq_keys: [] },
+      { key: 'frequency', title: 'Frequency Fundamentals', tier: 1, prereq_keys: [] },
+      { key: 'systems', title: 'System Basics', tier: 1, prereq_keys: [] },
+      { key: 'methods', title: 'Standard Methods', tier: 2, prereq_keys: ['signals'] },
+    ]),
+    /3 starting nodes.*at most 2 beginner-ready roots/i,
+  );
+});
+
+test('two genuinely foundational roots remain valid', () => {
+  assert.doesNotThrow(() => requireBeginnerReadyCourseRoots([
+    { key: 'logic', title: 'Logic Foundations', tier: 1, prereq_keys: [] },
+    { key: 'sets', title: 'Set Fundamentals', tier: 1, prereq_keys: [] },
+    { key: 'proofs', title: 'Proof Techniques', tier: 2, prereq_keys: ['logic', 'sets'] },
+  ]));
+});
+
 test('a semester timeline with one cosmetic fork is rejected as too linear', () => {
   const nodes = new Array(18).fill(null).map((_, index) => ({
     key: `skill-${index + 1}`,
@@ -150,8 +192,36 @@ test('a semester timeline with one cosmetic fork is rejected as too linear', () 
   });
   assert.throws(
     () => requirePedagogicalCourseGraph(nodes),
-    /too linear.*at least 2 branch points, 1 multi-prerequisite convergence.*at most 13 skills/i,
+    /too linear.*at least 1 branch point, 1 multi-prerequisite convergence.*at most 13 skills/i,
   );
+});
+
+test('one genuine fork may support several semester tracks', () => {
+  const nodes = [
+    { key: 'root', prereq_keys: [] },
+    { key: 'a-1', prereq_keys: ['root'] },
+    { key: 'a-2', prereq_keys: ['a-1'] },
+    { key: 'a-3', prereq_keys: ['a-2'] },
+    { key: 'a-4', prereq_keys: ['a-3'] },
+    { key: 'a-5', prereq_keys: ['a-4'] },
+    { key: 'a-6', prereq_keys: ['a-5'] },
+    { key: 'a-7', prereq_keys: ['a-6'] },
+    { key: 'a-8', prereq_keys: ['a-7'] },
+    { key: 'b-1', prereq_keys: ['root'] },
+    { key: 'b-2', prereq_keys: ['b-1'] },
+    { key: 'b-3', prereq_keys: ['b-2'] },
+    { key: 'b-4', prereq_keys: ['b-3'] },
+    { key: 'b-5', prereq_keys: ['b-4'] },
+    { key: 'c-1', prereq_keys: ['root'] },
+    { key: 'synthesis', prereq_keys: ['a-8', 'b-5', 'c-1'] },
+  ];
+
+  assert.deepEqual(courseGraphTopology(nodes), {
+    forks: 1,
+    convergences: 1,
+    longestPath: 10,
+  });
+  assert.doesNotThrow(() => requirePedagogicalCourseGraph(nodes));
 });
 
 test('a wide semester tree is not rejected for having one genuine convergence', () => {

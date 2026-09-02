@@ -10,6 +10,7 @@ import { demoMissions } from './demoMissions';
 import { findMockCourse } from './mockCourses';
 import { loadCachedTree } from '@/lib/courseCache';
 import { aliveSubgraph } from './chartDraft';
+import { requireAvailableCourse } from './courseAvailability';
 import type { Mission, Prereq, SkillNode, Tree } from './types';
 
 export interface TreeSnapshot {
@@ -199,6 +200,10 @@ export async function fetchTree(courseId: string, strictMissionData = false): Pr
     ?? progressRes.error
     ?? xpRes.error
     ?? missionProgressRes.error
+    // A chart with nodes can survive a missing title. With zero nodes, a title
+    // read failure cannot be distinguished from a real blank course, so do not
+    // redirect it as though deletion had been confirmed.
+    ?? ((nodesRes.data?.length ?? 0) === 0 ? courseRes.error : null)
     ?? (strictMissionData ? missionsRes.error ?? courseRes.error : null);
   if (firstError) {
     const cached = await loadCachedTree(courseId);
@@ -243,14 +248,15 @@ export async function fetchTree(courseId: string, strictMissionData = false): Pr
   }));
 
   const nodeIds = new Set(nodes.map((n) => n.id));
+  const availableCourse = requireAvailableCourse(courseRes.data, nodes.length);
 
   return {
     tree: { nodes, prereqs },
     masteredIds: (progressRes.data ?? []).map((r) => r.node_id).filter((id) => nodeIds.has(id)),
     xp: (xpRes.data as number | null) ?? 0,
-    // A course row that RLS hides, or that was deleted between queries, still
-    // has a chart worth drawing — it just does not have a name to print.
-    title: courseRes.data?.title ?? 'Untitled course',
+    // A row hidden by legacy RLS can still have visible nodes worth drawing.
+    // A deleted course has neither a row nor nodes and is rejected above.
+    title: availableCourse?.title ?? 'Untitled course',
     // Same tolerance for missions: a chart whose missions failed to load is a
     // chart with nodes worth their stored XP, not an error screen.
     missions: (missionsRes.data ?? [])

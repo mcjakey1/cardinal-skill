@@ -270,6 +270,9 @@ export default function Courses() {
       await deleteCourse(courseId);
       setOrdered((current) => current.filter((course) => course.id !== courseId));
       if (prefs.lastCourseId === courseId) prefs.set('lastCourseId', null);
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] === 'tree' && query.queryKey.includes(courseId),
+      });
       await refreshCourses();
       AccessibilityInfo.announceForAccessibility('Course deleted.');
     } catch {

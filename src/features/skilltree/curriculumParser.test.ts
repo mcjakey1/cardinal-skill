@@ -5,6 +5,7 @@ import {
   MAX_PARSED_SKILLS,
   MIN_PARSED_SKILLS,
   expandSharedLeadTopic,
+  isCourseGraphStructureFailure,
   missionDifficultyForTier,
   requireGranularSkillCount,
   requireSyllabusCoverage,
@@ -14,7 +15,9 @@ import {
   repairGenerationSeed,
   reconcileGroupedSyllabusCoverage,
   scaleMission,
+  syllabusEdgeRepairPrompt,
   syllabusGraphRepairPrompt,
+  SYLLABUS_EDGE_REPAIR_SYSTEM_PROMPT,
   SYLLABUS_GRAPH_SYSTEM_PROMPT,
   SYLLABUS_OUTLINE_SYSTEM_PROMPT,
   skillCountRangeForWeeks,
@@ -251,6 +254,43 @@ test('an undersized graph repair targets an exact count and keeps the candidate'
   assert.match(prompt, /not a patch/i);
 });
 
+test('structural failures route to a focused prerequisite-edge repair', () => {
+  assert.equal(
+    isCourseGraphStructureFailure(
+      'The starting node "Epigenetic Mechanisms" was assigned Tier 2, so it is not a foundational entry skill.',
+    ),
+    true,
+  );
+  assert.equal(
+    isCourseGraphStructureFailure('The graph is too linear for a skill tree.'),
+    true,
+  );
+  assert.equal(
+    isCourseGraphStructureFailure('The graph omitted syllabus coverage: Gene Expression.'),
+    false,
+  );
+});
+
+test('edge repair freezes competencies and asks only for semantic prerequisites', () => {
+  const prompt = syllabusEdgeRepairPrompt({
+    outline: { coverage: [{ week: 1, topics: ['Foundations'] }] },
+    candidate: {
+      nodes: [
+        { id: 'foundations', tier: 1 },
+        { id: 'mechanisms', tier: 2 },
+      ],
+      edges: [],
+    },
+    failure: 'The starting node "Mechanisms" was assigned Tier 2.',
+  });
+
+  assert.match(prompt, /Do not add, remove, rename, reorder, or retier nodes/i);
+  assert.match(prompt, /rebuild the complete edges array by actual conceptual dependency/i);
+  assert.match(prompt, /"id":"mechanisms"/i);
+  assert.match(SYLLABUS_EDGE_REPAIR_SYSTEM_PROMPT, /edge means.*genuinely required/i);
+  assert.match(SYLLABUS_EDGE_REPAIR_SYSTEM_PROMPT, /Return only a replacement edges array/i);
+});
+
 test('mission effort and XP stay aligned with difficulty', () => {
   assert.deepEqual(scaleMission('Easy', 45, 100), {
     difficulty: 'Easy', estimatedMinutes: 10, xpReward: 30,
@@ -286,7 +326,7 @@ test('the curriculum prompt is discipline-neutral and handles institutional tabl
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /single-file railroad/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /weeks as a coverage inventory, not an edge order/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /branch point directly unlocks at least 2/i);
-  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /16 or more nodes need at least 2 branch points, 1 genuine convergence/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /16 or more nodes need at least 1 genuine branch point, 1 genuine convergence/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /exactly four integer tiers/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /at most one course-wide synthesis/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /repeated or merged table cell alone never justifies invented skills/i);

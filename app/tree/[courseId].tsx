@@ -38,7 +38,9 @@ import {
 } from '@/features/skilltree/progression';
 import { HELP_SHARE } from '@/features/skilltree/subtree';
 import { fetchTree, treeQueryKeys } from '@/features/skilltree/queries';
+import { CourseUnavailableError } from '@/features/skilltree/courseAvailability';
 import {
+  deleteCourse,
   duplicateCourse,
   fetchCourseOptions,
   updateCourseMetadata,
@@ -55,8 +57,7 @@ import { linkRefusal, type NodeEdit } from '@/features/skilltree/nodeEditing';
 import type { Mission, SkillNode, Tree } from '@/features/skilltree/types';
 import { DOCK_WIDTH, useWide } from '@/lib/layout';
 import { useNodeLayout, type NodePosition } from '@/lib/nodeLayout';
-import { purgeCourseCache, useEditedTree } from '@/lib/editedTree';
-import { removeCachedCourse } from '@/lib/courseCache';
+import { useEditedTree } from '@/lib/editedTree';
 import { usePrefs } from '@/lib/prefs';
 import { clearLocal, useLocalProgress } from '@/lib/progress';
 import { useQuestNames } from '@/lib/questNames';
@@ -111,6 +112,7 @@ export default function TreeScreen() {
   const { transition } = usePixelTransition();
   const insets = useSafeAreaInsets();
   const prefs = usePrefs();
+  const { lastCourseId, set: setPreference } = prefs;
   const wide = useWide();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>('outline');
@@ -168,6 +170,13 @@ export default function TreeScreen() {
     queryFn: fetchCourseOptions,
   });
   const currentCourse = courseOptions.find((course) => course.id === courseId) ?? null;
+
+  useEffect(() => {
+    if (!(error instanceof CourseUnavailableError)) return;
+    if (lastCourseId === courseId) setPreference('lastCourseId', null);
+    router.replace('/courses');
+  }, [courseId, error, lastCourseId, router, setPreference]);
+
   const requestEditMode = useCallback((next: boolean) => {
     if (next && currentCourse && !currentCourse.isFixture && !currentCourse.canEdit) {
       setPracticeCopyError(null);
@@ -746,11 +755,12 @@ export default function TreeScreen() {
   const deleteTree = async (targetCourseId: string) => {
     if (findMockCourse(targetCourseId) || targetCourseId === 'demo') return;
     try {
-      const { error: deleteError } = await supabase.from('courses').delete().eq('id', targetCourseId);
-      if (deleteError) throw deleteError;
-      await purgeCourseCache(targetCourseId);
-      await removeCachedCourse(targetCourseId);
+      await deleteCourse(targetCourseId);
       if (targetCourseId === courseId) await clearEditedTree();
+      if (lastCourseId === targetCourseId) setPreference('lastCourseId', null);
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] === 'tree' && query.queryKey.includes(targetCourseId),
+      });
       await queryClient.invalidateQueries({ queryKey: ['courses'] });
       if (targetCourseId === courseId) transition(() => router.replace('/courses'));
     } catch {

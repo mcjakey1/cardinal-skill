@@ -34,6 +34,7 @@ import {
   bendsOf,
   arrowheadPoints,
   crossbarByPrereq,
+  crossbarByTarget,
   edgeWaypoints,
   orthogonalPath,
   type Routing,
@@ -52,7 +53,13 @@ import {
 import { deriveStatuses, nextQuests } from './progression';
 import type { Prereq, SkillNode, Tree } from './types';
 import { autoLayout, hasOverlappingNodePositions } from './autoLayout';
-import { displayStatus, type DisplayStatus } from './nodeVisualState';
+import {
+  convergenceDisplayStatus,
+  displayStatus,
+  edgeDisplayStatus,
+  type DisplayStatus,
+  type EdgeDisplayStatus,
+} from './nodeVisualState';
 import { currentFocusNodes } from './chartFocus';
 import { nodeChoices } from './nodeFinder';
 import { miniMapGeometry, projectToMiniMap } from './minimap';
@@ -403,6 +410,15 @@ function SkillTreeCanvas({
       ),
     [dragging, laidOutTree.prereqs, nodes],
   );
+  const targetCrossbars = useMemo(
+    () =>
+      crossbarByTarget(
+        nodes.map((node) => ({ id: node.id, ...live(node, dragging) })),
+        laidOutTree.prereqs.map((p) => ({ from: p.prereqId, to: p.nodeId })),
+        CHART_ROUTING,
+      ),
+    [dragging, laidOutTree.prereqs, nodes],
+  );
 
   const setCamera = useCallback(
     (next: Transform, animated = true, animationDuration: number = motion.flash) => {
@@ -590,61 +606,113 @@ function SkillTreeCanvas({
     setViewport((v) => (v.width === width && v.height === height ? v : { width, height }));
   };
 
-  const edgeElements = useMemo(() => tree.prereqs.map(({ nodeId, prereqId }) => {
-    const a = byId.get(prereqId);
-    const b = byId.get(nodeId);
-    if (!a || !b) return null;
-    const targetStatus = status.get(nodeId) ?? 'locked';
-    const targetProgress = progressByNode[nodeId] ?? 0;
-    const isInProgress = targetStatus === 'available' && targetProgress > 0;
-    const ink = targetStatus === 'mastered'
+  const edgeElements = useMemo(() => {
+    const convergenceDrawn = new Set<string>();
+    const inkFor = (edgeState: EdgeDisplayStatus) => edgeState === 'completed'
       ? theme.edgeCompleted
-      : isInProgress
-        ? theme.xpBarFill
-        : targetStatus === 'available'
-        ? theme.edgeActive
-        : theme.edgeLocked;
-    const markerName = targetStatus === 'mastered'
-      ? 'completed'
-      : isInProgress
-        ? 'in-progress'
-        : targetStatus === 'available'
-        ? 'active'
-        : 'locked';
-    const points = edgeWaypoints(
-      live(a, dragging),
-      live(b, dragging),
-      CHART_ROUTING,
-      activeCrossbars.get(prereqId),
-    );
-    const drawing = prereqId === recentlyMasteredId ? wipe : 1;
-    return (
-      <G key={`${prereqId}->${nodeId}`} opacity={targetStatus === 'locked' ? 0.72 : 1}>
-        <Path
-          d={orthogonalPath(points)}
-          fill="none"
-          stroke={ink}
-          strokeWidth={targetStatus === 'locked' ? 2 : 3}
-          strokeLinejoin="miter"
-          strokeDasharray={targetStatus === 'locked' ? '6 6' : drawing < 1 ? '4 6' : undefined}
-          opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
-          markerEnd={`url(#${markerNs}-${markerName})`}
-        />
-        {/* SVG markers are retained for browser semantics, while this matching
-            polygon guarantees the direction cue survives react-native-svg on
-            iOS and Android. It is the same shape and colour, so supported
-            renderers simply paint the arrow twice in exactly the same place. */}
-        <Polygon
-          points={arrowheadPoints(points, targetStatus === 'locked' ? 9 : 11)}
-          fill={ink}
-          strokeLinejoin="miter"
-        />
-        {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, index) => (
-          <Rect key={index} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
-        ))}
-      </G>
-    );
-  }), [activeCrossbars, byId, dragging, markerNs, progressByNode, recentlyMasteredId, status, theme, tree.prereqs, wipe]);
+      : edgeState === 'in-progress'
+      ? theme.xpBarFill
+      : edgeState === 'active'
+      ? theme.edgeActive
+      : theme.edgeLocked;
+
+    return tree.prereqs.map(({ nodeId, prereqId }) => {
+      const a = byId.get(prereqId);
+      const b = byId.get(nodeId);
+      if (!a || !b) return null;
+      const targetStatus = status.get(nodeId) ?? 'locked';
+      const targetProgress = progressByNode[nodeId] ?? 0;
+      const edgeState = edgeDisplayStatus(status.get(prereqId) ?? 'locked', targetStatus, targetProgress);
+      const ink = inkFor(edgeState);
+      const locked = edgeState === 'locked';
+      const targetCrossbar = targetCrossbars.get(nodeId);
+      const convergence = targetCrossbar !== undefined;
+      const points = edgeWaypoints(
+        live(a, dragging),
+        live(b, dragging),
+        CHART_ROUTING,
+        targetCrossbar ?? activeCrossbars.get(prereqId),
+        convergence,
+      );
+      const drawing = prereqId === recentlyMasteredId ? wipe : 1;
+
+      if (convergence) {
+        const branchPoints = points.slice(0, -1);
+        const arrivalPoints = points.slice(-2);
+        const drawArrival = !convergenceDrawn.has(nodeId);
+        convergenceDrawn.add(nodeId);
+        const arrivalState = convergenceDisplayStatus(targetStatus, targetProgress);
+        const arrivalInk = inkFor(arrivalState);
+        const arrivalLocked = arrivalState === 'locked';
+        const arrivalDrawing = openedIds.has(nodeId) ? wipe : 1;
+        const join = arrivalPoints[0]!;
+
+        return (
+          <G key={`${prereqId}->${nodeId}`}>
+            <G opacity={locked ? 0.72 : 1}>
+              <Path
+                d={orthogonalPath(branchPoints)}
+                fill="none"
+                stroke={ink}
+                strokeWidth={locked ? 2 : 3}
+                strokeLinejoin="miter"
+                strokeDasharray={locked ? '6 6' : drawing < 1 ? '4 6' : undefined}
+                opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
+              />
+              {bendsOf(branchPoints, 2 * CHART_ROUTING.elbowMin).map((bend, index) => (
+                <Rect key={index} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
+              ))}
+            </G>
+            {drawArrival ? (
+              <G opacity={arrivalLocked ? 0.72 : 1}>
+                <Path
+                  d={orthogonalPath(arrivalPoints)}
+                  fill="none"
+                  stroke={arrivalInk}
+                  strokeWidth={arrivalLocked ? 2 : 3}
+                  strokeLinejoin="miter"
+                  strokeDasharray={arrivalLocked ? '6 6' : arrivalDrawing < 1 ? '4 6' : undefined}
+                  opacity={arrivalDrawing < 1 ? 0.35 + arrivalDrawing * 0.65 : 1}
+                  markerEnd={`url(#${markerNs}-${arrivalState})`}
+                />
+                <Polygon
+                  points={arrowheadPoints(arrivalPoints, arrivalLocked ? 9 : 11)}
+                  fill={arrivalInk}
+                  strokeLinejoin="miter"
+                />
+                <Rect x={join.x - 3} y={join.y - 3} width={6} height={6} fill={arrivalInk} />
+              </G>
+            ) : null}
+          </G>
+        );
+      }
+
+      return (
+        <G key={`${prereqId}->${nodeId}`} opacity={locked ? 0.72 : 1}>
+          <Path
+            d={orthogonalPath(points)}
+            fill="none"
+            stroke={ink}
+            strokeWidth={locked ? 2 : 3}
+            strokeLinejoin="miter"
+            strokeDasharray={locked ? '6 6' : drawing < 1 ? '4 6' : undefined}
+            opacity={drawing < 1 ? 0.35 + drawing * 0.65 : 1}
+            markerEnd={`url(#${markerNs}-${edgeState})`}
+          />
+          {/* SVG markers are retained for browser semantics, while this matching
+              polygon guarantees the direction cue survives react-native-svg. */}
+          <Polygon
+            points={arrowheadPoints(points, locked ? 9 : 11)}
+            fill={ink}
+            strokeLinejoin="miter"
+          />
+          {bendsOf(points, 2 * CHART_ROUTING.elbowMin).map((bend, index) => (
+            <Rect key={index} x={bend.x - 3} y={bend.y - 3} width={6} height={6} fill={ink} />
+          ))}
+        </G>
+      );
+    });
+  }, [activeCrossbars, byId, dragging, markerNs, openedIds, progressByNode, recentlyMasteredId, status, targetCrossbars, theme, tree.prereqs, wipe]);
 
   return (
     <View style={styles.chart} onLayout={onLayout}>

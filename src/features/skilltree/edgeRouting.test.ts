@@ -7,6 +7,7 @@ import {
   arrowheadPoints,
   bendsOf,
   crossbarByPrereq,
+  crossbarByTarget,
   edgeWaypoints,
   orthogonalPath,
   waypointFractions,
@@ -126,9 +127,9 @@ test('a narrow elbow is marked once, and never leaves two dots touching', () => 
   );
 });
 
-test('same-rank bars share one line unless they actually cross', () => {
+test('separate prerequisites never reuse one crossbar lane', () => {
   // Two parents side by side, each over its own children, meeting at one shared
-  // child. Nothing crosses, so both bars belong on the same line.
+  // child. Their trunks remain distinct even though their spans only touch.
   const tidy: RoutedNode[] = [
     { id: 'p1', x: 0, y: 0 },
     { id: 'p2', x: 600, y: 0 },
@@ -146,7 +147,7 @@ test('same-rank bars share one line unless they actually cross', () => {
     ],
     VERTICAL,
   );
-  assert.equal(tidyBars.get('p1'), tidyBars.get('p2'), 'touching spans stay on one line');
+  assert.notEqual(tidyBars.get('p1'), tidyBars.get('p2'), 'separate prerequisites get separate trunks');
 
   // Now p2 also reaches back past p1's children, so the two bars really do
   // overlap and have to be pulled apart.
@@ -159,8 +160,7 @@ test('same-rank bars share one line unless they actually cross', () => {
     ],
     VERTICAL,
   );
-  const apart = Math.abs(crossed.get('p1')! - crossed.get('p2')!);
-  assert.ok(apart > 2 * VERTICAL.elbowMin, `crossing bars separated, got ${apart}`);
+  assert.notEqual(crossed.get('p1'), crossed.get('p2'), 'crossing prerequisites remain separate too');
 
   // However they land, every bar clears the marks above and — crucially — stops
   // short of the arrowheads below, so no turn dot ends up sitting on one.
@@ -173,6 +173,25 @@ test('same-rank bars share one line unless they actually cross', () => {
       );
     }
   }
+});
+
+test('multiple prerequisites share one semantic convergence before the target', () => {
+  const nodes: RoutedNode[] = [
+    { id: 'upper', x: 0, y: 0 },
+    { id: 'lower', x: 0, y: 200 },
+    { id: 'target', x: 400, y: 100 },
+  ];
+  const edges: RoutedEdge[] = [
+    { from: 'lower', to: 'target' },
+    { from: 'upper', to: 'target' },
+  ];
+  const bar = crossbarByTarget(nodes, edges, HORIZONTAL).get('target');
+  assert.ok(bar !== undefined);
+
+  const upper = edgeWaypoints(nodes[0]!, nodes[2]!, HORIZONTAL, bar, true);
+  const lower = edgeWaypoints(nodes[1]!, nodes[2]!, HORIZONTAL, bar, true);
+  assert.deepEqual(upper.slice(-2), lower.slice(-2), 'both branches share one final arrival');
+  assert.notDeepEqual(upper.slice(0, -1), lower.slice(0, -1), 'the prerequisite branches stay distinct');
 });
 
 test('a path with no children still gets a usable route', () => {

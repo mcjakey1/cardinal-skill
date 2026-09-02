@@ -150,8 +150,39 @@ test('a semester timeline with one cosmetic fork is rejected as too linear', () 
   });
   assert.throws(
     () => requirePedagogicalCourseGraph(nodes),
-    /too linear.*at least 2 branch points, 2 multi-prerequisite convergences.*at most 13 skills/i,
+    /too linear.*at least 2 branch points, 1 multi-prerequisite convergence.*at most 13 skills/i,
   );
+});
+
+test('a wide semester tree is not rejected for having one genuine convergence', () => {
+  const nodes = [
+    { key: 'root', prereq_keys: [] },
+    { key: 'a-1', prereq_keys: ['root'] },
+    { key: 'b-1', prereq_keys: ['root'] },
+    { key: 'c-1', prereq_keys: ['root'] },
+    { key: 'a-2', prereq_keys: ['a-1'] },
+    { key: 'b-2', prereq_keys: ['b-1'] },
+    { key: 'c-2', prereq_keys: ['c-1'] },
+    { key: 'a-3', prereq_keys: ['a-2'] },
+    { key: 'a-4', prereq_keys: ['a-2'] },
+    { key: 'b-3', prereq_keys: ['b-2'] },
+    { key: 'b-4', prereq_keys: ['b-2'] },
+    { key: 'c-3', prereq_keys: ['c-2'] },
+    { key: 'c-4', prereq_keys: ['c-2'] },
+    { key: 'a-5', prereq_keys: ['a-3'] },
+    { key: 'b-5', prereq_keys: ['b-3'] },
+    { key: 'c-5', prereq_keys: ['c-3'] },
+    { key: 'elective-a', prereq_keys: ['a-4'] },
+    { key: 'elective-b', prereq_keys: ['b-4'] },
+    { key: 'synthesis', prereq_keys: ['a-5', 'b-5', 'c-5', 'elective-a', 'elective-b'] },
+  ];
+
+  assert.deepEqual(courseGraphTopology(nodes), {
+    forks: 4,
+    convergences: 1,
+    longestPath: 6,
+  });
+  assert.doesNotThrow(() => requirePedagogicalCourseGraph(nodes));
 });
 
 test('a semester graph with meaningful branches and convergence passes', () => {

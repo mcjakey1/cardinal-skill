@@ -60,11 +60,10 @@ function clamp(value: number, low: number, high: number) {
  * node's bar, so siblings branch from a single junction instead of each turning
  * at its own offset.
  *
- * Bars on one rank share a lane whenever their spans do not overlap, which is
- * the common case — a parent sits over its own children. So most ranks resolve
- * to a single clean line rather than a stack of bars a few pixels apart, which
- * is the one thing that reads worse than a diagonal. Only genuinely crossing
- * bars are separated, and they get the whole corridor between them.
+ * Every prerequisite on one rank gets its own lane. Reusing a lane for separate
+ * parents makes unrelated edges look joined and lets one edge's progress colour
+ * overwrite another. Sibling edges from the same prerequisite still share one
+ * intentional junction.
  *
  * Pass the result to `edgeWaypoints` unchanged — the two agree on the axis.
  */
@@ -98,8 +97,6 @@ export function crossbarByPrereq(
     // that has to be cleared, before the first child that has to be reached.
     let corridorStart = -Infinity;
     let corridorEnd = Infinity;
-    const spans = new Map<string, [number, number]>();
-
     for (const id of ids) {
       const source = at(byId.get(id)!);
       const kids = children.get(id)!;
@@ -112,29 +109,21 @@ export function crossbarByPrereq(
       const end = ahead.length > 0 ? Math.min(...ahead) : start + routing.out;
       corridorStart = Math.max(corridorStart, start);
       corridorEnd = Math.min(corridorEnd, end);
-      const across = [source.x, ...kids.map((kid) => kid.x)];
-      spans.set(id, [Math.min(...across), Math.max(...across)]);
     }
+
+    const ordered = [...ids].sort((left, right) => {
+      const a = at(byId.get(left)!);
+      const b = at(byId.get(right)!);
+      return a.x - b.x || left.localeCompare(right);
+    });
 
     // A rank whose marks and children leave no room between them: put each bar
-    // just past its own mark and let the corners do what they can.
+    // just past its own mark, staggered so unrelated trunks never coincide.
     if (corridorEnd <= corridorStart) {
-      for (const id of ids) {
-        bars.set(id, at(byId.get(id)!).y + routing.out + routing.elbowMin);
+      for (const [index, id] of ordered.entries()) {
+        bars.set(id, corridorStart + routing.elbowMin * (index + 1));
       }
       continue;
-    }
-
-    // First-fit lane packing. Bars that merely touch — two parents feeding one
-    // child — count as compatible and stay on one line.
-    const laneEnds: number[] = [];
-    const lane = new Map<string, number>();
-    for (const id of [...ids].sort((a, b) => spans.get(a)![0] - spans.get(b)![0])) {
-      const [from, to] = spans.get(id)!;
-      let index = laneEnds.findIndex((occupiedTo) => occupiedTo <= from + 1);
-      if (index === -1) index = laneEnds.length;
-      laneEnds[index] = to;
-      lane.set(id, index);
     }
 
     // The band the bars may occupy. Its far edge stops short of the arrowheads:
@@ -142,14 +131,13 @@ export function crossbarByPrereq(
     // reads as a smudge rather than as a turn and an arrival.
     const low = corridorStart + routing.elbowMin;
     const high = Math.max(corridorEnd - tailRoom(routing), low);
-    const lanes = laneEnds.length;
+    const lanes = ordered.length;
     const gap = lanes > 1 ? (high - low) / (lanes - 1) : 0;
 
-    for (const id of ids) {
-      const own = at(byId.get(id)!).y + routing.out;
+    for (const [index, id] of ordered.entries()) {
       // A rank needing one bar centres it; several spread across the whole band.
-      const bar = lanes === 1 ? corridorStart + (corridorEnd - corridorStart) / 2 : low + lane.get(id)! * gap;
-      bars.set(id, clamp(bar, own + routing.elbowMin, Math.max(corridorEnd - tailRoom(routing), own + routing.elbowMin)));
+      const bar = lanes === 1 ? corridorStart + (corridorEnd - corridorStart) / 2 : low + index * gap;
+      bars.set(id, clamp(bar, low, high));
     }
   }
 
@@ -167,6 +155,7 @@ export function edgeWaypoints(
   target: Point,
   routing: Routing,
   crossbar?: number,
+  forceCrossbar = false,
 ): Point[] {
   const flat = routing.axis === 'horizontal';
   const a = flat ? transpose(source) : source;
@@ -185,7 +174,7 @@ export function edgeWaypoints(
     // one thing this router promises never to draw. A wider-but-still-narrow
     // jog keeps its corners, so the arrowhead stays centred on the mark it
     // points at; `bendsOf` is what stops those corners being marked twice.
-    Math.abs(x2 - x1) < 1.5
+    Math.abs(x2 - x1) < 1.5 && !forceCrossbar
       ? [
           { x: x1, y: y1 },
           { x: x1, y: y2 },
@@ -202,6 +191,43 @@ export function edgeWaypoints(
         })();
 
   return flat ? points.map(transpose) : points;
+}
+
+/**
+ * One convergence bar per node with multiple prerequisites. Parent branches
+ * meet there, then one shared arrival enters the dependent node. Sharing is
+ * therefore semantic: the lines have the same destination, not merely the same
+ * empty lane on the canvas.
+ */
+export function crossbarByTarget(
+  nodes: RoutedNode[],
+  edges: RoutedEdge[],
+  routing: Routing,
+): Map<string, number> {
+  const flat = routing.axis === 'horizontal';
+  const at = (node: RoutedNode) => (flat ? transpose(node) : node);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const parents = new Map<string, RoutedNode[]>();
+
+  for (const edge of edges) {
+    const source = byId.get(edge.from);
+    const target = byId.get(edge.to);
+    if (!source || !target) continue;
+    parents.set(edge.to, [...(parents.get(edge.to) ?? []), source]);
+  }
+
+  const bars = new Map<string, number>();
+  for (const [targetId, sources] of parents) {
+    if (new Set(sources.map((source) => source.id)).size < 2) continue;
+    const target = at(byId.get(targetId)!);
+    const corridorStart = Math.max(...sources.map((source) => at(source).y + routing.out));
+    const corridorEnd = target.y - routing.in;
+    const low = corridorStart + routing.elbowMin;
+    const high = corridorEnd - tailRoom(routing);
+    bars.set(targetId, high >= low ? high : corridorStart + (corridorEnd - corridorStart) / 2);
+  }
+
+  return bars;
 }
 
 /**

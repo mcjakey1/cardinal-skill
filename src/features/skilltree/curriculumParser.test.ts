@@ -286,7 +286,7 @@ test('the curriculum prompt is discipline-neutral and handles institutional tabl
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /single-file railroad/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /weeks as a coverage inventory, not an edge order/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /branch point directly unlocks at least 2/i);
-  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /16 or more nodes need at least 2 of each/i);
+  assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /16 or more nodes need at least 2 branch points, 1 genuine convergence/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /exactly four integer tiers/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /at most one course-wide synthesis/i);
   assert.match(SYLLABUS_GRAPH_SYSTEM_PROMPT, /repeated or merged table cell alone never justifies invented skills/i);

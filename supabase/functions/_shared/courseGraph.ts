@@ -30,7 +30,10 @@ export function requirePedagogicalCourseGraph<T extends CourseGraphNode>(
 
   const topology = courseGraphTopology(nodes);
   const minForks = nodes.length >= 16 ? 2 : 1;
-  const minConvergences = nodes.length >= 16 ? 2 : 1;
+  // One genuine merge is enough. Requiring several across every discipline
+  // makes the repair model invent relationships between otherwise independent
+  // branches; forks and longest-path limits already reject a disguised chain.
+  const minConvergences = 1;
   const maxLongestPath = Math.max(6, Math.ceil(nodes.length * (nodes.length >= 16 ? 0.7 : 0.8)));
 
   if (
@@ -38,8 +41,9 @@ export function requirePedagogicalCourseGraph<T extends CourseGraphNode>(
     || topology.convergences < minConvergences
     || topology.longestPath > maxLongestPath
   ) {
+    const convergenceLabel = `${minConvergences} multi-prerequisite convergence${minConvergences === 1 ? '' : 's'}`;
     throw new Error(
-      `The graph is too linear for a skill tree: ${nodes.length} skills require at least ${minForks} branch points, ${minConvergences} multi-prerequisite convergences, and a longest prerequisite path of at most ${maxLongestPath} skills; the graph returned ${topology.forks}, ${topology.convergences}, and ${topology.longestPath}. Rewire existing competencies by conceptual dependency; syllabus week order alone is not a prerequisite.`,
+      `The graph is too linear for a skill tree: ${nodes.length} skills require at least ${minForks} branch points, ${convergenceLabel}, and a longest prerequisite path of at most ${maxLongestPath} skills; the graph returned ${topology.forks}, ${topology.convergences}, and ${topology.longestPath}. Rewire existing competencies by conceptual dependency; syllabus week order alone is not a prerequisite.`,
     );
   }
 
